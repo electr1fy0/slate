@@ -1,0 +1,193 @@
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
+import { createFileRoute } from "@tanstack/react-router"
+import { toast } from "sonner"
+import { CheckIcon, CopyIcon, UsersIcon, WifiOffIcon } from "lucide-react"
+
+import type { BoardCanvasHandle } from "@/components/board/board-canvas"
+import { AppShell } from "@/components/layout/app-shell"
+import { normaliseRoomCode } from "@/lib/room-code"
+import { useSession } from "@/lib/session"
+import type { BoardElement, ClientMessage } from "@/lib/types"
+import { useBoardSync } from "@/hooks/use-board-sync"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+
+const BoardCanvas = lazy(() => import("@/components/board/board-canvas"))
+
+export const Route = createFileRoute("/board/$roomId")({ component: BoardPage })
+
+const PERMISSION_KEY = "slate.board-perms"
+
+function loadStudentDrawPermission(roomId: string): boolean {
+  try {
+    return JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")[roomId] === true
+  } catch {
+    return false
+  }
+}
+
+function saveStudentDrawPermission(roomId: string, allowed: boolean) {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")
+    stored[roomId] = allowed
+    window.localStorage.setItem(PERMISSION_KEY, JSON.stringify(stored))
+  } catch {
+    // best effort only
+  }
+}
+
+function initialsOf(name: string): string {
+  const trimmed = name.trim()
+  return trimmed ? trimmed.slice(0, 2).toUpperCase() : "??"
+}
+
+function BoardPage() {
+  const { roomId: rawRoomId } = Route.useParams()
+  const roomId = normaliseRoomCode(rawRoomId)
+  const [session] = useSession()
+  const [copied, setCopied] = useState(false)
+  const [studentDraw, setStudentDraw] = useState(false)
+
+  const canvasHandle = useRef<BoardCanvasHandle>({ mergeRemote: undefined })
+  const senderRef = useRef<((message: ClientMessage) => void) | null>(null)
+
+  useEffect(() => {
+    setStudentDraw(loadStudentDrawPermission(roomId))
+  }, [roomId])
+
+  const isTeacher = session.role === "teacher"
+  const canEdit = isTeacher || studentDraw
+
+  const onRemote = useCallback((elements: BoardElement[]) => {
+    canvasHandle.current.mergeRemote?.(elements)
+  }, [])
+
+  const sync = useBoardSync({
+    roomId,
+    name: session.name,
+    role: session.role,
+    onInit: onRemote,
+    onElements: onRemote,
+  })
+  senderRef.current = sync.send
+
+  function toggleStudentDraw(allowed: boolean) {
+    setStudentDraw(allowed)
+    saveStudentDrawPermission(roomId, allowed)
+    if (allowed) toast.success("Students can draw")
+    else toast.info("Students are view-only")
+  }
+
+  async function copyRoomCode() {
+    try {
+      await navigator.clipboard.writeText(roomId)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      toast.error("Couldn't copy the room code")
+    }
+  }
+
+  if (!roomId) {
+    return (
+      <AppShell title="Live board">
+        <p className="text-sm text-muted-foreground">That room code isn't valid.</p>
+      </AppShell>
+    )
+  }
+
+  return (
+    <AppShell
+      title={`Board · ${roomId}`}
+      description={canEdit ? "You can draw" : "View-only — ask your teacher to enable drawing"}
+      padded={false}
+      actions={
+        <>
+          {sync.status === "live" ? (
+            <Badge variant="default">
+              <span className="mr-0.5 inline-block size-1.5 rounded-full bg-primary-foreground" />
+              live
+            </Badge>
+          ) : (
+            <Badge variant="secondary">
+              <WifiOffIcon data-icon="inline-start" />
+              {sync.status}
+            </Badge>
+          )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button variant="outline" size="sm" onClick={() => void copyRoomCode()}>
+                  {copied ? (
+                    <>
+                      <CheckIcon data-icon="inline-start" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <CopyIcon data-icon="inline-start" />
+                      {roomId}
+                    </>
+                  )}
+                </Button>
+              }
+            />
+            <TooltipContent>Copy room code</TooltipContent>
+          </Tooltip>
+          <div className="flex items-center gap-1.5">
+            <UsersIcon className="size-4 text-muted-foreground" />
+            <div className="flex -space-x-1.5">
+              {sync.peers.slice(0, 4).map((peer) => (
+                <Tooltip key={peer.id}>
+                  <TooltipTrigger
+                    render={
+                      <Avatar className="size-6 ring-2 ring-background">
+                        <AvatarFallback className="text-[10px]">
+                          {initialsOf(peer.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                    }
+                  >
+                    <span className="sr-only">{peer.name}</span>
+                  </TooltipTrigger>
+                  <TooltipContent>{peer.name}</TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+            {sync.peers.length > 4 ? (
+              <span className="text-xs text-muted-foreground">+{sync.peers.length - 4}</span>
+            ) : null}
+          </div>
+          {isTeacher ? (
+            <label className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
+              students draw
+              <Switch
+                checked={studentDraw}
+                onCheckedChange={(checked) => toggleStudentDraw(checked)}
+              />
+            </label>
+          ) : null}
+        </>
+      }
+    >
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center">
+            <Skeleton className="size-full max-h-[80vh] max-w-[90vw] rounded-xl" />
+          </div>
+        }
+      >
+        <BoardCanvas
+          roomId={roomId}
+          readOnly={!canEdit}
+          handle={canvasHandle}
+          senderRef={senderRef}
+        />
+      </Suspense>
+    </AppShell>
+  )
+}

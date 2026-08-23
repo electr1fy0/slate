@@ -1,0 +1,5 @@
+-r app/requirements.txt
+pytest>=8.4
+pytest-cov>=6
+httpx>=0.28
+moto[dynamodb,ec2,ssm,s3,sns,cloudwatch,sts,server]>=5.1

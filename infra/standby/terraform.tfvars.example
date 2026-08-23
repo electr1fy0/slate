@@ -1,0 +1,4 @@
+project       = "continuum"
+instance_type = "t3.micro"
+admin_token   = "change-me-in-tfvars"
+admin_cidrs   = ["0.0.0.0/0"]

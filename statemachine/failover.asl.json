@@ -1,0 +1,186 @@
+{
+  "Comment": "Continuum: intent-verified cross-region failover with rollback and reconciliation",
+  "StartAt": "VerifyCheck1",
+  "States": {
+    "VerifyCheck1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {"mode": "force", "target": "primary"}
+      },
+      "ResultPath": "$.check1",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 1}],
+      "Next": "StillDownAfterCheck1"
+    },
+    "StillDownAfterCheck1": {
+      "Type": "Choice",
+      "Choices": [{"Variable": "$.check1.Payload.healthy", "BooleanEquals": false, "Next": "Wait45s"}],
+      "Default": "NotifyFalseAlarm"
+    },
+    "Wait45s": {"Type": "Wait", "Seconds": 45, "Next": "VerifyCheck2"},
+    "VerifyCheck2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {"mode": "force", "target": "primary"}
+      },
+      "ResultPath": "$.check2",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 1}],
+      "Next": "StillDownAfterCheck2"
+    },
+    "StillDownAfterCheck2": {
+      "Type": "Choice",
+      "Choices": [{"Variable": "$.check2.Payload.healthy", "BooleanEquals": false, "Next": "Wait30s"}],
+      "Default": "NotifyFalseAlarm"
+    },
+    "Wait30s": {"Type": "Wait", "Seconds": 30, "Next": "VerifyCheck3"},
+    "VerifyCheck3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {"mode": "force", "target": "primary", "retry_once": true, "retry_delay_s": 10}
+      },
+      "ResultPath": "$.check3",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 1}],
+      "Next": "ConfirmedDown"
+    },
+    "ConfirmedDown": {
+      "Type": "Choice",
+      "Choices": [{"Variable": "$.check3.Payload.healthy", "BooleanEquals": false, "Next": "NotifyFailoverStarting"}],
+      "Default": "NotifyFalseAlarm"
+    },
+    "NotifyFalseAlarm": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: degradation NOT confirmed after verification. No failover. Execution {}', $$.Execution.Name)",
+        "Subject": "[Continuum] Transient blip suppressed - no failover"
+      },
+      "End": true
+    },
+    "NotifyFailoverStarting": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: primary verified DOWN (3 checks). Starting failover workflow {}.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILOVER STARTING"
+      },
+      "Next": "CheckReplication"
+    },
+    "CheckReplication": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__OPS_ARN__", "Payload": {"action": "replication_status"}},
+      "ResultPath": "$.replication",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.replication_error", "Next": "PromoteStandby"}],
+      "Next": "PromoteStandby"
+    },
+    "PromoteStandby": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__OPS_ARN__", "Payload": {"action": "promote"}},
+      "ResultPath": "$.promote",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.promote_error", "Next": "NotifyFailed"}],
+      "Next": "WaitPromotion"
+    },
+    "WaitPromotion": {"Type": "Wait", "Seconds": 25, "Next": "ForceTrafficShift"},
+    "ForceTrafficShift": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__OPS_ARN__", "Payload": {"action": "traffic_shift", "inverted": true}},
+      "ResultPath": "$.shift",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.shift_error", "Next": "NotifyFailed"}],
+      "Next": "WaitDnsPropagation"
+    },
+    "WaitDnsPropagation": {"Type": "Wait", "Seconds": 60, "Next": "VerifyStandby1"},
+    "VerifyStandby1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {"mode": "force", "target": "standby", "target_url": "__STANDBY_URL__", "publish_metric": false}
+      },
+      "ResultPath": "$.standby1",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 1}],
+      "Next": "StandbyHealthyAfterCheck1"
+    },
+    "StandbyHealthyAfterCheck1": {
+      "Type": "Choice",
+      "Choices": [{"Variable": "$.standby1.Payload.healthy", "BooleanEquals": true, "Next": "ReconcileInFlightWrites"}],
+      "Default": "Wait15s"
+    },
+    "Wait15s": {"Type": "Wait", "Seconds": 15, "Next": "VerifyStandby2"},
+    "VerifyStandby2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {"mode": "force", "target": "standby", "target_url": "__STANDBY_URL__", "publish_metric": false}
+      },
+      "ResultPath": "$.standby2",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 1}],
+      "Next": "StandbyHealthyFinal"
+    },
+    "StandbyHealthyFinal": {
+      "Type": "Choice",
+      "Choices": [{"Variable": "$.standby2.Payload.healthy", "BooleanEquals": true, "Next": "ReconcileInFlightWrites"}],
+      "Default": "RollbackTraffic"
+    },
+    "RollbackTraffic": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__OPS_ARN__", "Payload": {"action": "rollback_traffic"}},
+      "ResultPath": "$.rollback",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 5, "MaxAttempts": 3}],
+      "Next": "NotifyRolledBack"
+    },
+    "NotifyRolledBack": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: standby FAILED post-promotion verification. Traffic rolled back to primary. Manual investigation required.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILOVER ROLLED BACK"
+      },
+      "Next": "FailExecution"
+    },
+    "FailExecution": {"Type": "Fail", "Error": "StandbyVerificationFailed", "Cause": "Standby did not pass deep health checks after promotion; traffic rolled back."},
+    "ReconcileInFlightWrites": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {"FunctionName": "__RECONCILER_ARN__", "Payload": {}},
+      "ResultPath": "$.reconciliation",
+      "Retry": [{"ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 10, "MaxAttempts": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.reconciliation_error", "Next": "NotifySuccess"}],
+      "Next": "NotifySuccess"
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: failover complete. Standby promoted, traffic shifted, reconciliation result: {}.', States.JsonToString($.reconciliation))",
+        "Subject": "[Continuum] FAILOVER COMPLETE"
+      },
+      "End": true
+    },
+    "NotifyFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: failover workflow {} FAILED during promotion/shift. Check Step Functions execution history.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILOVER WORKFLOW FAILED"
+      },
+      "End": true
+    }
+  }
+}

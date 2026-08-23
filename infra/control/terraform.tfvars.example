@@ -1,0 +1,3 @@
+project     = "continuum"
+alert_email = "you@example.com"
+domain_name = ""

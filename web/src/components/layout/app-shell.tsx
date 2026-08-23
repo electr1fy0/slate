@@ -1,0 +1,57 @@
+import { Link } from "@tanstack/react-router"
+import { AppSidebar } from "@/components/layout/app-sidebar"
+import { Separator } from "@/components/ui/separator"
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+
+interface AppShellProps {
+  title: string
+  description?: string
+  actions?: React.ReactNode
+  children: React.ReactNode
+  padded?: boolean
+}
+
+export function AppShell({ title, description, actions, children, padded = true }: AppShellProps) {
+  return (
+    <SidebarProvider>
+      <AppSidebar />
+      <SidebarInset className="flex h-svh flex-col overflow-hidden">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
+          <SidebarTrigger />
+          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold">{title}</h1>
+              {description ? (
+                <p className="truncate text-xs text-muted-foreground">{description}</p>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">{actions}</div>
+          </div>
+        </header>
+        <main
+          className={
+            padded ? "flex-1 overflow-y-auto p-4 md:p-6" : "relative flex-1 overflow-hidden"
+          }
+        >
+          {children}
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  )
+}
+
+export function ShellLink({ to, children }: { to: string; children: React.ReactNode }) {
+  return (
+    <Link
+      to={to}
+      className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+    >
+      {children}
+    </Link>
+  )
+}
