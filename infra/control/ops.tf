@@ -74,7 +74,8 @@ resource "aws_lambda_function" "ops" {
   handler          = "handler.handler"
   filename         = data.archive_file.ops.output_path
   source_code_hash = data.archive_file.ops.output_base64sha256
-  timeout          = 120
+  # Promote/demote now poll the SSM command to completion (up to ~3 min).
+  timeout = 300
 
   environment {
     variables = {
@@ -83,8 +84,46 @@ resource "aws_lambda_function" "ops" {
       TABLE_NAME              = data.aws_ssm_parameter.table_name.value
       SOURCE_REGION           = var.primary_region
       STANDBY_REGION          = var.standby_region
+      COMMAND_WAIT_TIMEOUT_S  = "180"
     }
   }
 
   depends_on = [aws_iam_role_policy.ops_permissions, aws_cloudwatch_log_group.ops]
+}
+
+# Async failures land in a DLQ instead of vanishing.
+resource "aws_lambda_function_event_invoke_config" "ops" {
+  function_name                = aws_lambda_function.ops.function_name
+  maximum_retry_attempts       = 1
+  maximum_event_age_in_seconds = 3600
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.dlq["ops"].arn
+    }
+  }
+}
+
+resource "aws_lambda_function_event_invoke_config" "reconciler" {
+  function_name                = aws_lambda_function.reconciler.function_name
+  maximum_retry_attempts       = 1
+  maximum_event_age_in_seconds = 3600
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.dlq["reconciler"].arn
+    }
+  }
+}
+
+resource "aws_lambda_function_event_invoke_config" "verifier_sfn" {
+  function_name                = aws_lambda_function.verifier_sfn.function_name
+  maximum_retry_attempts       = 1
+  maximum_event_age_in_seconds = 3600
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.dlq["verifier"].arn
+    }
+  }
 }

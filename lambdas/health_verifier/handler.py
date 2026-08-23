@@ -52,11 +52,15 @@ def _probe_ddb_direct() -> dict:
 def _publish(ok: bool, enabled: bool):
     if not enabled:
         return
-    cloudwatch.put_metric_data(
-        Namespace=METRIC_NAMESPACE,
-        MetricData=[{"MetricName": "Health",
-                     "Dimensions": [{"Name": "Role", "Value": ROLE_LABEL}],
-                     "Value": 1 if ok else 0}])
+    try:
+        cloudwatch.put_metric_data(
+            Namespace=METRIC_NAMESPACE,
+            MetricData=[{"MetricName": "Health",
+                         "Dimensions": [{"Name": "Role", "Value": ROLE_LABEL}],
+                         "Value": 1 if ok else 0}])
+    except Exception as exc:
+        # A CloudWatch outage must never flip the probe result itself.
+        print(json.dumps({"warning": "metric publish failed", "reason": str(exc)[:200]}))
 
 
 def handler(event, context):
@@ -73,8 +77,8 @@ def handler(event, context):
               "region_probe": ddb_result, "app_probe": http_result}
 
     if mode == "scheduled":
-        print(json.dumps({"healthy": healthy, "role": ROLE_LABEL}))
-        return {"statusCode": 200}
+        print(json.dumps(result))
+        return {"statusCode": 200, "body": json.dumps(result)}
 
     if not healthy and event.get("retry_once"):
         time.sleep(event.get("retry_delay_s", 10))

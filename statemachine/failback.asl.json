@@ -1,0 +1,453 @@
+{
+  "Comment": "Continuum: manually-triggered failback. Verifies the primary has recovered, demotes the standby, restores DNS, and re-verifies before declaring success.",
+  "StartAt": "NotifyFailbackStarting",
+  "States": {
+    "NotifyFailbackStarting": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: failback workflow {} started. Primary must pass deep checks before traffic moves.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILBACK STARTING"
+      },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2
+        }
+      ],
+      "Next": "CheckReplication"
+    },
+    "CheckReplication": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__OPS_ARN__",
+        "Payload": {
+          "action": "replication_status"
+        }
+      },
+      "ResultPath": "$.replication",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.replication_error",
+          "Next": "NotifyFailed"
+        }
+      ],
+      "Next": "VerifyPrimary1"
+    },
+    "VerifyPrimary1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {
+          "mode": "force",
+          "target": "primary",
+          "target_url": "__PRIMARY_URL__",
+          "publish_metric": false
+        }
+      },
+      "ResultPath": "$.primary1",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.verify_error",
+          "Next": "NotifyFailed"
+        }
+      ],
+      "Next": "PrimaryHealthyCheck1"
+    },
+    "PrimaryHealthyCheck1": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.primary1.Payload.healthy",
+          "BooleanEquals": true,
+          "Next": "VerifyPrimary3"
+        }
+      ],
+      "Default": "Wait15s"
+    },
+    "Wait15s": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "VerifyPrimary3"
+    },
+    "VerifyPrimary3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {
+          "mode": "force",
+          "target": "primary",
+          "target_url": "__PRIMARY_URL__",
+          "retry_once": true,
+          "retry_delay_s": 10,
+          "publish_metric": false
+        }
+      },
+      "ResultPath": "$.primary3",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.verify_error",
+          "Next": "NotifyNotReady"
+        }
+      ],
+      "Next": "PrimaryHealthyFinal"
+    },
+    "PrimaryHealthyFinal": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.primary3.Payload.healthy",
+          "BooleanEquals": true,
+          "Next": "DemoteStandby"
+        }
+      ],
+      "Default": "NotifyNotReady"
+    },
+    "NotifyNotReady": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: primary NOT healthy enough for failback in {}. No changes made - standby keeps serving.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILBACK ABORTED - PRIMARY NOT READY"
+      },
+      "TimeoutSeconds": 30,
+      "End": true
+    },
+    "DemoteStandby": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__OPS_ARN__",
+        "Payload": {
+          "action": "demote"
+        }
+      },
+      "ResultPath": "$.demote",
+      "TimeoutSeconds": 360,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.demote_error",
+          "Next": "NotifyFailed"
+        }
+      ],
+      "Next": "WaitDemotion"
+    },
+    "WaitDemotion": {
+      "Type": "Wait",
+      "Seconds": 25,
+      "Next": "RestoreTrafficShift"
+    },
+    "RestoreTrafficShift": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__OPS_ARN__",
+        "Payload": {
+          "action": "traffic_shift",
+          "inverted": false
+        }
+      },
+      "ResultPath": "$.restore",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.restore_error",
+          "Next": "NotifyFailed"
+        }
+      ],
+      "Next": "WaitDnsPropagation"
+    },
+    "WaitDnsPropagation": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "VerifyServing1"
+    },
+    "VerifyServing1": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {
+          "mode": "force",
+          "target": "primary",
+          "target_url": "__PRIMARY_URL__",
+          "publish_metric": false
+        }
+      },
+      "ResultPath": "$.serving1",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.verify_error",
+          "Next": "RollForwardTraffic"
+        }
+      ],
+      "Next": "ServingHealthyCheck1"
+    },
+    "ServingHealthyCheck1": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.serving1.Payload.healthy",
+          "BooleanEquals": true,
+          "Next": "ReconcileInFlightWrites"
+        }
+      ],
+      "Default": "Wait15sPostShift"
+    },
+    "Wait15sPostShift": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "VerifyServing2"
+    },
+    "VerifyServing2": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__VERIFIER_ARN__",
+        "Payload": {
+          "mode": "force",
+          "target": "primary",
+          "target_url": "__PRIMARY_URL__",
+          "publish_metric": false
+        }
+      },
+      "ResultPath": "$.serving2",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.verify_error",
+          "Next": "RollForwardTraffic"
+        }
+      ],
+      "Next": "ServingHealthyFinal"
+    },
+    "ServingHealthyFinal": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.serving2.Payload.healthy",
+          "BooleanEquals": true,
+          "Next": "ReconcileInFlightWrites"
+        }
+      ],
+      "Default": "RollForwardTraffic"
+    },
+    "RollForwardTraffic": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__OPS_ARN__",
+        "Payload": {
+          "action": "traffic_shift",
+          "inverted": true
+        }
+      },
+      "ResultPath": "$.rollforward",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3
+        }
+      ],
+      "Next": "NotifyFailbackRolledBack"
+    },
+    "NotifyFailbackRolledBack": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: primary FAILED post-failback verification. Traffic re-inverted to standby. Manual investigation required.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILBACK ROLLED BACK"
+      },
+      "TimeoutSeconds": 30,
+      "Next": "FailFailback"
+    },
+    "FailFailback": {
+      "Type": "Fail",
+      "Error": "PrimaryVerificationFailed",
+      "Cause": "Primary did not pass deep health checks after DNS restore; traffic re-inverted to standby."
+    },
+    "ReconcileInFlightWrites": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__RECONCILER_ARN__",
+        "Payload": {}
+      },
+      "ResultPath": "$.reconciliation",
+      "TimeoutSeconds": 300,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.reconciliation_error",
+          "Next": "NotifyReconciliationFailed"
+        }
+      ],
+      "Next": "NotifyFailbackComplete"
+    },
+    "NotifyFailbackComplete": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: failback complete in {}. Primary serves traffic again; reconciliation result: {}.', $$.Execution.Name, States.JsonToString($.reconciliation))",
+        "Subject": "[Continuum] FAILBACK COMPLETE"
+      },
+      "TimeoutSeconds": 30,
+      "End": true
+    },
+    "NotifyReconciliationFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: primary serves traffic but post-failback reconciliation FAILED in {}. Run the reconciler manually.', $$.Execution.Name)",
+        "Subject": "[Continuum] RECONCILIATION FAILED - MANUAL ACTION REQUIRED"
+      },
+      "TimeoutSeconds": 30,
+      "Next": "FailReconcile"
+    },
+    "FailReconcile": {
+      "Type": "Fail",
+      "Error": "ReconciliationFailed",
+      "Cause": "Outbox replay failed after failback; primary serves traffic but in-flight writes were not reconciled."
+    },
+    "NotifyFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "__SNS_TOPIC_ARN__",
+        "Message.$": "States.Format('Continuum: failback workflow {} FAILED during verification/demotion/shift. Check Step Functions execution history. Standby may still be ACTIVE.', $$.Execution.Name)",
+        "Subject": "[Continuum] FAILBACK WORKFLOW FAILED"
+      },
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2
+        }
+      ],
+      "Next": "FailWorkflow"
+    },
+    "FailWorkflow": {
+      "Type": "Fail",
+      "Error": "FailbackWorkflowFailed",
+      "Cause": "The failback hit an unrecoverable error; no destructive change was applied unless a roll-forward ran."
+    }
+  }
+}

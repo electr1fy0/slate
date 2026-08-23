@@ -117,10 +117,33 @@ def test_publish_enabled_writes_health_metric(hv):
 
 
 def test_handler_scheduled_mode_returns_200_and_publishes(hv, capsys):
+    import json as json_mod
+
     result = hv.handler({"mode": "scheduled"}, None)
-    assert result == {"statusCode": 200}
+    assert result["statusCode"] == 200
+    body = json_mod.loads(result["body"])
+    # No TARGET_URL configured -> the app probe fails but diagnostics ship.
+    assert body["healthy"] is False
+    assert body["app_probe"]["ok"] is False
+    assert body["region_probe"]["ok"] is True
     assert hv.cloudwatch.list_metrics(Namespace="Continuum")["Metrics"]
-    assert '"role": "primary"' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert '"role": "primary"' in out or '"target": "primary"' in out
+
+
+def test_metric_publish_failure_never_fails_the_probe(hv, monkeypatch, capsys):
+    class BrokenCloudWatch:
+        def put_metric_data(self, **kwargs):
+            raise RuntimeError("cloudwatch unavailable")
+
+        def list_metrics(self, **kwargs):
+            return {"Metrics": []}
+
+    monkeypatch.setattr(hv, "cloudwatch", BrokenCloudWatch())
+    result = hv.handler({"mode": "scheduled"}, None)
+    # The probe still reports healthy; the metric loss is only a warning.
+    assert result["statusCode"] == 200
+    assert '"metric publish failed"' in capsys.readouterr().out
 
 
 def test_handler_force_mode_default_target_and_no_publish_when_url_given(hv, monkeypatch):

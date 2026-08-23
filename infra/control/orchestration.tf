@@ -16,6 +16,14 @@ locals {
     SNS_TOPIC_ARN  = aws_sns_topic.alerts.arn
     STANDBY_URL    = local.standby_url
   })
+
+  failback_definition = templatefile("${path.root}/../../statemachine/failback.asl.json", {
+    VERIFIER_ARN   = aws_lambda_function.verifier_sfn.arn
+    OPS_ARN        = aws_lambda_function.ops.arn
+    RECONCILER_ARN = aws_lambda_function.reconciler.arn
+    SNS_TOPIC_ARN  = aws_sns_topic.alerts.arn
+    PRIMARY_URL    = local.primary_url
+  })
 }
 
 resource "aws_iam_role" "state_machine" {
@@ -57,6 +65,28 @@ resource "aws_sfn_state_machine" "failover" {
 
 resource "aws_cloudwatch_log_group" "sfn" {
   name              = "/aws/states/${var.project}-failover"
+  retention_in_days = 14
+}
+
+# Failback is deliberately manual-only: an operator starts it once the
+# primary region is confirmed healthy. There is no automatic trigger.
+resource "aws_sfn_state_machine" "failback" {
+  name     = "${var.project}-failback"
+  role_arn = aws_iam_role.state_machine.arn
+
+  definition = local.failback_definition
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn_failback.arn}:*"
+    include_execution_data = true
+    level                  = "ERROR"
+  }
+
+  depends_on = [aws_iam_role_policy.sfn_permissions]
+}
+
+resource "aws_cloudwatch_log_group" "sfn_failback" {
+  name              = "/aws/states/${var.project}-failback"
   retention_in_days = 14
 }
 

@@ -19,3 +19,8 @@ output "exam_url" {
   description = "Use this if no domain is configured"
   value       = local.primary_url
 }
+
+output "failback_state_machine_arn" {
+  description = "Manually-triggered failback workflow"
+  value       = aws_sfn_state_machine.failback.arn
+}

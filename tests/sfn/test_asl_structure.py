@@ -59,8 +59,45 @@ def test_all_states_reachable_from_start(asl):
 def test_terminal_states(asl):
     endings = {name for name, s in asl["States"].items()
                if s.get("End") or s["Type"] == "Fail"}
-    assert endings == {"NotifyFalseAlarm", "NotifySuccess", "NotifyFailed",
-                       "FailExecution"}
+    assert endings == {"NotifyFalseAlarm", "NotifySuccess",
+                       "FailExecution", "FailExecutionReconcile",
+                       "FailExecutionWorkflow"}
+
+
+def test_every_task_has_a_timeout(asl):
+    for name, state in asl["States"].items():
+        if state["Type"] != "Task":
+            continue
+        timeout = state.get("TimeoutSeconds")
+        assert timeout and timeout > 0, f"{name} lacks TimeoutSeconds"
+
+
+def test_verify_tasks_catch_infrastructure_failure_into_notify_failed(asl):
+    states = asl["States"]
+    for name in ("VerifyCheck1", "VerifyCheck2", "VerifyCheck3"):
+        catches = states[name].get("Catch", [])
+        assert any(c["Next"] == "NotifyFailed" for c in catches), \
+            f"{name} cannot route verifier crashes to a human"
+
+
+def test_failed_reconciliation_does_not_announce_success(asl):
+    catch = next(c for c in asl["States"]["ReconcileInFlightWrites"]["Catch"])
+    assert catch["Next"] == "NotifyReconciliationFailed"
+    fail = asl["States"]["FailExecutionReconcile"]
+    assert fail["Type"] == "Fail"
+    assert "reconciliation" in fail["Error"].lower() or \
+        "ReconciliationFailed" == fail["Error"]
+
+
+def test_workflow_failure_path_ends_in_fail_state_not_success(asl):
+    # NotifyFailed must not End:true — that would report SUCCEEDED.
+    notify = asl["States"]["NotifyFailed"]
+    assert not notify.get("End")
+    assert notify["Next"] == "FailExecutionWorkflow"
+    fail = asl["States"]["FailExecutionWorkflow"]
+    assert fail["Type"] == "Fail"
+    assert "rolled back or left untouched" in fail["Cause"] or \
+        "FailoverWorkflowFailed" == fail["Error"]
 
 
 def test_fail_state_carries_error_and_cause(asl):

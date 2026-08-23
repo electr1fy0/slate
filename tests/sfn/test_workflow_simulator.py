@@ -168,15 +168,20 @@ def test_promote_failure_after_retries_routes_to_catch_notify_failed(env, monkey
                                        RECONCILER: env["rec"].handler}).run()
 
     assert attempts.count("promote") == 3  # initial + MaxAttempts 2 retries
-    assert sim.outcome == "success"  # workflow completed via Catch branch
+    # The Catch branch notifies, then the workflow terminates as FAILED —
+    # a broken promotion must never report SUCCEEDED.
+    assert sim.outcome == "failed"
+    assert sim.failure["error"] == "FailoverWorkflowFailed"
     assert sim.context["promote_error"] == {"Error": "States.TaskFailed",
                                             "Cause": "ssm unreachable"}
-    assert sim.history[-2:] == ["PromoteStandby", "NotifyFailed"]
+    assert sim.history[-3:] == ["PromoteStandby", "NotifyFailed",
+                                "FailExecutionWorkflow"]
     assert subjects(sim) == ["[Continuum] FAILOVER STARTING",
                              "[Continuum] FAILOVER WORKFLOW FAILED"]
 
 
-def test_reconciler_failure_is_caught_and_does_not_block_success_notification(env, monkeypatch):
+def test_reconciler_failure_fails_the_execution_and_asks_for_manual_action(env,
+                                                                           monkeypatch):
     class ExplodingReconciler:
         def handler(self, event, context):
             raise RuntimeError("reconciler crashed")
@@ -190,6 +195,12 @@ def test_reconciler_failure_is_caught_and_does_not_block_success_notification(en
     sim = Simulator(sim_json, lambdas={VERIFIER: env["hv"].handler,
                                        OPS: env["fo"].handler,
                                        RECONCILER: ExplodingReconciler().handler}).run()
-    assert sim.outcome == "success"
+    # Traffic IS on the standby, but a failed replay is not a success story.
+    assert sim.outcome == "failed"
+    assert sim.failure["error"] == "ReconciliationFailed"
     assert sim.context["reconciliation_error"]["Error"] == "States.TaskFailed"
-    assert sim.history[-2:] == ["ReconcileInFlightWrites", "NotifySuccess"]
+    assert sim.history[-3:] == ["ReconcileInFlightWrites",
+                                "NotifyReconciliationFailed",
+                                "FailExecutionReconcile"]
+    assert subjects(sim) == ["[Continuum] FAILOVER STARTING",
+                             "[Continuum] RECONCILIATION FAILED - MANUAL ACTION REQUIRED"]
