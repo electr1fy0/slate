@@ -8,6 +8,8 @@ export type ConnectionStatus = "connecting" | "live" | "reconnecting"
 
 /** Maximum number of element batches buffered while offline. */
 const OUTBOX_CAP = 200
+/** App-level heartbeat cadence; server evicts peers silent for 90s+. */
+const HEARTBEAT_INTERVAL_MS = 20_000
 
 interface UseBoardSyncOptions {
   roomId: string
@@ -29,6 +31,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
   const socketRef = useRef<WebSocket | null>(null)
   const attemptRef = useRef(0)
   const outboxRef = useRef<ClientMessage[]>([])
+  const heartbeatRef = useRef<number | null>(null)
   const optionsRef = useRef(options)
   optionsRef.current = options
   const reconnectRef = useRef<() => void>(() => {})
@@ -70,6 +73,14 @@ export function useBoardSync(options: UseBoardSyncOptions) {
         for (const message of drainOutbox(outboxRef.current)) {
           send(message)
         }
+        if (heartbeatRef.current === null) {
+          heartbeatRef.current = window.setInterval(() => {
+            const current = socketRef.current
+            if (current && current.readyState === WebSocket.OPEN) {
+              current.send(JSON.stringify({ type: "ping" }))
+            }
+          }, HEARTBEAT_INTERVAL_MS)
+        }
       }
 
       socket.onmessage = (event) => {
@@ -103,6 +114,11 @@ export function useBoardSync(options: UseBoardSyncOptions) {
                 peer.id === message.peer.id ? { ...message.peer } : peer,
               ),
             )
+            break
+          case "pong":
+          case "error":
+            // Heartbeat replies and protocol errors need no UI action here;
+            // the status badge already reflects transport health.
             break
         }
       }
@@ -144,6 +160,10 @@ export function useBoardSync(options: UseBoardSyncOptions) {
       disposed = true
       reconnectRef.current = () => {}
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
+      if (heartbeatRef.current !== null) {
+        window.clearInterval(heartbeatRef.current)
+        heartbeatRef.current = null
+      }
       const socket = socketRef.current
       if (socket) {
         socket.onclose = null

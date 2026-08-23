@@ -362,15 +362,167 @@ def test_disconnect_notifies_remaining_peers(client, teacher_token, student_toke
         assert left["peer"]["name"] == "Ws Student"
 
 
-def test_malformed_messages_are_ignored_without_killing_socket(client, teacher_token):
+def test_malformed_frames_get_error_responses_and_socket_survives(client, teacher_token):
     with client.websocket_connect(board_url("room-1", teacher_token)) as a:
         a.send_text("{definitely not json")
+        assert recv(a)["code"] == "MALFORMED_JSON"
         a.send_text('"a bare string"')
+        assert recv(a)["code"] == "FRAME_NOT_OBJECT"
         a.send_text("[1, 2, 3]")
+        assert recv(a)["code"] == "FRAME_NOT_OBJECT"
         send(a, type="elements", elements="not-a-list")
+        assert recv(a)["code"] == "BAD_ELEMENTS_PAYLOAD"
         send(a, type="hover", whatever=True)
+        assert recv(a)["code"] == "UNKNOWN_MESSAGE_TYPE"
+        # Still alive and fully functional afterwards.
         send(a, type="join")
         assert recv(a)["type"] == "init"
+
+
+def test_ping_pong_liveness(client, teacher_token):
+    with client.websocket_connect(board_url("room-1", teacher_token)) as a:
+        send(a, type="ping")
+        assert recv(a) == {"type": "pong"}
+
+
+def test_oversized_frame_is_rejected_with_error_and_close(client, teacher_token,
+                                                          monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "ws_max_message_bytes", 64)
+    with pytest.raises(Exception):  # noqa: B017 - server closes with 1009
+        with client.websocket_connect(board_url("room-1", teacher_token)) as a:
+            send(a, type="join")
+            assert recv(a)["type"] == "init"
+            a.send_text("x" * 128)
+            assert recv(a)["code"] == "PAYLOAD_TOO_LARGE"
+            recv(a)  # the close frame terminates the stream
+    assert "room-1" not in manager.rooms
+
+
+def test_oversized_frame_is_rejected_with_error_and_close(client, teacher_token,
+                                                          monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "ws_max_message_bytes", 64)
+    with pytest.raises(Exception):  # noqa: B017 - server closes with 1009
+        with client.websocket_connect(board_url("room-1", teacher_token)) as a:
+            send(a, type="join")
+            assert recv(a)["type"] == "init"
+            a.send_text("x" * 128)
+            assert recv(a)["code"] == "PAYLOAD_TOO_LARGE"
+            recv(a)  # the close frame terminates the stream
+    assert "room-1" not in manager.rooms
+
+
+class ClosableSocket(FakeSocket):
+    """FakeSocket that also records protocol-level closes."""
+
+    def __init__(self, fail=False):
+        super().__init__(fail=fail)
+        self.closed_code = None
+
+    async def close(self, code=None):
+        self.closed_code = code
+
+
+@pytest.mark.anyio
+async def test_evict_stale_closes_zombies_and_announces_departure():
+    import time as time_mod
+
+    live = FakeSocket()
+    zombie = ClosableSocket()
+    fresh_seen = time_mod.monotonic()
+    manager.room("room")["peers"][live] = {"id": "live", "name": "Live",
+                                           "role": "student",
+                                           "last_seen": fresh_seen}
+    manager.room("room")["peers"][zombie] = {"id": "zombie", "name": "Z",
+                                             "role": "student",
+                                             "last_seen": fresh_seen - 999}
+    evicted = await manager.evict_stale(max_idle_s=90)
+    assert evicted == 1
+    assert zombie.closed_code == 4402
+    remaining_ids = {peer["id"] for peer in manager.peers("room")}
+    assert remaining_ids == {"live"}
+    # The survivor hears about the departure.
+    assert any('"peer-left"' in message for message in live.sent)
+
+
+@pytest.mark.anyio
+async def test_evict_stale_survives_peer_vanishing_mid_close():
+    import asyncio
+    import time as time_mod
+
+    vanishing = ClosableSocket()
+
+    async def sneaky_close(code=None):
+        # Another task wins the race and detaches the peer while we close.
+        manager.disconnect("room-race", vanishing)
+        vanishing.closed_code = code
+        await asyncio.sleep(0)
+
+    vanishing.close = sneaky_close
+    manager.room("room-race")["peers"][vanishing] = {
+        "id": "vanishing", "name": "V", "role": "student",
+        "last_seen": time_mod.monotonic() - 999}
+    evicted = await manager.evict_stale(max_idle_s=90)
+    assert evicted == 1
+    assert vanishing.closed_code == 4402
+
+
+@pytest.mark.anyio
+async def test_evict_stale_tolerates_failing_transport_close():
+    import time as time_mod
+
+    class ExplodingClose(ClosableSocket):
+        async def close(self, code=None):
+            raise RuntimeError("transport already dead")
+
+    live = FakeSocket()
+    exploding = ExplodingClose()
+    fresh_seen = time_mod.monotonic()
+    manager.room("room")["peers"][live] = {"id": "live", "name": "Live",
+                                           "role": "student",
+                                           "last_seen": fresh_seen}
+    manager.room("room")["peers"][exploding] = {"id": "boom", "name": "B",
+                                                "role": "student",
+                                                "last_seen": fresh_seen - 999}
+    evicted = await manager.evict_stale(max_idle_s=90)
+    assert evicted == 1
+    assert {peer["id"] for peer in manager.peers("room")} == {"live"}
+
+
+def test_evict_stale_spares_recently_active_peers(client, teacher_token):
+    with client.websocket_connect(board_url("room-fresh", teacher_token)) as a:
+        send(a, type="join")
+        recv(a)
+        import asyncio
+
+        assert asyncio.run(manager.evict_stale(max_idle_s=90)) == 0
+        assert "room-fresh" in manager.rooms
+
+
+@pytest.mark.anyio
+async def test_idle_evictor_loops_until_stopped(monkeypatch):
+    import asyncio
+
+    from config import settings
+
+    swept = {"calls": 0}
+
+    async def counting_sweep(_max_idle_s):
+        swept["calls"] += 1
+
+    monkeypatch.setattr(manager, "evict_stale", counting_sweep)
+    monkeypatch.setattr(settings, "ws_max_idle_s", 90)
+    from ws import idle_evictor
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(idle_evictor(stop, 0.01))
+    await asyncio.sleep(0.06)
+    stop.set()
+    await asyncio.wait_for(asyncio.shield(task), timeout=1)
+    assert swept["calls"] >= 2
 
 
 def test_rooms_are_isolated_from_each_other(client, teacher_token, student_token):

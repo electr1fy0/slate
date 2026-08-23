@@ -134,3 +134,5 @@ export type ServerMessage =
   | { type: "peer-joined"; peer: PeerInfo }
   | { type: "peer-left"; peer: PeerInfo }
   | { type: "cursor"; peer: PeerInfo }
+  | { type: "pong" }
+  | { type: "error"; code?: string; message?: string }

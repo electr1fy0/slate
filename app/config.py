@@ -34,6 +34,9 @@ class Settings:
     register_rate_limit = env_int("REGISTER_RATE_LIMIT", 3)
     bootstrap_teacher_email = os.environ.get("BOOTSTRAP_TEACHER_EMAIL", "")
     bootstrap_teacher_password = os.environ.get("BOOTSTRAP_TEACHER_PASSWORD", "")
+    ws_max_message_bytes = env_int("WS_MAX_MESSAGE_BYTES", 64 * 1024)
+    ws_max_idle_s = env_int("WS_MAX_IDLE_S", 90)
+    ws_sweep_interval_s = env_int("WS_SWEEP_INTERVAL_S", 15)
     cors_origins = [origin.strip()
                     for origin in os.environ.get("CORS_ORIGINS",
                                                  "http://localhost:3000,http://127.0.0.1:3000").split(",")]

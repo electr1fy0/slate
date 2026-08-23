@@ -5,12 +5,12 @@ import {
   CheckIcon,
   CopyIcon,
   RefreshCwIcon,
-  UsersIcon,
   WifiOffIcon,
 } from "lucide-react"
 
 import type { BoardCanvasHandle } from "@/components/board/board-canvas"
 import { PeerCursors } from "@/components/board/peer-cursors"
+import { PresencePanel } from "@/components/board/presence-panel"
 import { AppShell } from "@/components/layout/app-shell"
 import { normaliseRoomCode } from "@/lib/room-code"
 import { rememberRoom } from "@/lib/recent-rooms"
@@ -18,7 +18,6 @@ import { requireAuth } from "@/lib/guard"
 import { useAuth } from "@/lib/auth"
 import type { BoardElement, ClientMessage } from "@/lib/types"
 import { useBoardSync } from "@/hooks/use-board-sync"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -37,8 +36,7 @@ export const Route = createFileRoute("/board/$roomId")({
 const PERMISSION_KEY = "slate.board-perms"
 const CURSOR_THROTTLE_MS = 40
 
-function loadStudentDrawPermission(roomId: string): boolean {
-  try {
+function loadStudentDrawPermission(roomId: string): boolean {  try {
     return JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")[roomId] === true
   } catch {
     return false
@@ -53,11 +51,6 @@ function saveStudentDrawPermission(roomId: string, allowed: boolean) {
   } catch {
     // best effort only
   }
-}
-
-function initialsOf(name: string): string {
-  const trimmed = name.trim()
-  return trimmed ? trimmed.slice(0, 2).toUpperCase() : "??"
 }
 
 function BoardPage() {
@@ -184,28 +177,11 @@ function BoardPage() {
             <TooltipContent>Copy room code</TooltipContent>
           </Tooltip>
           <div className="flex items-center gap-1.5">
-            <UsersIcon className="size-4 text-muted-foreground" />
-            <div className="flex -space-x-1.5">
-              {sync.peers.slice(0, 4).map((peer) => (
-                <Tooltip key={peer.id}>
-                  <TooltipTrigger
-                    render={
-                      <Avatar className="size-6 ring-2 ring-background">
-                        <AvatarFallback className="text-[10px]">
-                          {initialsOf(peer.name)}
-                        </AvatarFallback>
-                      </Avatar>
-                    }
-                  >
-                    <span className="sr-only">{peer.name}</span>
-                  </TooltipTrigger>
-                  <TooltipContent>{peer.name}</TooltipContent>
-                </Tooltip>
-              ))}
-            </div>
-            {sync.peers.length > 4 ? (
-              <span className="text-xs text-muted-foreground">+{sync.peers.length - 4}</span>
-            ) : null}
+            <PresencePanel
+              peers={sync.peers}
+              selfName={auth.user?.name || "You"}
+              selfRole={isTeacher ? "teacher" : "student"}
+            />
           </div>
           {isTeacher ? (
             <label

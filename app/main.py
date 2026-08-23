@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import shutil
@@ -16,6 +17,7 @@ import db
 from chaos import ChaosMiddleware, chaos_state, error_rate, reset_chaos
 from config import settings
 from middleware import RequestIdMiddleware, RateLimitMiddleware, auth_rate_limits, log_json
+from ws import idle_evictor
 from ws import manager as board_manager
 from ws import router as board_router
 
@@ -30,7 +32,11 @@ async def lifespan(_app: FastAPI):
     teacher = auth.seed_bootstrap_teacher()
     if teacher:
         log_json("bootstrap_teacher_seeded", email=teacher)
+    stop = asyncio.Event()
+    sweeper = asyncio.create_task(idle_evictor(stop, settings.ws_sweep_interval_s))
     yield
+    stop.set()
+    sweeper.cancel()
 
 
 app = FastAPI(title="Continuum Exam Platform", lifespan=lifespan)
