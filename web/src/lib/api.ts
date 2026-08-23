@@ -1,3 +1,4 @@
+import { clearAuth, getAccessToken, getRefreshToken, setAuth } from "./auth"
 import type {
   AdminStatus,
   Exam,
@@ -19,11 +20,63 @@ export class ApiError extends Error {
   }
 }
 
+interface TokenResponse {
+  access_token: string
+  refresh_token: string
+  token_type: string
+  expires_in: number
+  user: { user_id: string; email: string; name: string; role: "student" | "teacher" }
+}
+
+let refreshInFlight: Promise<boolean> | null = null
+
+async function refreshTokens(): Promise<boolean> {
+  refreshInFlight ??= (async () => {
+    const refreshToken = getRefreshToken()
+    if (!refreshToken) return false
+    try {
+      const response = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!response.ok) {
+        clearAuth()
+        return false
+      }
+      const tokens = (await response.json()) as TokenResponse
+      setAuth({
+        user: tokens.user,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+      })
+      return true
+    } catch {
+      // Network hiccup — keep the session; the next call retries.
+      return false
+    } finally {
+      refreshInFlight = null
+    }
+  })()
+  return refreshInFlight
+}
+
+async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
+  const token = getAccessToken()
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  }
+  if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`
+  return fetch(`${BASE}${path}`, { ...init, headers })
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  })
+  let response = await rawRequest(path, init)
+  if (response.status === 401 && getRefreshToken()) {
+    const refreshed = await refreshTokens()
+    if (refreshed) response = await rawRequest(path, init)
+  }
   if (!response.ok) {
     let detail = `Request failed (${response.status})`
     try {
@@ -42,20 +95,25 @@ function adminHeaders(token: string): Record<string, string> {
 }
 
 export const api = {
+  register: (payload: { email: string; password: string; name?: string }) =>
+    request<TokenResponse>("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
+
+  login: (payload: { email: string; password: string }) =>
+    request<TokenResponse>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+
   listExams: () => request<ExamMeta[]>("/exams"),
 
   getExam: (examId: string) => request<Exam>(`/exam/${encodeURIComponent(examId)}`),
 
-  createExam: (draft: ExamDraft, token: string) =>
+  createExam: (draft: ExamDraft) =>
     request<{ id: string; title: string; question_count: number }>("/exam", {
       method: "POST",
-      headers: adminHeaders(token),
       body: JSON.stringify(draft),
     }),
 
   submitAnswers: (
     examId: string,
-    payload: { student_id: string; answers: Record<string, number>; request_id?: string },
+    payload: { answers: Record<string, number>; request_id?: string },
   ) => request<SubmitResult>(`/exam/${encodeURIComponent(examId)}/submit`, {
     method: "POST",
     body: JSON.stringify(payload),
@@ -92,7 +150,8 @@ export const api = {
     }),
 }
 
-export function boardSocketUrl(roomId: string): string {
+export function boardSocketUrl(roomId: string, token: string | null): string {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws"
-  return `${scheme}://${window.location.host}/ws/board/${encodeURIComponent(roomId)}`
+  const query = token ? `?token=${encodeURIComponent(token)}` : ""
+  return `${scheme}://${window.location.host}/ws/board/${encodeURIComponent(roomId)}${query}`
 }

@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
   EyeIcon,
-  KeyRoundIcon,
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
@@ -13,6 +12,7 @@ import {
 
 import { api, ApiError } from "@/lib/api"
 import { useAdminToken } from "@/lib/admin-token"
+import { requireAuth } from "@/lib/guard"
 import type { QuestionDraft } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
@@ -25,7 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   InputGroup,
@@ -40,6 +40,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 
 export const Route = createFileRoute("/teacher")({
+  ssr: false,
+  beforeLoad: ({ location }) => requireAuth(location),
   component: TeacherPage,
   head: () => ({ meta: [{ title: "Quizzes · Slate" }] }),
 })
@@ -91,7 +93,6 @@ function TeacherPage() {
 
 function QuizBuilder({ onPublished }: { onPublished: () => void }) {
   const queryClient = useQueryClient()
-  const [adminToken, saveAdminToken] = useAdminToken()
   const [title, setTitle] = useState("")
   const [customId, setCustomId] = useState("")
   const [questions, setQuestions] = useState<BuilderQuestion[]>(() => [blankQuestion()])
@@ -137,7 +138,7 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
           answer,
         })),
       }
-      return api.createExam(draft, adminToken)
+      return api.createExam(draft)
     },
     onSuccess: (created) => {
       toast.success(`Published "${created.title}"`, {
@@ -150,6 +151,10 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
       onPublished()
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.status === 401) {
+        toast.error("Please sign in again to publish")
+        return
+      }
       toast.error(error instanceof ApiError ? error.message : "Could not publish quiz")
     },
   })
@@ -199,19 +204,6 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
                 />
               </InputGroup>
               <FieldDescription>A slug; conflicts are rejected with a 409.</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="admin-token">Admin token</FieldLabel>
-              <InputGroup>
-                <InputGroupInput
-                  id="admin-token"
-                  type="password"
-                  placeholder="Paste admin token"
-                  value={adminToken}
-                  onChange={(event) => saveAdminToken(event.target.value)}
-                />
-              </InputGroup>
-              <FieldDescription>Saved in this browser only.</FieldDescription>
             </Field>
           </FieldGroup>
         </CardContent>
@@ -327,7 +319,7 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
 
 function SubmissionsPanel() {
   const mounted = useMounted()
-  const [adminToken] = useAdminToken()
+  const [adminToken, saveAdminToken] = useAdminToken()
 
   const submissionsQuery = useQuery({
     queryKey: ["submissions", adminToken],
@@ -338,17 +330,32 @@ function SubmissionsPanel() {
 
   if (!adminToken) {
     return (
-      <Empty className="rounded-xl border border-dashed">
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <KeyRoundIcon />
-          </EmptyMedia>
-          <EmptyTitle>Admin token required</EmptyTitle>
-          <EmptyDescription>
-            Paste your admin token on the Create tab to load submissions.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <Card>
+        <CardHeader>
+          <CardTitle>Submissions</CardTitle>
+          <CardDescription>
+            The raw submission feed is a platform-ops view — paste the admin
+            token to unlock it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup className="max-w-sm">
+            <Field>
+              <FieldLabel htmlFor="submissions-token">Admin token</FieldLabel>
+              <InputGroup>
+                <InputGroupInput
+                  id="submissions-token"
+                  type="password"
+                  placeholder="Paste admin token"
+                  value={adminToken}
+                  onChange={(event) => saveAdminToken(event.target.value)}
+                />
+              </InputGroup>
+              <FieldDescription>Saved in this browser only.</FieldDescription>
+            </Field>
+          </FieldGroup>
+        </CardContent>
+      </Card>
     )
   }
 

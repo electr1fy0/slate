@@ -1,10 +1,12 @@
 import { useState } from "react"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
   ArrowRightIcon,
   ClipboardListIcon,
+  LogInIcon,
+  LogOutIcon,
   PlusIcon,
   PresentationIcon,
   SparklesIcon,
@@ -12,8 +14,8 @@ import {
 } from "lucide-react"
 
 import { api } from "@/lib/api"
+import { clearAuth, useAuth } from "@/lib/auth"
 import { newRoomCode, normaliseRoomCode } from "@/lib/room-code"
-import { useSession } from "@/lib/session"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
 import { Badge } from "@/components/ui/badge"
@@ -35,7 +37,6 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -44,15 +45,23 @@ export const Route = createFileRoute("/")({
 
 function HomePage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const mounted = useMounted()
-  const [session, setSession] = useSession()
+  const auth = useAuth()
   const [joinCode, setJoinCode] = useState("")
+  const isTeacher = auth.user?.role === "teacher"
 
   const examsQuery = useQuery({
     queryKey: ["exams"],
     queryFn: api.listExams,
     enabled: mounted,
   })
+
+  function signOut() {
+    clearAuth()
+    void queryClient.invalidateQueries()
+    toast.info("Signed out")
+  }
 
   function joinBoard(code: string) {
     const clean = normaliseRoomCode(code)
@@ -68,10 +77,10 @@ function HomePage() {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <section className="flex flex-col gap-1.5">
           <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
-            {session.role === "teacher" ? "Run today's class" : "Join today's class"}
+            {isTeacher ? "Run today's class" : "Join today's class"}
           </h2>
           <p className="max-w-prose text-sm text-muted-foreground">
-            {session.role === "teacher"
+            {isTeacher
               ? "Spin up a live board, publish a quiz, and keep every student on the same page."
               : "Hop onto the live board or take the quiz your teacher published."}
           </p>
@@ -127,7 +136,7 @@ function HomePage() {
                 <PlusIcon data-icon="inline-start" />
                 New room
               </Button>
-              {session.role === "teacher" ? (
+              {isTeacher ? (
                 <Button render={<Link to="/teacher" />}>
                   <ClipboardListIcon data-icon="inline-start" />
                   Create a quiz
@@ -142,42 +151,43 @@ function HomePage() {
                 <UserIcon data-icon="inline-start" />
                 You
               </CardTitle>
-              <CardDescription>How your classmates see you.</CardDescription>
+              <CardDescription>
+                {auth.user ? "Signed in to this browser." : "Sign in to join boards and quizzes."}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel>Role</FieldLabel>
-                  <ToggleGroup
-                    variant="outline"
-                    value={[session.role]}
-                    onValueChange={(groupValue) => {
-                      const role = groupValue[0]
-                      if (role === "teacher" || role === "student") setSession({ role })
-                    }}
-                    className="w-full"
-                  >
-                    <ToggleGroupItem value="teacher" className="flex-1">
-                      Teacher
-                    </ToggleGroupItem>
-                    <ToggleGroupItem value="student" className="flex-1">
-                      Student
-                    </ToggleGroupItem>
-                  </ToggleGroup>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="display-name">Display name</FieldLabel>
-                  <InputGroup>
-                    <InputGroupInput
-                      id="display-name"
-                      placeholder="Ada Lovelace"
-                      value={session.name}
-                      onChange={(event) => setSession({ name: event.target.value })}
-                    />
-                  </InputGroup>
-                </Field>
-              </FieldGroup>
+              {auth.user ? (
+                <div className="flex items-center gap-3">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
+                    {auth.user.name.trim().slice(0, 2).toUpperCase() || "??"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{auth.user.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{auth.user.email}</p>
+                  </div>
+                  <Badge variant={isTeacher ? "default" : "secondary"} className="capitalize">
+                    {auth.user.role}
+                  </Badge>
+                </div>
+              ) : (
+                <FieldDescription>
+                  Your identity keeps quiz submissions and board presence honest.
+                </FieldDescription>
+              )}
             </CardContent>
+            <CardFooter>
+              {auth.user ? (
+                <Button variant="outline" onClick={signOut}>
+                  <LogOutIcon data-icon="inline-start" />
+                  Sign out
+                </Button>
+              ) : (
+                <Button render={<Link to="/login" />}>
+                  <LogInIcon data-icon="inline-start" />
+                  Sign in
+                </Button>
+              )}
+            </CardFooter>
           </Card>
         </div>
 
@@ -229,12 +239,12 @@ function HomePage() {
                   <CardFooter className="px-4">
                     <Button
                       size="sm"
-                      variant={session.role === "student" ? "default" : "outline"}
+                      variant={!auth.user || auth.user.role === "student" ? "default" : "outline"}
                       render={
                         <Link to="/quiz/$examId" params={{ examId: exam.id }} />
                       }
                     >
-                      {session.role === "student" ? "Take quiz" : "Preview"}
+                      {!auth.user || auth.user.role === "student" ? "Take quiz" : "Preview"}
                       <ArrowRightIcon data-icon="inline-end" />
                     </Button>
                   </CardFooter>

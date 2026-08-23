@@ -4,6 +4,7 @@ import { ArrowRightIcon, HistoryIcon, PlusIcon, PresentationIcon, XIcon } from "
 
 import { newRoomCode, normaliseRoomCode } from "@/lib/room-code"
 import { forgetRoom, useRecentRooms } from "@/lib/recent-rooms"
+import { requireAuth } from "@/lib/guard"
 import { AppShell } from "@/components/layout/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -25,6 +26,8 @@ import {
 } from "@/components/ui/input-group"
 
 export const Route = createFileRoute("/board/")({
+  ssr: false,
+  beforeLoad: ({ location }) => requireAuth(location),
   component: BoardIndexPage,
   head: () => ({ meta: [{ title: "Live board · Slate" }] }),
 })

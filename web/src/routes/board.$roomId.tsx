@@ -14,7 +14,8 @@ import { PeerCursors } from "@/components/board/peer-cursors"
 import { AppShell } from "@/components/layout/app-shell"
 import { normaliseRoomCode } from "@/lib/room-code"
 import { rememberRoom } from "@/lib/recent-rooms"
-import { useSession } from "@/lib/session"
+import { requireAuth } from "@/lib/guard"
+import { useAuth } from "@/lib/auth"
 import type { BoardElement, ClientMessage } from "@/lib/types"
 import { useBoardSync } from "@/hooks/use-board-sync"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -27,6 +28,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 const BoardCanvas = lazy(() => import("@/components/board/board-canvas"))
 
 export const Route = createFileRoute("/board/$roomId")({
+  ssr: false,
+  beforeLoad: ({ location }) => requireAuth(location),
   component: BoardPage,
   head: () => ({ meta: [{ title: "Live board · Slate" }] }),
 })
@@ -60,7 +63,7 @@ function initialsOf(name: string): string {
 function BoardPage() {
   const { roomId: rawRoomId } = Route.useParams()
   const roomId = normaliseRoomCode(rawRoomId)
-  const [session] = useSession()
+  const auth = useAuth()
   const [copied, setCopied] = useState(false)
   const [studentDraw, setStudentDraw] = useState(false)
 
@@ -75,7 +78,7 @@ function BoardPage() {
     if (roomId) rememberRoom(roomId)
   }, [roomId])
 
-  const isTeacher = session.role === "teacher"
+  const isTeacher = auth.user?.role === "teacher"
   const canEdit = isTeacher || studentDraw
 
   const onRemote = useCallback((elements: BoardElement[]) => {
@@ -84,8 +87,8 @@ function BoardPage() {
 
   const sync = useBoardSync({
     roomId,
-    name: session.name,
-    role: session.role,
+    name: auth.user?.name || "Guest",
+    role: isTeacher ? "teacher" : "student",
     onInit: onRemote,
     onElements: onRemote,
   })

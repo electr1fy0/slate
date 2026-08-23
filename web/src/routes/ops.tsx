@@ -13,6 +13,7 @@ import {
 
 import { api, ApiError } from "@/lib/api"
 import { useAdminToken } from "@/lib/admin-token"
+import { requireAuth } from "@/lib/guard"
 import type { AdminStatus } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
@@ -45,6 +46,8 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 
 export const Route = createFileRoute("/ops")({
+  ssr: false,
+  beforeLoad: ({ location }) => requireAuth(location),
   component: OpsPage,
   head: () => ({ meta: [{ title: "Ops console · Slate" }] }),
 })

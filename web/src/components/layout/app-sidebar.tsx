@@ -3,13 +3,18 @@ import {
   ActivityIcon,
   ClipboardListIcon,
   HouseIcon,
+  LogInIcon,
+  LogOutIcon,
   PenToolIcon,
   PresentationIcon,
 } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
 
-import { useSession } from "@/lib/session"
+import { clearAuth, useAuth } from "@/lib/auth"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Sidebar,
   SidebarContent,
@@ -38,7 +43,14 @@ function initials(name: string): string {
 
 export function AppSidebar() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const [session] = useSession()
+  const auth = useAuth()
+  const queryClient = useQueryClient()
+
+  function signOut() {
+    clearAuth()
+    void queryClient.invalidateQueries()
+    toast.info("Signed out")
+  }
 
   return (
     <Sidebar>
@@ -87,22 +99,38 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
-              <Avatar className="size-8">
-                <AvatarFallback>{initials(session.name)}</AvatarFallback>
-              </Avatar>
-              <div className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate text-sm font-medium">
-                  {session.name.trim() || "Anonymous"}
-                </span>
-                <span className="text-xs capitalize text-muted-foreground">
-                  {session.role}
-                </span>
+            {auth.user ? (
+              <div className="flex items-center gap-2 rounded-lg px-2 py-1.5">
+                <Avatar className="size-8">
+                  <AvatarFallback>{initials(auth.user.name)}</AvatarFallback>
+                </Avatar>
+                <div className="flex min-w-0 flex-1 flex-col leading-tight">
+                  <span className="truncate text-sm font-medium">{auth.user.name}</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {auth.user.email}
+                  </span>
+                </div>
+                <Badge variant={auth.user.role === "teacher" ? "default" : "secondary"}>
+                  {auth.user.role === "teacher" ? "Staff" : "Learner"}
+                </Badge>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Sign out"
+                  onClick={signOut}
+                >
+                  <LogOutIcon />
+                </Button>
               </div>
-              <Badge variant={session.role === "teacher" ? "default" : "secondary"}>
-                {session.role === "teacher" ? "Staff" : "Learner"}
-              </Badge>
-            </div>
+            ) : (
+              <SidebarMenuButton
+                tooltip="Sign in"
+                render={<Link to="/login" />}
+              >
+                <LogInIcon />
+                <span>Sign in</span>
+              </SidebarMenuButton>
+            )}
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

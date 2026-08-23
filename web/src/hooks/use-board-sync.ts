@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { boardSocketUrl } from "@/lib/api"
+import { getAccessToken } from "@/lib/auth"
 import type { BoardElement, ClientMessage, PeerInfo, Role, ServerMessage } from "@/lib/types"
 
 export type ConnectionStatus = "connecting" | "live" | "reconnecting"
@@ -53,7 +54,9 @@ export function useBoardSync(options: UseBoardSyncOptions) {
 
     function connect() {
       setStatus(attemptRef.current === 0 ? "connecting" : "reconnecting")
-      const socket = new WebSocket(boardSocketUrl(optionsRef.current.roomId))
+      // Read the token fresh on every attempt so a mid-session refresh
+      // is picked up by the next reconnect.
+      const socket = new WebSocket(boardSocketUrl(optionsRef.current.roomId, getAccessToken()))
       socketRef.current = socket
 
       socket.onopen = () => {

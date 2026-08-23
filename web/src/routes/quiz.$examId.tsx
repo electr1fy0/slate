@@ -13,7 +13,7 @@ import {
 
 import { api, ApiError } from "@/lib/api"
 import type { SubmitResult } from "@/lib/types"
-import { useSession } from "@/lib/session"
+import { requireAuth } from "@/lib/guard"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
 import {
@@ -44,6 +44,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 
 export const Route = createFileRoute("/quiz/$examId")({
+  ssr: false,
+  beforeLoad: ({ location }) => requireAuth(location),
   component: QuizPage,
   head: () => ({ meta: [{ title: "Quiz · Slate" }] }),
 })
@@ -175,7 +177,6 @@ function ExamRunner({
   title: string
   questions: { index: number; question: string; options: string[] }[]
 }) {
-  const [session] = useSession()
   const [position, setPosition] = useState(0)
   const [answers, setAnswers] = useState<Partial<Record<number, number>>>(() =>
     loadDraftAnswers(examId),
@@ -206,8 +207,6 @@ function ExamRunner({
     return requestId
   }
 
-  const studentId = session.name.trim() || `guest-${crypto.randomUUID().slice(0, 8)}`
-
   const submitMutation = useMutation({
     mutationFn: async () => {
       const serialised: Record<string, number> = {}
@@ -215,7 +214,6 @@ function ExamRunner({
         if (typeof choice === "number") serialised[index] = choice
       }
       return api.submitAnswers(examId, {
-        student_id: studentId,
         answers: serialised,
         request_id: currentRequestId(),
       })

@@ -96,7 +96,8 @@ def create_user(email: str, password: str, name: str, role: str = "student") -> 
         ):
             raise EmailAlreadyRegistered(normalised) from exc
         raise
-    return {key: value for key, value in profile.items() if key != "password_hash"}
+    return {key: value for key, value in profile.items()
+            if key not in ("password_hash", "pk", "sk")}
 
 
 def authenticate(email: str, password: str) -> dict | None:
