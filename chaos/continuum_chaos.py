@@ -131,11 +131,29 @@ def cmd_demote(args):
     run_ssm(args.target, ["echo standby > /etc/continuum/role && systemctl restart continuum && sleep 3 && curl -s http://localhost/health/live"], "manual demote")
 
 
+def ensure_student_session(host, student):
+    """Register-or-login a demo student; returns bearer headers or None."""
+    email = f"{student.lower()}@example.com"
+    password = "demo-password-123"
+    code, body = http(f"{host}/auth/login", "POST",
+                      {"email": email, "password": password})
+    if code != 200:
+        code, body = http(f"{host}/auth/register", "POST",
+                          {"email": email, "password": password, "name": student})
+        if code >= 400:
+            print(f"HTTP {code}: could not create demo session: {json.dumps(body)}")
+            return None
+    return {"Authorization": f"Bearer {body['access_token']}"}
+
+
 def cmd_submit(args):
     exam = args.exam
-    payload = {"student_id": args.student, "answers": {"0": 1, "1": 0, "2": 1, "3": 1, "4": 1}}
     host = target(args.target or "primary")
-    code, body = http(f"{host}/exam/{exam}/submit", "POST", payload)
+    headers = ensure_student_session(host, args.student)
+    if headers is None:
+        return
+    payload = {"answers": {"0": 1, "1": 0, "2": 1, "3": 1, "4": 1}}
+    code, body = http(f"{host}/exam/{exam}/submit", "POST", payload, headers)
     print(f"HTTP {code}: {json.dumps(body)}")
 
 

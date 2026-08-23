@@ -360,17 +360,38 @@ def test_cmd_submit_defaults_and_targets(cli, monkeypatch, capsys):
     posts = []
 
     def fake_http(url, method="GET", payload=None, headers=None, timeout=10):
-        posts.append((url, method, payload))
+        posts.append((url, method, payload, headers))
+        if "/auth/login" in url:
+            if payload["email"].startswith("burst2"):
+                return 200, {"access_token": "tok-existing"}
+            return 401, {"detail": "invalid email or password"}
+        if "/auth/register" in url:
+            return 201, {"access_token": "tok-new"}
         return 200, {"status": "committed"}
 
     monkeypatch.setattr(cli, "http", fake_http)
     cli.cmd_submit(argparse.Namespace(student="burst1", exam="cs101-midterm", target=None))
     cli.cmd_submit(argparse.Namespace(student="burst2", exam="cs101-midterm", target="standby"))
-    assert posts[0][0] == "http://10.0.0.1/exam/cs101-midterm/submit"
-    assert posts[1][0].startswith("http://10.0.1.1/")
-    assert posts[0][1] == "POST"
-    assert posts[0][2]["student_id"] == "burst1"
-    assert "committed" in capsys.readouterr().out
+    submit_posts = [p for p in posts if "/submit" in p[0]]
+    assert submit_posts[0][0] == "http://10.0.0.1/exam/cs101-midterm/submit"
+    assert submit_posts[1][0].startswith("http://10.0.1.1/")
+    assert submit_posts[0][1] == "POST"
+    assert submit_posts[0][2] == {"answers": {"0": 1, "1": 0, "2": 1, "3": 1, "4": 1}}
+    assert submit_posts[0][3]["Authorization"] == "Bearer tok-new"
+    assert submit_posts[1][3]["Authorization"] == "Bearer tok-existing"
+    out = capsys.readouterr().out
+    assert "committed" in out
+
+
+def test_cmd_submit_reports_session_failure(cli, monkeypatch, capsys):
+    def fake_http(url, method="GET", payload=None, headers=None, timeout=10):
+        if "/auth/" in url:
+            return 503, {"detail": "data layer unavailable"}
+        return 200, {}
+
+    monkeypatch.setattr(cli, "http", fake_http)
+    cli.cmd_submit(argparse.Namespace(student="ghost", exam="x", target=None))
+    assert "could not create demo session" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------- main

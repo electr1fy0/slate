@@ -3,14 +3,24 @@
 Rooms hold the latest version of every scene element so late joiners get an
 immediate snapshot. Element merges are last-writer-wins keyed on Excalidraw's
 monotonic ``version`` field.
+
+Connections must present a valid bearer JWT (``?token=``) and, when a browser
+``Origin`` header is present, it must be allow-listed.
 """
 
 import json
 import uuid
 
+import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+import auth as board_auth
+from config import settings
+
 router = APIRouter()
+
+WS_INVALID_TOKEN = 4401
+WS_ORIGIN_FORBIDDEN = 4403
 
 
 def _merge_element(store: dict[str, dict], element: dict) -> bool:
@@ -36,10 +46,15 @@ class ConnectionManager:
             self.rooms[room_id] = {"peers": {}, "elements": {}}
         return self.rooms[room_id]
 
-    def connect(self, room_id: str, websocket: WebSocket) -> str:
+    def connect(self, room_id: str, websocket: WebSocket, name: str = "Guest",
+                role: str = "student") -> str:
         peer_id = uuid.uuid4().hex[:12]
-        self.room(room_id)["peers"][websocket] = {"id": peer_id, "name": "Guest",
-                                                  "role": "student", "cursor": None}
+        self.room(room_id)["peers"][websocket] = {
+            "id": peer_id,
+            "name": (name or "Guest")[:40],
+            "role": role if role in ("teacher", "student") else "student",
+            "cursor": None,
+        }
         return peer_id
 
     def identify(self, room_id: str, websocket: WebSocket, name: str, role: str) -> dict:
@@ -93,10 +108,44 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def resolve_socket_identity(websocket: WebSocket) -> dict | None:
+    """Validate the connect JWT and load the live account behind it."""
+    token = websocket.query_params.get("token", "")
+    if not token:
+        return None
+    try:
+        payload = board_auth.decode_token(token)
+    except jwt.PyJWTError:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    user = board_auth.get_user(user_id)
+    if user is None:
+        return None
+    role = user.get("role", "student")
+    return {"name": user.get("name") or "Guest",
+            "role": "student" if role == "student" else "teacher"}
+
+
+def reject_origin(websocket: WebSocket) -> bool:
+    """True when a browser origin is present but not allow-listed."""
+    origin = websocket.headers.get("origin")
+    return bool(origin) and settings.cors_origins and origin not in settings.cors_origins
+
+
 @router.websocket("/ws/board/{room_id}")
 async def board_socket(websocket: WebSocket, room_id: str) -> None:
+    identity = resolve_socket_identity(websocket)
+    if identity is None:
+        await websocket.close(code=WS_INVALID_TOKEN)
+        return
+    if reject_origin(websocket):
+        await websocket.close(code=WS_ORIGIN_FORBIDDEN)
+        return
     await websocket.accept()
-    peer_id = manager.connect(room_id, websocket)
+    peer_id = manager.connect(room_id, websocket, name=identity["name"],
+                              role=identity["role"])
     try:
         while True:
             raw = await websocket.receive_text()
@@ -109,8 +158,10 @@ async def board_socket(websocket: WebSocket, room_id: str) -> None:
 
             kind = message.get("type")
             if kind == "join":
-                manager.identify(room_id, websocket,
-                                 str(message.get("name", "")), str(message.get("role", "")))
+                # Role always stays bound to the token; clients may only
+                # refresh their display name.
+                requested = str(message.get("name", "")) or identity["name"]
+                manager.identify(room_id, websocket, requested, identity["role"])
                 snapshot = list(manager.room(room_id)["elements"].values())
                 await manager.send(websocket, {
                     "type": "init", "you": peer_id, "elements": snapshot,

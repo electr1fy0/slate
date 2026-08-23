@@ -59,15 +59,17 @@ def test_get_exam_missing_returns_none(table):
 
 
 def test_submit_new_attempt_commits_with_version_one(table):
-    result = db.submit_attempt("x1", "s1", {"0": 1}, None)
+    result = db.submit_attempt("x1", "s1", "Stu One", {"0": 1}, None)
     assert result["status"] == "committed"
     assert result["version"] == 1
     assert len(result["request_id"]) == 36
+    stored = table.get_item(Key={"pk": "SUBMISSION#x1", "sk": "STUDENT#s1"})["Item"]
+    assert stored["student_name"] == "Stu One"
 
 
 def test_submit_same_request_id_returns_duplicate(table):
-    first = db.submit_attempt("x1", "s1", {"0": 1}, "req-1")
-    again = db.submit_attempt("x1", "s1", {"0": 9}, "req-1")
+    first = db.submit_attempt("x1", "s1", "Stu One", {"0": 1}, "req-1")
+    again = db.submit_attempt("x1", "s1", "Stu One", {"0": 9}, "req-1")
     assert again["status"] == "duplicate"
     assert again["version"] == first["version"]
     # original answers preserved; duplicate reports the first commit timestamp
@@ -77,9 +79,9 @@ def test_submit_same_request_id_returns_duplicate(table):
 
 
 def test_submit_second_attempt_conflicts_without_new_journal(table):
-    db.submit_attempt("x1", "s1", {"0": 1}, "req-1")
+    db.submit_attempt("x1", "s1", "Stu One", {"0": 1}, "req-1")
     with pytest.raises(db.SubmissionConflict):
-        db.submit_attempt("x1", "s1", {"1": 0}, "req-2")
+        db.submit_attempt("x1", "s1", "Stu One", {"1": 0}, "req-2")
     stored = table.get_item(Key={"pk": "SUBMISSION#x1", "sk": "STUDENT#s1"})["Item"]
     assert stored["version"] == 1
     journal = table.scan(FilterExpression=Attr("pk").begins_with("JOURNAL#"))["Items"]

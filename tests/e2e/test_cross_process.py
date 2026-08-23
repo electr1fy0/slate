@@ -153,6 +153,18 @@ def http(url, method="GET", payload=None, headers=None):
         return exc.code, json.loads(exc.read().decode() or "{}")
 
 
+def student_session(host, name="cross-process-student"):
+    email = f"{name}@example.com"
+    password = "hunter2hunter2"
+    code, body = http(f"http://{host}/auth/login", "POST",
+                      {"email": email, "password": password})
+    if code != 200:
+        code, body = http(f"http://{host}/auth/register", "POST",
+                          {"email": email, "password": password, "name": name})
+    assert code in (200, 201), body
+    return {"Authorization": f"Bearer {body['access_token']}"}
+
+
 @pytest.mark.e2e
 def test_baseline_primary_serves_and_standby_is_read_only(cli, capsys):
     assert http(f"http://{cli.PRIMARY}/health/live")[0] == 200
@@ -162,9 +174,10 @@ def test_baseline_primary_serves_and_standby_is_read_only(cli, capsys):
     out = capsys.readouterr().out
     assert '"status": "committed"' in out
 
-    # The standby node refuses writes until promoted.
+    # The standby node refuses writes until promoted (auth passes, role doesn't).
+    headers = student_session(cli.STANDBY)
     code, _ = http(f"http://{cli.STANDBY}/exam/cs101-midterm/submit",
-                   "POST", {"student_id": "nope", "answers": {"0": 1}})
+                   "POST", {"answers": {"0": 1}}, headers)
     assert code == 503
 
 
@@ -183,14 +196,15 @@ def test_degrade_then_heal_roundtrip_over_real_http(cli, capsys):
     import argparse
 
     exam_url = f"http://{cli.PRIMARY}/exam/cs101-midterm"
+    headers = student_session(cli.PRIMARY)
 
     cli.cmd_degrade_cmd(argparse.Namespace(target="primary", error_pct=100,
                                            latency_ms=None))
-    codes = {http(exam_url)[0] for _ in range(5)}
+    codes = {http(exam_url, headers=headers)[0] for _ in range(5)}
     assert codes == {500}  # every request injected
 
     cli.cmd_heal(argparse.Namespace(target="all"))
-    assert http(exam_url)[0] == 404 or http(exam_url)[0] == 200
+    assert http(exam_url, headers=headers)[0] == 200
 
 
 @pytest.mark.e2e
@@ -211,7 +225,10 @@ def test_db_stall_flag_travels_through_admin_api(cli, capsys):
 
 @pytest.mark.e2e
 def test_submissions_persist_in_shared_global_table(stack, cli):
-    item = stack["table"].get_item(
-        Key={"pk": "SUBMISSION#cs101-midterm", "sk": "STUDENT#e2e-burst1"}).get("Item")
-    assert item is not None
-    assert item["request_id"]
+    from boto3.dynamodb.conditions import Attr
+
+    items = stack["table"].scan(
+        FilterExpression=Attr("pk").begins_with("SUBMISSION#")).get("Items", [])
+    burst = [item for item in items if item.get("student_name") == "e2e-burst1"]
+    assert burst, f"no submission for e2e-burst1 in {items!r}"
+    assert burst[0]["request_id"]

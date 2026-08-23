@@ -2,22 +2,43 @@ import os
 import re
 import shutil
 import uuid
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException, Request
+import jwt
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
+import auth
 import db
 from chaos import ChaosMiddleware, chaos_state, error_rate, reset_chaos
 from config import settings
+from middleware import RequestIdMiddleware, RateLimitMiddleware, auth_rate_limits, log_json
 from ws import manager as board_manager
 from ws import router as board_router
 
-app = FastAPI(title="Continuum Exam Platform")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        db.ensure_exam(SEED_EXAM["id"], SEED_EXAM["title"], SEED_EXAM["questions"])
+        log_json("seed_exam", exam_id=SEED_EXAM["id"])
+    except Exception as exc:
+        log_json("startup_seed_skipped", reason=str(exc)[:200])
+    teacher = auth.seed_bootstrap_teacher()
+    if teacher:
+        log_json("bootstrap_teacher_seeded", email=teacher)
+    yield
+
+
+app = FastAPI(title="Continuum Exam Platform", lifespan=lifespan)
 app.add_middleware(ChaosMiddleware)
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(RateLimitMiddleware, limits=auth_rate_limits())
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
-                   allow_methods=["*"], allow_headers=["*"])
+                   allow_methods=["*"], allow_headers=["*"],
+                   expose_headers=["x-request-id"])
 app.include_router(board_router)
 
 
@@ -64,16 +85,36 @@ def require_admin(x_admin_token: str = Header(default="")):
         raise HTTPException(status_code=403, detail="invalid admin token")
 
 
-@app.on_event("startup")
-def seed():
-    try:
-        db.ensure_exam(SEED_EXAM["id"], SEED_EXAM["title"], SEED_EXAM["questions"])
-    except Exception as exc:
-        print(f"startup seed skipped: {exc}")
+class RegisterPayload(BaseModel):
+    email: str = Field(pattern=auth.EMAIL_PATTERN, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(default="", max_length=60)
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+class RefreshPayload(BaseModel):
+    refresh_token: str
+
+
+class AdminCreateUserPayload(BaseModel):
+    email: str = Field(pattern=auth.EMAIL_PATTERN, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+    name: str = Field(default="", max_length=60)
+    role: str = Field(default="student")
+
+    @field_validator("role")
+    @classmethod
+    def role_known(cls, value: str) -> str:
+        if value not in auth.ROLES:
+            raise ValueError(f"role must be one of {', '.join(auth.ROLES)}")
+        return value
 
 
 class SubmitPayload(BaseModel):
-    student_id: str
     answers: dict[str, int]
     request_id: str | None = None
 
@@ -151,8 +192,65 @@ def deep():
     return JSONResponse(body, status_code=200 if healthy else 503)
 
 
+# ---------------------------------------------------------------------- auth
+
+@app.post("/auth/register", status_code=201)
+def register(payload: RegisterPayload):
+    try:
+        user = auth.create_user(payload.email, payload.password, payload.name)
+    except auth.EmailAlreadyRegistered:
+        raise HTTPException(status_code=409, detail="email already registered")
+    except Exception:
+        raise HTTPException(status_code=503, detail="data layer unavailable")
+    return {"user": user, **auth.issue_tokens(user)}
+
+
+@app.post("/auth/login")
+def login(payload: LoginPayload):
+    try:
+        user = auth.authenticate(payload.email, payload.password)
+    except Exception:
+        raise HTTPException(status_code=503, detail="data layer unavailable")
+    if user is None:
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    return {"user": user, **auth.issue_tokens(user)}
+
+
+@app.post("/auth/refresh")
+def refresh_tokens(payload: RefreshPayload):
+    try:
+        claims = auth.decode_token(payload.refresh_token, expected_typ="refresh")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="invalid or expired refresh token")
+    user = auth.get_user(claims["sub"])
+    if user is None:
+        raise HTTPException(status_code=401, detail="account no longer exists")
+    safe_user = {key: value for key, value in user.items() if key != "password_hash"}
+    return {"user": safe_user, **auth.issue_tokens(safe_user)}
+
+
+@app.get("/auth/me")
+def me(user: dict = Depends(auth.current_user)):
+    return {"user": user}
+
+
+@app.post("/admin/users", status_code=201)
+def admin_create_user(payload: AdminCreateUserPayload,
+                      x_admin_token: str = Header(default="")):
+    require_admin(x_admin_token)
+    try:
+        user = auth.create_user(payload.email, payload.password, payload.name,
+                                role=payload.role)
+    except auth.EmailAlreadyRegistered:
+        raise HTTPException(status_code=409, detail="email already registered")
+    return {"user": user}
+
+
+# ---------------------------------------------------------------------- exams
+
 @app.get("/exam/{exam_id}")
-def get_exam(exam_id: str):
+def get_exam(exam_id: str, user: dict = Depends(auth.current_user)):
+    del user
     require_active()
     try:
         exam = db.get_exam(exam_id)
@@ -166,11 +264,14 @@ def get_exam(exam_id: str):
 
 
 @app.post("/exam/{exam_id}/submit")
-def submit(exam_id: str, payload: SubmitPayload):
+def submit(exam_id: str, payload: SubmitPayload,
+           user: dict = Depends(auth.current_user)):
     require_active()
+    student_id = user["user_id"]
+    student_name = user.get("name") or student_id
     try:
-        result = db.submit_attempt(exam_id, payload.student_id, payload.answers,
-                                   payload.request_id)
+        result = db.submit_attempt(exam_id, student_id, student_name,
+                                   payload.answers, payload.request_id)
         result.update(db.grade_attempt(exam_id, payload.answers))
     except db.SubmissionConflict:
         raise HTTPException(status_code=409,
@@ -186,8 +287,8 @@ def list_exams():
 
 
 @app.post("/exam", status_code=201)
-def create_exam(payload: ExamIn, x_admin_token: str = Header(default="")):
-    require_admin(x_admin_token)
+def create_exam(payload: ExamIn, principal: dict = Depends(auth.teacher_or_admin)):
+    del principal
     require_active()
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="title must not be empty")

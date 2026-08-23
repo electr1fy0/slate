@@ -25,6 +25,15 @@ class Settings:
     db_stall = os.environ.get("DB_STALL", "0") == "1"
     admin_token = os.environ.get("ADMIN_TOKEN", "continuum-demo-token")
     heartbeat_ttl_s = env_int("HEARTBEAT_TTL_S", 300)
+    jwt_secret = os.environ.get("JWT_SECRET", "dev-only-insecure-secret-change-me-32b")
+    jwt_algorithm = "HS256"
+    access_token_ttl_s = env_int("ACCESS_TOKEN_TTL_S", 3600)
+    refresh_token_ttl_s = env_int("REFRESH_TOKEN_TTL_S", 14 * 24 * 3600)
+    rate_limit_window_s = env_int("RATE_LIMIT_WINDOW_S", 60)
+    login_rate_limit = env_int("LOGIN_RATE_LIMIT", 5)
+    register_rate_limit = env_int("REGISTER_RATE_LIMIT", 3)
+    bootstrap_teacher_email = os.environ.get("BOOTSTRAP_TEACHER_EMAIL", "")
+    bootstrap_teacher_password = os.environ.get("BOOTSTRAP_TEACHER_PASSWORD", "")
     cors_origins = [origin.strip()
                     for origin in os.environ.get("CORS_ORIGINS",
                                                  "http://localhost:3000,http://127.0.0.1:3000").split(",")]

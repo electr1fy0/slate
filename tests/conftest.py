@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parent.parent
 APP_DIR = ROOT / "app"
 REGION = "ap-south-1"
 
+# Auth rate limits would otherwise trip across the dozens of logins the
+# integration/e2e suites perform inside one process.
+os.environ.setdefault("LOGIN_RATE_LIMIT", "10000")
+os.environ.setdefault("REGISTER_RATE_LIMIT", "10000")
+
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 

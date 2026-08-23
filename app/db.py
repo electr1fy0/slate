@@ -84,7 +84,8 @@ def get_exam(exam_id: str) -> dict | None:
     return meta
 
 
-def submit_attempt(exam_id: str, student_id: str, answers: dict, request_id: str | None) -> dict:
+def submit_attempt(exam_id: str, student_id: str, student_name: str,
+                   answers: dict, request_id: str | None) -> dict:
     t = table()
     request_id = request_id or str(uuid.uuid4())
     ts = now_ms()
@@ -101,7 +102,7 @@ def submit_attempt(exam_id: str, student_id: str, answers: dict, request_id: str
     version = 1
     item = {**submission_key, "answers": answers, "version": version,
             "request_id": request_id, "updated_at": ts, "updated_at_iso": iso_now(),
-            "written_by_region": settings.region}
+            "written_by_region": settings.region, "student_name": student_name}
     journal_item = {"pk": f"JOURNAL#{request_id}", "sk": "OUTBOX",
                     "target_pk": submission_key["pk"], "target_sk": submission_key["sk"],
                     "version": version, "request_id": request_id, "created_at": ts,

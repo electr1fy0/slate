@@ -27,6 +27,13 @@ def auth():
     return {"x-admin-token": settings.admin_token}
 
 
+def student_headers(client, email="journey-student@example.com"):
+    resp = client.post("/auth/register", json={
+        "email": email, "password": "hunter2hunter2", "name": "Journey Student"})
+    assert resp.status_code == 201
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
 class LivePrimaryProbes:
     """Verifier probes that hit the real app for the primary and a switchable
     standby-health flag (the single local app plays both nodes)."""
@@ -131,9 +138,11 @@ def test_t2_degraded_primary_fails_over_and_reconciles_in_flight_writes(world):
     client, table = world["client"], world["table"]
 
     # Baseline: exam served, one clean submission lands.
-    assert client.get("/exam/cs101-midterm").status_code == 200
-    first = client.post("/exam/cs101-midterm/submit",
-                        json={"student_id": "clean-1", "answers": {"0": 1}}).json()
+    headers = student_headers(client)
+    assert client.get("/exam/cs101-midterm",
+                      headers=headers).status_code == 200
+    first = client.post("/exam/cs101-midterm/submit", headers=headers,
+                        json={"answers": {"0": 1}}).json()
     assert first["status"] == "committed"
 
     # Chaos: primary starts failing most requests (T2 degradation).
@@ -145,7 +154,7 @@ def test_t2_degraded_primary_fails_over_and_reconciles_in_flight_writes(world):
     random_mod.randint = lambda a, b: 1
     try:
         for i in range(60):
-            client.get(f"/exam/cs101-midterm?v={i}")
+            client.get(f"/exam/cs101-midterm?v={i}", headers=headers)
     finally:
         random_mod.randint = original_randint
     # Stop injecting new errors; the window remembers the carnage.
@@ -180,7 +189,8 @@ def test_t2_degraded_primary_fails_over_and_reconciles_in_flight_writes(world):
                         params={"limit": 100}).json()
     sks = {item["sk"] for item in listed}
     assert {f"STUDENT#burst{i}" for i in range(4)} <= sks
-    assert "STUDENT#clean-1" in sks
+    assert any(item["sk"].startswith("STUDENT#") and item.get("student_name")
+               == "Journey Student" for item in listed)
 
 
 @pytest.mark.e2e
@@ -253,19 +263,20 @@ def test_t5_transient_blip_is_suppressed_no_failover(world, lambda_loader, monke
 @pytest.mark.e2e
 def test_t1_standby_serves_nothing_until_promoted(world):
     client = world["client"]
+    headers = student_headers(client)
 
     # Standby posture: read-only everywhere that matters.
     Path(settings.role_file).write_text("standby")
-    assert client.get("/exam/cs101-midterm").status_code == 503
-    assert client.post("/exam/cs101-midterm/submit",
-                       json={"student_id": "s", "answers": {"0": 1}}).status_code == 503
+    assert client.get("/exam/cs101-midterm", headers=headers).status_code == 503
+    assert client.post("/exam/cs101-midterm/submit", headers=headers,
+                       json={"answers": {"0": 1}}).status_code == 503
     assert "STANDBY NODE" in client.get("/").text
 
     # Promotion flips the role file and opens the gates.
     body = client.post("/admin/promote", headers=auth()).json()
     assert body["role"] == "active"
-    exam = client.get("/exam/cs101-midterm")
+    exam = client.get("/exam/cs101-midterm", headers=headers)
     assert exam.status_code == 200
-    submit = client.post("/exam/cs101-midterm/submit",
-                         json={"student_id": "post-promo", "answers": {"2": 1}})
+    submit = client.post("/exam/cs101-midterm/submit", headers=headers,
+                         json={"answers": {"2": 1}})
     assert submit.json()["status"] == "committed"
