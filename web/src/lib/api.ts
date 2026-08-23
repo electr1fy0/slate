@@ -4,6 +4,8 @@ import type {
   Exam,
   ExamDraft,
   ExamMeta,
+  ExamResultsResponse,
+  ResultResponse,
   Submission,
   SubmitResult,
 } from "./types"
@@ -12,11 +14,13 @@ const BASE = "/api"
 
 export class ApiError extends Error {
   status: number
+  code?: string
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -79,13 +83,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     let detail = `Request failed (${response.status})`
+    let code: string | undefined
     try {
       const body = await response.json()
-      if (typeof body?.detail === "string") detail = body.detail
+      if (typeof body?.detail === "string") {
+        detail = body.detail
+      } else if (typeof body?.detail?.message === "string") {
+        detail = body.detail.message
+        if (typeof body.detail.code === "string") code = body.detail.code
+      }
     } catch {
       // non-JSON error body — keep the generic message
     }
-    throw new ApiError(detail, response.status)
+    throw new ApiError(detail, response.status, code)
   }
   return response.json() as Promise<T>
 }
@@ -118,6 +128,28 @@ export const api = {
     method: "POST",
     body: JSON.stringify(payload),
   }),
+
+  myResult: (examId: string) =>
+    request<ResultResponse>(`/exam/${encodeURIComponent(examId)}/result`),
+
+  patchExam: (
+    examId: string,
+    payload: { title?: string; opens_at?: string; closes_at?: string; duration_minutes?: number },
+  ) => request<ExamMeta>(`/exam/${encodeURIComponent(examId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }),
+
+  closeExam: (examId: string) =>
+    request<{ id: string; closed_at: string }>(`/exam/${encodeURIComponent(examId)}/close`, {
+      method: "POST",
+    }),
+
+  deleteExam: (examId: string) =>
+    request<void>(`/exam/${encodeURIComponent(examId)}`, { method: "DELETE" }),
+
+  examResults: (examId: string) =>
+    request<ExamResultsResponse>(`/admin/exams/${encodeURIComponent(examId)}/results`),
 
   submissions: (token: string, limit = 100) =>
     request<Submission[]>(`/admin/submissions?limit=${limit}`, {

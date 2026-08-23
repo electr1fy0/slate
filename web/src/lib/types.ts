@@ -5,6 +5,16 @@ export interface ExamMeta {
   title: string
   question_count: number
   created_at: string
+  opens_at?: string
+  closes_at?: string
+  duration_minutes?: number
+}
+
+export function examState(meta: Pick<ExamMeta, "opens_at" | "closes_at">,
+                          now: number = Date.now()): "upcoming" | "open" | "closed" {
+  if (meta.opens_at && now < Date.parse(meta.opens_at)) return "upcoming"
+  if (meta.closes_at && now > Date.parse(meta.closes_at)) return "closed"
+  return "open"
 }
 
 export interface ExamQuestion {
@@ -18,6 +28,8 @@ export interface Exam {
   title: string
   question_count: number
   questions: ExamQuestion[]
+  attempt_started_at?: number
+  deadline_ms?: number
 }
 
 export interface QuestionDraft {
@@ -48,6 +60,41 @@ export interface Submission {
   updated_at: number
   updated_at_iso: string
   written_by_region: string
+}
+
+export interface ReviewQuestion {
+  index: number
+  question: string
+  options: string[]
+  chosen: number | null
+  correct_answer: number | null
+  was_correct: boolean
+}
+
+export interface ResultResponse {
+  status: string
+  score: number
+  total: number
+  answers: Record<string, number>
+  submitted_at?: string
+  request_id?: string
+  review: ReviewQuestion[]
+}
+
+export interface ExamResultRow {
+  student_id: string
+  student_name: string
+  answers: Record<string, number>
+  score: number
+  total: number
+  submitted_at?: string
+}
+
+export interface ExamResultsResponse {
+  exam_id: string
+  count: number
+  average_pct: number | null
+  submissions: ExamResultRow[]
 }
 
 export interface AdminStatus {

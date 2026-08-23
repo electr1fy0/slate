@@ -3,7 +3,9 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
+  DownloadIcon,
   EyeIcon,
+  LockIcon,
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
@@ -13,7 +15,7 @@ import {
 import { api, ApiError } from "@/lib/api"
 import { useAdminToken } from "@/lib/admin-token"
 import { requireAuth } from "@/lib/guard"
-import type { QuestionDraft } from "@/lib/types"
+import type { ExamMeta, ExamResultsResponse, QuestionDraft } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
 import { Badge } from "@/components/ui/badge"
@@ -72,6 +74,7 @@ function TeacherPage() {
         <Tabs value={tab} onValueChange={(value) => setTab(value)}>
           <TabsList>
             <TabsTrigger value="create">Create</TabsTrigger>
+            <TabsTrigger value="manage">Manage</TabsTrigger>
             <TabsTrigger value="submissions">Submissions</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -80,7 +83,10 @@ function TeacherPage() {
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
         <Tabs value={tab} onValueChange={(value) => setTab(value)}>
           <TabsContent value="create">
-            <QuizBuilder onPublished={() => setTab("submissions")} />
+            <QuizBuilder onPublished={() => setTab("manage")} />
+          </TabsContent>
+          <TabsContent value="manage">
+            <ExamManager />
           </TabsContent>
           <TabsContent value="submissions">
             <SubmissionsPanel />
@@ -89,6 +95,234 @@ function TeacherPage() {
       </div>
     </AppShell>
   )
+}
+
+function windowBadge(meta: ExamMeta): { label: string; variant: "default" | "secondary" | "destructive" } {
+  const now = Date.now()
+  if (meta.opens_at && now < Date.parse(meta.opens_at)) {
+    return { label: "upcoming", variant: "secondary" }
+  }
+  if (meta.closes_at && now > Date.parse(meta.closes_at)) {
+    return { label: "closed", variant: "destructive" }
+  }
+  return { label: "open", variant: "default" }
+}
+
+function ExamManager() {
+  const queryClient = useQueryClient()
+  const [selected, setSelected] = useState<ExamMeta | null>(null)
+
+  const examsQuery = useQuery({
+    queryKey: ["exams"],
+    queryFn: api.listExams,
+  })
+
+  function refresh() {
+    void queryClient.invalidateQueries({ queryKey: ["exams"] })
+  }
+
+  async function closeExam(exam: ExamMeta) {
+    try {
+      await api.closeExam(exam.id)
+      toast.success(`Closed "${exam.title}"`)
+      refresh()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Could not close quiz")
+    }
+  }
+
+  async function deleteExam(exam: ExamMeta) {
+    try {
+      await api.deleteExam(exam.id)
+      toast.success(`Deleted "${exam.title}"`)
+      if (selected?.id === exam.id) setSelected(null)
+      refresh()
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Could not delete quiz")
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div className="flex flex-col gap-1">
+            <CardTitle>Your quizzes</CardTitle>
+            <CardDescription>Close a quiz to stop new submissions, or remove it entirely.</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void examsQuery.refetch()}
+            disabled={examsQuery.isFetching}
+          >
+            <RefreshCwIcon data-icon="inline-start" />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {examsQuery.isPending ? (
+            <div className="flex flex-col gap-2">
+              {[0, 1].map((index) => (
+                <Skeleton key={index} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : examsQuery.isError ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>Couldn't load quizzes</EmptyTitle>
+                <EmptyDescription>Is the API running?</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : examsQuery.data.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>No quizzes yet</EmptyTitle>
+                <EmptyDescription>Publish one from the Create tab.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {examsQuery.data.map((exam) => {
+                const badge = windowBadge(exam)
+                return (
+                  <li
+                    key={exam.id}
+                    className={
+                      selected?.id === exam.id
+                        ? "rounded-lg border border-primary/40 bg-primary/5 p-3"
+                        : "rounded-lg border p-3"
+                    }
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <button
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() =>
+                          setSelected((current) => (current?.id === exam.id ? null : exam))
+                        }
+                      >
+                        <span className="block truncate text-sm font-medium">{exam.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {exam.id} · {exam.question_count} question{exam.question_count === 1 ? "" : "s"}
+                          {exam.duration_minutes ? ` · ${exam.duration_minutes} min limit` : ""}
+                          {exam.closes_at ? ` · closes ${new Date(exam.closes_at).toLocaleString()}` : ""}
+                        </span>
+                      </button>
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                      {badge.label !== "closed" ? (
+                        <Button size="sm" variant="outline" onClick={() => void closeExam(exam)}>
+                          <LockIcon data-icon="inline-start" />
+                          Close
+                        </Button>
+                      ) : null}
+                      <Button size="icon-sm" variant="ghost" aria-label={`Delete ${exam.title}`}
+                              onClick={() => void deleteExam(exam)}>
+                        <Trash2Icon />
+                      </Button>
+                    </div>
+                    {selected?.id === exam.id ? <ResultsPanel examId={exam.id} /> : null}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function ResultsPanel({ examId }: { examId: string }) {
+  const resultsQuery = useQuery({
+    queryKey: ["exam-results", examId],
+    queryFn: () => api.examResults(examId),
+    refetchInterval: 15_000,
+  })
+
+  if (resultsQuery.isPending) {
+    return <Skeleton className="mt-3 h-24 w-full" />
+  }
+  if (resultsQuery.isError) {
+    return (
+      <p className="mt-3 text-xs text-destructive">
+        Couldn't load results{resultsQuery.error instanceof ApiError
+          ? ` — ${resultsQuery.error.message}`
+          : ""}.
+      </p>
+    )
+  }
+
+  const results = resultsQuery.data
+
+  return (
+    <div className="mt-3 flex flex-col gap-2 border-t pt-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">
+          {results.count} submission{results.count === 1 ? "" : "s"}
+          {results.average_pct !== null ? ` · class average ${results.average_pct}%` : ""}
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={results.submissions.length === 0}
+          onClick={() => downloadResultsCsv(results)}
+        >
+          <DownloadIcon data-icon="inline-start" />
+          CSV
+        </Button>
+      </div>
+      {results.submissions.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No submissions yet.</p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Student</TableHead>
+              <TableHead className="text-right">Score</TableHead>
+              <TableHead className="text-right">Percent</TableHead>
+              <TableHead className="text-right">Submitted</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {results.submissions.map((row) => (
+              <TableRow key={row.student_id}>
+                <TableCell className="font-medium">{row.student_name || row.student_id}</TableCell>
+                <TableCell className="text-right">{row.score}/{row.total}</TableCell>
+                <TableCell className="text-right">
+                  {row.total > 0 ? `${Math.round((row.score / row.total) * 100)}%` : "—"}
+                </TableCell>
+                <TableCell className="text-right text-muted-foreground">
+                  {row.submitted_at ? new Date(row.submitted_at).toLocaleTimeString() : "—"}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  )
+}
+
+function downloadResultsCsv(results: ExamResultsResponse): void {
+  const escape = (value: string): string => `"${value.replace(/"/g, '""')}"`
+  const rows: string[][] = [["student", "score", "total", "percent", "submitted"]]
+  for (const row of results.submissions) {
+    rows.push([
+      row.student_name || row.student_id,
+      String(row.score),
+      String(row.total),
+      row.total > 0 ? `${Math.round((row.score / row.total) * 100)}%` : "",
+      row.submitted_at ?? "",
+    ])
+  }
+  const csv = rows.map((row) => row.map(escape).join(",")).join("\n")
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = `${results.exam_id}-results.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 function QuizBuilder({ onPublished }: { onPublished: () => void }) {

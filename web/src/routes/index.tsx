@@ -16,6 +16,7 @@ import {
 import { api } from "@/lib/api"
 import { clearAuth, useAuth } from "@/lib/auth"
 import { newRoomCode, normaliseRoomCode } from "@/lib/room-code"
+import { examState } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
 import { Badge } from "@/components/ui/badge"
@@ -228,28 +229,46 @@ function HomePage() {
             </Empty>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {examsQuery.data.map((exam) => (
-                <Card key={exam.id} className="gap-3 py-4">
-                  <CardHeader className="px-4">
-                    <CardTitle className="text-base">{exam.title}</CardTitle>
-                    <CardDescription>
-                      {exam.question_count} question{exam.question_count === 1 ? "" : "s"}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardFooter className="px-4">
-                    <Button
-                      size="sm"
-                      variant={!auth.user || auth.user.role === "student" ? "default" : "outline"}
-                      render={
-                        <Link to="/quiz/$examId" params={{ examId: exam.id }} />
-                      }
-                    >
-                      {!auth.user || auth.user.role === "student" ? "Take quiz" : "Preview"}
-                      <ArrowRightIcon data-icon="inline-end" />
-                    </Button>
-                  </CardFooter>
-                </Card>
-              ))}
+              {examsQuery.data.map((exam) => {
+                const state = examState(exam)
+                const closedForStudent = state === "closed" && auth.user?.role !== "teacher"
+                return (
+                  <Card key={exam.id} className="gap-3 py-4">
+                    <CardHeader className="px-4">
+                      <CardTitle className="text-base">{exam.title}</CardTitle>
+                      <CardDescription>
+                        {exam.question_count} question{exam.question_count === 1 ? "" : "s"}
+                        {exam.duration_minutes ? ` · ${exam.duration_minutes} min` : ""}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="px-4">
+                      {state === "open" ? null : (
+                        <Badge variant={state === "closed" ? "destructive" : "secondary"}>
+                          {state}
+                        </Badge>
+                      )}
+                    </CardContent>
+                    <CardFooter className="px-4">
+                      {closedForStudent ? (
+                        <Button size="sm" variant="outline" disabled>
+                          Closed
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant={!auth.user || auth.user.role === "student" ? "default" : "outline"}
+                          render={
+                            <Link to="/quiz/$examId" params={{ examId: exam.id }} />
+                          }
+                        >
+                          {!auth.user || auth.user.role === "student" ? "Take quiz" : "Preview"}
+                          <ArrowRightIcon data-icon="inline-end" />
+                        </Button>
+                      )}
+                    </CardFooter>
+                  </Card>
+                )
+              })}
             </div>
           )}
         </section>
