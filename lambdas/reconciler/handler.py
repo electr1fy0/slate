@@ -6,8 +6,11 @@ import boto3
 from boto3.dynamodb.conditions import Attr
 
 TABLE_NAME = os.environ["TABLE_NAME"]
-LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES", "30"))
+LOOKBACK_MINUTES = int(os.environ.get("LOOKBACK_MINUTES", str(7 * 24 * 60)))
 METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "Continuum")
+
+# Fields copied from the journal onto the reconstructed submission.
+CARRIED_FIELDS = ("answers", "student_name", "score", "total")
 
 dynamodb = boto3.resource("dynamodb").Table(TABLE_NAME)
 cloudwatch = boto3.client("cloudwatch")
@@ -41,14 +44,17 @@ def handler(event, context):
             continue
 
         try:
+            reconstructed = {**target_key,
+                             "version": entry["version"],
+                             "request_id": entry["request_id"],
+                             "updated_at": entry["created_at"],
+                             "reconciled": True,
+                             "written_by_region": os.environ.get("AWS_REGION", "")}
+            for field in CARRIED_FIELDS:
+                if field in entry:
+                    reconstructed[field] = entry[field]
             dynamodb.put_item(
-                Item={**target_key,
-                      "answers": entry.get("answers", {}),
-                      "version": entry["version"],
-                      "request_id": entry["request_id"],
-                      "updated_at": entry["created_at"],
-                      "reconciled": True,
-                      "written_by_region": os.environ.get("AWS_REGION", "")},
+                Item=reconstructed,
                 ConditionExpression="attribute_not_exists(pk) OR version < :v",
                 ExpressionAttributeValues={":v": entry["version"]})
             repaired.append(entry["request_id"])

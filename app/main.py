@@ -3,6 +3,7 @@ import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import jwt
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -135,6 +136,63 @@ class ExamIn(BaseModel):
     title: str
     questions: list[QuestionIn]
     id: str | None = None
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+
+    @field_validator("closes_at")
+    @classmethod
+    def window_ordered(cls, closes_at: datetime | None, info):
+        opens_at = info.data.get("opens_at")
+        if closes_at is not None and opens_at is not None and closes_at <= opens_at:
+            raise ValueError("closes_at must be after opens_at")
+        return closes_at
+
+
+class ExamPatchIn(BaseModel):
+    title: str | None = None
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+
+
+def window_payload(payload: ExamIn) -> dict:
+    """Serialise scheduling fields for storage; datetimes become ISO strings."""
+    window: dict = {}
+    if payload.opens_at is not None:
+        window["opens_at"] = payload.opens_at.isoformat()
+    if payload.closes_at is not None:
+        window["closes_at"] = payload.closes_at.isoformat()
+    if payload.duration_minutes is not None:
+        window["duration_minutes"] = payload.duration_minutes
+    return window
+
+
+class ExamWindowError(Exception):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+
+
+def enforce_exam_window(meta: dict, user: dict) -> None:
+    """Students may only fetch exams inside the window; staff bypass."""
+    if user.get("role") != "student":
+        return
+    now = datetime.now(timezone.utc)
+    for field_name, code, message in (
+            ("opens_at", "EXAM_NOT_OPEN", "exam is not open yet"),
+            ("closes_at", "EXAM_CLOSED", "exam window has closed")):
+        raw = meta.get(field_name)
+        if not raw:
+            continue
+        try:
+            boundary = datetime.fromisoformat(str(raw))
+        except ValueError:
+            continue
+        if field_name == "opens_at" and now < boundary:
+            raise ExamWindowError(code, message)
+        if field_name == "closes_at" and now > boundary:
+            raise ExamWindowError(code, message)
 
 
 @app.get("/", response_class=PlainTextResponse)
@@ -250,7 +308,6 @@ def admin_create_user(payload: AdminCreateUserPayload,
 
 @app.get("/exam/{exam_id}")
 def get_exam(exam_id: str, user: dict = Depends(auth.current_user)):
-    del user
     require_active()
     try:
         exam = db.get_exam(exam_id)
@@ -258,9 +315,24 @@ def get_exam(exam_id: str, user: dict = Depends(auth.current_user)):
         raise HTTPException(status_code=503, detail="data layer unavailable")
     if not exam:
         raise HTTPException(status_code=404, detail="exam not found")
+    try:
+        enforce_exam_window(exam, user)
+    except ExamWindowError as exc:
+        _reject_window(exc)
     for q in exam["questions"]:
         q.pop("answer", None)
+    if user["role"] == "student":
+        # Start (or resume) the attempt clock for timed exams.
+        attempt = db.record_attempt_start(exam_id, user["user_id"])
+        exam["attempt_started_at"] = attempt["started_at"]
+        if exam.get("duration_minutes"):
+            exam["deadline_ms"] = attempt["started_at"] + int(exam["duration_minutes"]) * 60_000
     return exam
+
+
+def _reject_window(exc: ExamWindowError):
+    raise HTTPException(status_code=403,
+                        detail={"code": exc.code, "message": exc.message})
 
 
 @app.post("/exam/{exam_id}/submit")
@@ -270,15 +342,58 @@ def submit(exam_id: str, payload: SubmitPayload,
     student_id = user["user_id"]
     student_name = user.get("name") or student_id
     try:
+        meta = db.get_exam_meta(exam_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="exam not found")
+        enforce_exam_window(meta, user)
+        if user["role"] == "student" and meta.get("duration_minutes"):
+            _attempt, deadline = db.attempt_deadline(exam_id, student_id)
+            now_ms = datetime.now(timezone.utc).timestamp() * 1000
+            if deadline is not None and now_ms > deadline + 5_000:
+                # Small grace window for in-flight network submissions.
+                raise ExamWindowError("ATTEMPT_EXPIRED", "time is up for this attempt")
         result = db.submit_attempt(exam_id, student_id, student_name,
                                    payload.answers, payload.request_id)
-        result.update(db.grade_attempt(exam_id, payload.answers))
+    except ExamWindowError as exc:
+        _reject_window(exc)
+    except HTTPException:
+        raise
     except db.SubmissionConflict:
         raise HTTPException(status_code=409,
                             detail="this student already submitted for this exam")
     except Exception:
         raise HTTPException(status_code=503, detail="data layer unavailable")
     return result
+
+
+@app.get("/exam/{exam_id}/result")
+def my_result(exam_id: str, user: dict = Depends(auth.current_user)):
+    require_active()
+    submission = db.get_submission(exam_id, user["user_id"])
+    if submission is None:
+        raise HTTPException(status_code=404, detail="no submission for this exam")
+    try:
+        exam = db.get_exam(exam_id, include_answers=True)
+    except Exception:
+        exam = None
+    review = []
+    for question in (exam or {}).get("questions", []):
+        chosen = submission.get("answers", {}).get(str(question["index"]))
+        correct = question.get("answer")
+        review.append({
+            "index": question["index"],
+            "question": question["question"],
+            "options": question["options"],
+            "chosen": chosen,
+            "correct_answer": correct,
+            "was_correct": chosen is not None and chosen == correct,
+        })
+    return {"status": "submitted", "score": submission.get("score", 0),
+            "total": submission.get("total", 0),
+            "answers": submission.get("answers", {}),
+            "submitted_at": submission.get("updated_at_iso"),
+            "request_id": submission.get("request_id"),
+            "review": review}
 
 
 @app.get("/exams")
@@ -304,6 +419,7 @@ def create_exam(payload: ExamIn, principal: dict = Depends(auth.teacher_or_admin
                                 detail=f"question {position} answer index out of range")
 
     questions = [q.model_dump() for q in payload.questions]
+    window = window_payload(payload)
     if payload.id is not None:
         exam_id = slugify(payload.id)
         if db.get_exam(exam_id) is not None:
@@ -317,9 +433,69 @@ def create_exam(payload: ExamIn, principal: dict = Depends(auth.teacher_or_admin
             if suffix > 50:
                 exam_id = f"quiz-{uuid.uuid4().hex[:8]}"
                 break
-    db.ensure_exam(exam_id, payload.title.strip(), questions)
+    db.ensure_exam(exam_id, payload.title.strip(), questions, window=window)
     return {"id": exam_id, "title": payload.title.strip(),
-            "question_count": len(questions)}
+            "question_count": len(questions), **window}
+
+
+@app.patch("/exam/{exam_id}")
+def patch_exam(exam_id: str, payload: ExamPatchIn,
+               principal: dict = Depends(auth.teacher_or_admin)):
+    del principal
+    require_active()
+    if db.get_exam_meta(exam_id) is None:
+        raise HTTPException(status_code=404, detail="exam not found")
+    fields = payload.model_dump(exclude_none=True)
+    title = fields.pop("title", None)
+    window = {key: value.isoformat() if isinstance(value, datetime) else value
+              for key, value in fields.items()}
+    updated = db.update_exam_window(exam_id, title=title, window=window)
+    return {"id": exam_id,
+            **{k: v for k, v in (updated or {}).items()
+               if k in ("title", "opens_at", "closes_at", "duration_minutes")}}
+
+
+@app.post("/exam/{exam_id}/close")
+def close_exam(exam_id: str, principal: dict = Depends(auth.teacher_or_admin)):
+    del principal
+    require_active()
+    if db.get_exam_meta(exam_id) is None:
+        raise HTTPException(status_code=404, detail="exam not found")
+    closed_at = datetime.now(timezone.utc)
+    db.update_exam_window(exam_id, window={"closes_at": closed_at.isoformat()})
+    return {"id": exam_id, "closed_at": closed_at.isoformat()}
+
+
+@app.delete("/exam/{exam_id}", status_code=204)
+def delete_exam(exam_id: str, principal: dict = Depends(auth.teacher_or_admin)):
+    del principal
+    require_active()
+    removed = db.delete_exam(exam_id)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="exam not found")
+
+
+@app.get("/admin/exams/{exam_id}/results")
+def exam_results(exam_id: str, principal: dict = Depends(auth.teacher_or_admin)):
+    del principal
+    rows = db.list_submissions(exam_id=exam_id, limit=1000)
+    scored = [(row.get("score"), row.get("total")) for row in rows if row.get("total")]
+    avg_pct = round(sum(s / t * 100 for s, t in scored) / len(scored), 1) if scored else None
+    return {"exam_id": exam_id, "count": len(rows), "average_pct": avg_pct,
+            "submissions": [{
+                "student_id": row["sk"].replace("STUDENT#", ""),
+                "student_name": row.get("student_name", ""),
+                "answers": row.get("answers", {}),
+                "score": row.get("score", 0), "total": row.get("total", 0),
+                "submitted_at": row.get("updated_at_iso"),
+            } for row in rows]}
+
+
+@app.get("/admin/outbox")
+def outbox(x_admin_token: str = Header(default=""), limit: int = 50):
+    """Journal entries visible for reconciliation monitoring."""
+    require_admin(x_admin_token)
+    return db.list_outbox(limit=min(max(limit, 1), 200))
 
 
 @app.get("/admin/submissions")
