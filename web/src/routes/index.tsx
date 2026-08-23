@@ -37,7 +37,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
-export const Route = createFileRoute("/")({ component: HomePage })
+export const Route = createFileRoute("/")({
+  component: HomePage,
+  head: () => ({ meta: [{ title: "Slate — Classroom boards & quizzes" }] }),
+})
 
 function HomePage() {
   const navigate = useNavigate()

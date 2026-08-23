@@ -1,11 +1,19 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { toast } from "sonner"
-import { CheckIcon, CopyIcon, UsersIcon, WifiOffIcon } from "lucide-react"
+import {
+  CheckIcon,
+  CopyIcon,
+  RefreshCwIcon,
+  UsersIcon,
+  WifiOffIcon,
+} from "lucide-react"
 
 import type { BoardCanvasHandle } from "@/components/board/board-canvas"
+import { PeerCursors } from "@/components/board/peer-cursors"
 import { AppShell } from "@/components/layout/app-shell"
 import { normaliseRoomCode } from "@/lib/room-code"
+import { rememberRoom } from "@/lib/recent-rooms"
 import { useSession } from "@/lib/session"
 import type { BoardElement, ClientMessage } from "@/lib/types"
 import { useBoardSync } from "@/hooks/use-board-sync"
@@ -18,9 +26,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 const BoardCanvas = lazy(() => import("@/components/board/board-canvas"))
 
-export const Route = createFileRoute("/board/$roomId")({ component: BoardPage })
+export const Route = createFileRoute("/board/$roomId")({
+  component: BoardPage,
+  head: () => ({ meta: [{ title: "Live board · Slate" }] }),
+})
 
 const PERMISSION_KEY = "slate.board-perms"
+const CURSOR_THROTTLE_MS = 40
 
 function loadStudentDrawPermission(roomId: string): boolean {
   try {
@@ -59,6 +71,10 @@ function BoardPage() {
     setStudentDraw(loadStudentDrawPermission(roomId))
   }, [roomId])
 
+  useEffect(() => {
+    if (roomId) rememberRoom(roomId)
+  }, [roomId])
+
   const isTeacher = session.role === "teacher"
   const canEdit = isTeacher || studentDraw
 
@@ -74,6 +90,17 @@ function BoardPage() {
     onElements: onRemote,
   })
   senderRef.current = sync.send
+
+  const lastCursorSentRef = useRef(0)
+  const onCursorMove = useCallback(
+    (xPercent: number, yPercent: number) => {
+      const now = Date.now()
+      if (now - lastCursorSentRef.current < CURSOR_THROTTLE_MS) return
+      lastCursorSentRef.current = now
+      sync.send({ type: "cursor", x: xPercent, y: yPercent, tool: "pointer" })
+    },
+    [sync.send],
+  )
 
   function toggleStudentDraw(allowed: boolean) {
     setStudentDraw(allowed)
@@ -107,16 +134,31 @@ function BoardPage() {
       padded={false}
       actions={
         <>
+          <p className="sr-only" role="status" aria-live="polite">
+            {sync.status === "live"
+              ? "Board connected"
+              : sync.status === "reconnecting"
+                ? "Connection lost. Reconnecting."
+                : "Connecting to board."}
+          </p>
           {sync.status === "live" ? (
             <Badge variant="default">
               <span className="mr-0.5 inline-block size-1.5 rounded-full bg-primary-foreground" />
               live
             </Badge>
           ) : (
-            <Badge variant="secondary">
-              <WifiOffIcon data-icon="inline-start" />
-              {sync.status}
-            </Badge>
+            <>
+              <Badge variant="secondary">
+                <WifiOffIcon data-icon="inline-start" />
+                {sync.status}
+              </Badge>
+              {sync.status === "reconnecting" ? (
+                <Button variant="outline" size="sm" onClick={sync.reconnect}>
+                  <RefreshCwIcon data-icon="inline-start" />
+                  Retry now
+                </Button>
+              ) : null}
+            </>
           )}
           <Tooltip>
             <TooltipTrigger
@@ -163,9 +205,13 @@ function BoardPage() {
             ) : null}
           </div>
           {isTeacher ? (
-            <label className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
+            <label
+              htmlFor="students-draw"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+            >
               students draw
               <Switch
+                id="students-draw"
                 checked={studentDraw}
                 onCheckedChange={(checked) => toggleStudentDraw(checked)}
               />
@@ -186,8 +232,10 @@ function BoardPage() {
           readOnly={!canEdit}
           handle={canvasHandle}
           senderRef={senderRef}
+          onCursorMove={onCursorMove}
         />
       </Suspense>
+      <PeerCursors peers={sync.peers} selfId={sync.selfId} />
     </AppShell>
   )
 }

@@ -229,18 +229,24 @@ def test_submit_retries_with_same_request_id_are_duplicates(client):
     assert again["version"] == first["version"]
 
 
-def test_submit_conditional_conflict_maps_to_duplicate_detail(client, monkeypatch):
-    class ConditionalCheckFailedException(Exception):
-        pass
+def test_submit_second_attempt_maps_to_409_conflict(client):
+    first = client.post(f"/exam/{EXAM}/submit",
+                        json={"student_id": "s1", "answers": {"0": 1},
+                              "request_id": "rid-a"})
+    assert first.status_code == 200
+    second = client.post(f"/exam/{EXAM}/submit",
+                         json={"student_id": "s1", "answers": {"0": 0},
+                               "request_id": "rid-b"})
+    assert second.status_code == 409
+    assert second.json()["detail"] == "this student already submitted for this exam"
 
-    def conflict(*args, **kwargs):
-        raise ConditionalCheckFailedException("transaction cancelled")
 
-    monkeypatch.setattr(main.db, "submit_attempt", conflict)
-    resp = client.post(f"/exam/{EXAM}/submit",
-                       json={"student_id": "s1", "answers": {"0": 1}})
-    assert resp.status_code == 503
-    assert resp.json()["detail"] == "duplicate submission"
+def test_submit_other_student_same_exam_is_independent(client):
+    first = client.post(f"/exam/{EXAM}/submit",
+                        json={"student_id": "s1", "answers": {"0": 1}})
+    second = client.post(f"/exam/{EXAM}/submit",
+                         json={"student_id": "s2", "answers": {"0": 1}})
+    assert first.status_code == 200 and second.status_code == 200
 
 
 def test_submit_other_data_failures_map_to_generic_detail(client, monkeypatch):

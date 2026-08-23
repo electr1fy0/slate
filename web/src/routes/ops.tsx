@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -44,7 +44,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 
-export const Route = createFileRoute("/ops")({ component: OpsPage })
+export const Route = createFileRoute("/ops")({
+  component: OpsPage,
+  head: () => ({ meta: [{ title: "Ops console · Slate" }] }),
+})
 
 const REGION_LABELS: Record<string, string> = {
   "ap-south-1": "Mumbai",
@@ -107,7 +110,7 @@ function OpsPage() {
                     <InputGroupInput
                       id="ops-token"
                       type="password"
-                      placeholder="continuum-demo-token"
+                      placeholder="Paste admin token"
                       value={adminToken}
                       onChange={(event) => saveAdminToken(event.target.value)}
                     />
@@ -144,7 +147,7 @@ function OpsPage() {
         ) : (
           <>
             <StatusCards status={statusQuery.data} />
-            <ChaosConsole token={adminToken} />
+            <ChaosConsole token={adminToken} chaos={statusQuery.data.chaos} />
             <FailoverCard token={adminToken} role={statusQuery.data.role} />
           </>
         )}
@@ -198,15 +201,39 @@ function StatusCards({ status }: { status: AdminStatus }) {
   )
 }
 
-function ChaosConsole({ token }: { token: string }) {
+function ChaosConsole({
+  token,
+  chaos,
+}: {
+  token: string
+  chaos: AdminStatus["chaos"]
+}) {
   const queryClient = useOpsRefetch()
-  const [errorPct, setErrorPct] = useState(0)
-  const [latencyMs, setLatencyMs] = useState(0)
-  const [dbStall, setDbStall] = useState(false)
+  const [errorPct, setErrorPct] = useState(chaos.error_pct)
+  const [latencyMs, setLatencyMs] = useState(chaos.latency_ms)
+  const [dbStall, setDbStall] = useState(chaos.db_stall)
+  // While the teacher is dragging controls the panel is authoritative; once an
+  // apply/reset lands (or another tab mutates state) re-sync from the server.
+  const dirtyRef = useRef(false)
+
+  useEffect(() => {
+    if (dirtyRef.current) return
+    setErrorPct(chaos.error_pct)
+    setLatencyMs(chaos.latency_ms)
+    setDbStall(chaos.db_stall)
+  }, [chaos])
+
+  function markDirty<T>(setter: (next: T) => void): (next: T) => void {
+    return (next) => {
+      dirtyRef.current = true
+      setter(next)
+    }
+  }
 
   const applyMutation = useMutation({
     mutationFn: () => api.setChaos(token, { error_pct: errorPct, latency_ms: latencyMs, db_stall: dbStall }),
     onSuccess: () => {
+      dirtyRef.current = false
       toast.success("Chaos applied")
       void queryClient()
     },
@@ -216,6 +243,7 @@ function ChaosConsole({ token }: { token: string }) {
   const resetMutation = useMutation({
     mutationFn: () => api.resetChaos(token),
     onSuccess: () => {
+      dirtyRef.current = false
       setErrorPct(0)
       setLatencyMs(0)
       setDbStall(false)
@@ -241,7 +269,7 @@ function ChaosConsole({ token }: { token: string }) {
           <FieldLabel>Error rate — {errorPct}%</FieldLabel>
           <Slider
             value={[errorPct]}
-            onValueChange={handleSliderValue(setErrorPct, errorPct)}
+            onValueChange={handleSliderValue(markDirty(setErrorPct), errorPct)}
             min={0}
             max={100}
             step={5}
@@ -251,7 +279,7 @@ function ChaosConsole({ token }: { token: string }) {
           <FieldLabel>Added latency — {latencyMs} ms</FieldLabel>
           <Slider
             value={[latencyMs]}
-            onValueChange={handleSliderValue(setLatencyMs, latencyMs)}
+            onValueChange={handleSliderValue(markDirty(setLatencyMs), latencyMs)}
             min={0}
             max={5000}
             step={100}
@@ -264,7 +292,10 @@ function ChaosConsole({ token }: { token: string }) {
               Deep health checks fail; triggers auto-failover.
             </span>
           </span>
-          <Switch checked={dbStall} onCheckedChange={(checked) => setDbStall(checked)} />
+          <Switch
+            checked={dbStall}
+            onCheckedChange={(checked) => markDirty(setDbStall)(checked)}
+          />
         </label>
       </CardContent>
       <CardFooter className="gap-2">

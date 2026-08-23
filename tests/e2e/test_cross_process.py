@@ -89,9 +89,11 @@ def stack(tmp_path_factory):
                 "CONTINUUM_ROLE_FILE": str(roles / role),
                 "AWS_DEFAULT_REGION": REGION,
                 "PYTHONPATH": str(APP_DIR),
-                # CI/dev machines vary wildly in disk fill level; keep the
-                # journeys focused on failover behaviour, not host state.
+                # CI/dev machines vary wildly in disk fill level and load;
+                # keep the journeys focused on failover behaviour, not host
+                # state.
                 "DISK_THRESHOLD_PCT": "99",
+                "LOAD_THRESHOLD": "64",
             })
             log = open(logs / f"app-{role}.log", "w")
             return subprocess.Popen(

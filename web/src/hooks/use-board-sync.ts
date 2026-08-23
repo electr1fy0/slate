@@ -5,12 +5,19 @@ import type { BoardElement, ClientMessage, PeerInfo, Role, ServerMessage } from 
 
 export type ConnectionStatus = "connecting" | "live" | "reconnecting"
 
+/** Maximum number of element batches buffered while offline. */
+const OUTBOX_CAP = 200
+
 interface UseBoardSyncOptions {
   roomId: string
   name: string
   role: Role
   onInit: (elements: BoardElement[]) => void
   onElements: (elements: BoardElement[]) => void
+}
+
+function drainOutbox(outbox: ClientMessage[]): ClientMessage[] {
+  return outbox.splice(0)
 }
 
 export function useBoardSync(options: UseBoardSyncOptions) {
@@ -20,13 +27,23 @@ export function useBoardSync(options: UseBoardSyncOptions) {
 
   const socketRef = useRef<WebSocket | null>(null)
   const attemptRef = useRef(0)
+  const outboxRef = useRef<ClientMessage[]>([])
   const optionsRef = useRef(options)
   optionsRef.current = options
+  const reconnectRef = useRef<() => void>(() => {})
 
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message))
+      return
+    }
+    // Offline: buffer drawing work so it survives a reconnect; stale cursor
+    // positions are dropped instead of queued.
+    if (message.type === "elements") {
+      const outbox = outboxRef.current
+      outbox.push(message)
+      if (outbox.length > OUTBOX_CAP) outbox.splice(0, outbox.length - OUTBOX_CAP)
     }
   }, [])
 
@@ -47,6 +64,9 @@ export function useBoardSync(options: UseBoardSyncOptions) {
           name: optionsRef.current.name || "Guest",
           role: optionsRef.current.role,
         })
+        for (const message of drainOutbox(outboxRef.current)) {
+          send(message)
+        }
       }
 
       socket.onmessage = (event) => {
@@ -94,10 +114,32 @@ export function useBoardSync(options: UseBoardSyncOptions) {
       socket.onerror = () => socket.close()
     }
 
+    reconnectRef.current = () => {
+      if (disposed) return
+      const socket = socketRef.current
+      if (socket &&
+          (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return
+      }
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer)
+        reconnectTimer = undefined
+      }
+      if (socket) {
+        socket.onclose = null
+        socket.onerror = null
+        socket.close()
+      }
+      attemptRef.current = 0
+      setStatus("connecting")
+      connect()
+    }
+
     connect()
 
     return () => {
       disposed = true
+      reconnectRef.current = () => {}
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       const socket = socketRef.current
       if (socket) {
@@ -118,5 +160,9 @@ export function useBoardSync(options: UseBoardSyncOptions) {
     }
   }, [identity, status, send])
 
-  return { status, peers, selfId, send }
+  const reconnect = useCallback(() => {
+    reconnectRef.current()
+  }, [])
+
+  return { status, peers, selfId, send, reconnect }
 }

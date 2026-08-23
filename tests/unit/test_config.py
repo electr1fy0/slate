@@ -25,4 +25,5 @@ def test_settings_defaults_are_coherent():
     s = Settings()
     assert s.region and s.table_name
     assert isinstance(s.error_rate_threshold, float)
+    assert isinstance(s.load_threshold, float) and s.load_threshold > 0
     assert s.admin_token

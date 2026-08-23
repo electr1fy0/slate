@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -43,12 +43,66 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 
-export const Route = createFileRoute("/quiz/$examId")({ component: QuizPage })
+export const Route = createFileRoute("/quiz/$examId")({
+  component: QuizPage,
+  head: () => ({ meta: [{ title: "Quiz · Slate" }] }),
+})
 
 function elapsedLabel(startedAt: number): string {
   const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
   const minutes = Math.floor(seconds / 60)
   return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+}
+
+function draftKey(examId: string): string {
+  return `slate.quiz.${examId}`
+}
+
+function loadDraftAnswers(examId: string): Partial<Record<number, number>> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(draftKey(examId)) ?? "{}")
+    if (typeof parsed !== "object" || parsed === null) return {}
+    const answers: Partial<Record<number, number>> = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const index = Number(key)
+      if (Number.isInteger(index) && typeof value === "number") answers[index] = value
+    }
+    return answers
+  } catch {
+    return {}
+  }
+}
+
+function saveDraftAnswers(examId: string, answers: Partial<Record<number, number>>): void {
+  try {
+    window.localStorage.setItem(draftKey(examId), JSON.stringify(answers))
+  } catch {
+    // storage unavailable — drafts stay in memory only
+  }
+}
+
+function clearDraftAnswers(examId: string): void {
+  try {
+    window.localStorage.removeItem(draftKey(examId))
+  } catch {
+    // ignore
+  }
+}
+
+function loadRequestId(examId: string): string | null {
+  try {
+    return window.localStorage.getItem(`${draftKey(examId)}.request-id`)
+  } catch {
+    return null
+  }
+}
+
+function saveRequestId(examId: string, requestId: string): void {
+  try {
+    window.localStorage.setItem(`${draftKey(examId)}.request-id`, requestId)
+  } catch {
+    // ignore
+  }
 }
 
 function QuizPage() {
@@ -123,8 +177,12 @@ function ExamRunner({
 }) {
   const [session] = useSession()
   const [position, setPosition] = useState(0)
-  const [answers, setAnswers] = useState<Partial<Record<number, number>>>({})
+  const [answers, setAnswers] = useState<Partial<Record<number, number>>>(() =>
+    loadDraftAnswers(examId),
+  )
   const [result, setResult] = useState<SubmitResult | null>(null)
+  const [alreadySubmitted, setAlreadySubmitted] = useState(false)
+  const requestIdRef = useRef<string | null>(loadRequestId(examId))
   const startedAt = useMemo(() => Date.now(), [])
   const [, forceTick] = useState(0)
 
@@ -132,6 +190,21 @@ function ExamRunner({
     const timer = window.setInterval(() => forceTick((tick) => tick + 1), 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  function updateAnswers(next: Partial<Record<number, number>>) {
+    setAnswers(next)
+    saveDraftAnswers(examId, next)
+  }
+
+  function currentRequestId(): string {
+    let requestId = requestIdRef.current
+    if (!requestId) {
+      requestId = crypto.randomUUID()
+      requestIdRef.current = requestId
+      saveRequestId(examId, requestId)
+    }
+    return requestId
+  }
 
   const studentId = session.name.trim() || `guest-${crypto.randomUUID().slice(0, 8)}`
 
@@ -144,13 +217,20 @@ function ExamRunner({
       return api.submitAnswers(examId, {
         student_id: studentId,
         answers: serialised,
+        request_id: currentRequestId(),
       })
     },
     onSuccess: (submitResult) => {
       setResult(submitResult)
+      clearDraftAnswers(examId)
       toast.success("Answers submitted")
     },
     onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        setAlreadySubmitted(true)
+        clearDraftAnswers(examId)
+        return
+      }
       toast.error(error instanceof ApiError ? error.message : "Submission failed")
     },
   })
@@ -160,6 +240,32 @@ function ExamRunner({
   const current = questions[position]
   const currentAnswer = answers[current.index]
   const isLast = position === total - 1
+
+  if (alreadySubmitted) {
+    return (
+      <AppShell title={title}>
+        <div className="mx-auto flex w-full max-w-xl flex-col gap-6 pt-6">
+          <Card className="items-center py-10 text-center">
+            <CardHeader>
+              <CardDescription>Already submitted</CardDescription>
+              <CardTitle className="text-2xl font-semibold tracking-tight">
+                One attempt per quiz
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col items-center gap-3">
+              <p className="text-sm text-muted-foreground">
+                This browser already submitted answers for this quiz. Ask your teacher to review
+                your result.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Button render={<Link to="/" />}>Back home</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </AppShell>
+    )
+  }
 
   if (result) {
     const percent = result.total > 0 ? Math.round((result.score / result.total) * 100) : 0
@@ -217,10 +323,10 @@ function ExamRunner({
               value={currentAnswer !== undefined ? String(currentAnswer) : null}
               onValueChange={(value) => {
                 if (typeof value === "string") {
-                  setAnswers((currentAnswers) => ({
-                    ...currentAnswers,
+                  updateAnswers({
+                    ...answers,
                     [current.index]: Number(value),
-                  }))
+                  })
                 }
               }}
               className="gap-2"

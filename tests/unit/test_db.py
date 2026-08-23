@@ -76,13 +76,14 @@ def test_submit_same_request_id_returns_duplicate(table):
     assert again["committed_at"] == stored["updated_at"]
 
 
-def test_submit_second_attempt_bumps_version_and_writes_journal(table):
+def test_submit_second_attempt_conflicts_without_new_journal(table):
     db.submit_attempt("x1", "s1", {"0": 1}, "req-1")
-    second = db.submit_attempt("x1", "s1", {"1": 0}, "req-2")
-    assert second["status"] == "committed"
-    assert second["version"] == 2
+    with pytest.raises(db.SubmissionConflict):
+        db.submit_attempt("x1", "s1", {"1": 0}, "req-2")
+    stored = table.get_item(Key={"pk": "SUBMISSION#x1", "sk": "STUDENT#s1"})["Item"]
+    assert stored["version"] == 1
     journal = table.scan(FilterExpression=Attr("pk").begins_with("JOURNAL#"))["Items"]
-    assert {j["request_id"] for j in journal} == {"req-1", "req-2"}
+    assert {j["request_id"] for j in journal} == {"req-1"}
     assert all(j["sk"] == "OUTBOX" for j in journal)
     assert all("ttl" in j for j in journal)
 

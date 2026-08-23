@@ -10,6 +10,10 @@ from config import settings
 _ddb = None
 
 
+class SubmissionConflict(Exception):
+    """A different attempt was already recorded for this exam/student pair."""
+
+
 def table():
     global _ddb
     if _ddb is None:
@@ -90,8 +94,11 @@ def submit_attempt(exam_id: str, student_id: str, answers: dict, request_id: str
     if existing and existing.get("request_id") == request_id:
         return {"status": "duplicate", "request_id": request_id,
                 "version": existing["version"], "committed_at": existing["updated_at"]}
+    if existing:
+        raise SubmissionConflict(
+            f"student '{student_id}' already submitted for exam '{exam_id}'")
 
-    version = (existing.get("version", 0) + 1) if existing else 1
+    version = 1
     item = {**submission_key, "answers": answers, "version": version,
             "request_id": request_id, "updated_at": ts, "updated_at_iso": iso_now(),
             "written_by_region": settings.region}

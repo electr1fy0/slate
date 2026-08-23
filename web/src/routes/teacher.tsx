@@ -39,7 +39,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 
-export const Route = createFileRoute("/teacher")({ component: TeacherPage })
+export const Route = createFileRoute("/teacher")({
+  component: TeacherPage,
+  head: () => ({ meta: [{ title: "Quizzes · Slate" }] }),
+})
 
 interface BuilderQuestion extends QuestionDraft {
   key: string
@@ -203,7 +206,7 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
                 <InputGroupInput
                   id="admin-token"
                   type="password"
-                  placeholder="continuum-demo-token"
+                  placeholder="Paste admin token"
                   value={adminToken}
                   onChange={(event) => saveAdminToken(event.target.value)}
                 />

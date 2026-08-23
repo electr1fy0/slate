@@ -19,6 +19,7 @@ class Settings:
     error_rate_window = env_int("ERROR_RATE_WINDOW", 100)
     error_rate_threshold = env_float("ERROR_RATE_THRESHOLD", 0.5)
     disk_threshold_pct = env_float("DISK_THRESHOLD_PCT", 90.0)
+    load_threshold = env_float("LOAD_THRESHOLD", 8.0)
     chaos_error_pct = env_int("CHAOS_ERROR_PCT", 0)
     chaos_latency_ms = env_int("CHAOS_LATENCY_MS", 0)
     db_stall = os.environ.get("DB_STALL", "0") == "1"

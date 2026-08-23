@@ -140,7 +140,8 @@ def deep():
     if not checks["disk"]["ok"]:
         healthy = False
 
-    checks["load"] = {"loadavg": round(os.getloadavg()[0], 2), "ok": os.getloadavg()[0] < 8.0}
+    load1 = round(os.getloadavg()[0], 2)
+    checks["load"] = {"loadavg": load1, "ok": load1 < settings.load_threshold}
     if not checks["load"]["ok"]:
         healthy = False
 
@@ -171,9 +172,11 @@ def submit(exam_id: str, payload: SubmitPayload):
         result = db.submit_attempt(exam_id, payload.student_id, payload.answers,
                                    payload.request_id)
         result.update(db.grade_attempt(exam_id, payload.answers))
-    except Exception as exc:
-        detail = "duplicate submission" if "ConditionalCheckFailed" in type(exc).__name__ else "data layer unavailable"
-        raise HTTPException(status_code=503, detail=detail)
+    except db.SubmissionConflict:
+        raise HTTPException(status_code=409,
+                            detail="this student already submitted for this exam")
+    except Exception:
+        raise HTTPException(status_code=503, detail="data layer unavailable")
     return result
 
 

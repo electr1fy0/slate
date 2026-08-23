@@ -23,6 +23,8 @@ interface BoardCanvasProps {
   handle: { current: BoardCanvasHandle }
   senderRef: { current: ((message: ClientMessage) => void) | null }
   onLocalEdit?: () => void
+  /** Reports the pointer position as percentages of the visible canvas. */
+  onCursorMove?: (xPercent: number, yPercent: number) => void
 }
 
 function storageKey(roomId: string): string {
@@ -59,7 +61,9 @@ export default function BoardCanvas({
   handle,
   senderRef,
   onLocalEdit,
+  onCursorMove,
 }: BoardCanvasProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const appStateRef = useRef<AppState | null>(null)
   const elementsRef = useRef<Map<string, OrderedExcalidrawElement>>(new Map())
@@ -151,8 +155,28 @@ export default function BoardCanvas({
     }
   }, [])
 
+  const cursorCallbackRef = useRef(onCursorMove)
+  cursorCallbackRef.current = onCursorMove
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !onCursorMove) return
+    function handlePointerMove(event: PointerEvent) {
+      const callback = cursorCallbackRef.current
+      const el = containerRef.current
+      if (!callback || !el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return
+      const x = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100))
+      const y = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100))
+      callback(Math.round(x * 10) / 10, Math.round(y * 10) / 10)
+    }
+    container.addEventListener("pointermove", handlePointerMove)
+    return () => container.removeEventListener("pointermove", handlePointerMove)
+  }, [onCursorMove])
+
   return (
-    <div className="absolute inset-0">
+    <div ref={containerRef} className="absolute inset-0">
       <Excalidraw
         theme="light"
         viewModeEnabled={readOnly}
