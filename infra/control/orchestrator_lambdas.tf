@@ -32,10 +32,9 @@ resource "aws_iam_role_policy" "reconciler_permissions" {
   })
 }
 
-data "archive_file" "reconciler" {
-  type        = "zip"
-  source_dir  = "${path.root}/../../lambdas/reconciler"
-  output_path = "${path.root}/build/reconciler.zip"
+locals {
+  reconciler_package      = "${path.root}/../../build/lambda/reconciler.zip"
+  health_verifier_package = "${path.root}/../../build/lambda/health-verifier.zip"
 }
 
 resource "aws_cloudwatch_log_group" "reconciler" {
@@ -46,10 +45,11 @@ resource "aws_cloudwatch_log_group" "reconciler" {
 resource "aws_lambda_function" "reconciler" {
   function_name    = "${var.project}-reconciler"
   role             = aws_iam_role.reconciler.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.reconciler.output_path
-  source_code_hash = data.archive_file.reconciler.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["x86_64"]
+  filename         = local.reconciler_package
+  source_code_hash = fileexists(local.reconciler_package) ? filebase64sha256(local.reconciler_package) : null
   timeout          = 120
 
   environment {
@@ -61,12 +61,6 @@ resource "aws_lambda_function" "reconciler" {
   }
 
   depends_on = [aws_iam_role_policy.reconciler_permissions, aws_cloudwatch_log_group.reconciler]
-}
-
-data "archive_file" "verifier_sfn" {
-  type        = "zip"
-  source_dir  = "${path.root}/../../lambdas/health_verifier"
-  output_path = "${path.root}/build/health_verifier_sfn.zip"
 }
 
 resource "aws_iam_role" "verifier_sfn" {
@@ -103,10 +97,11 @@ resource "aws_cloudwatch_log_group" "verifier_sfn" {
 resource "aws_lambda_function" "verifier_sfn" {
   function_name    = "${var.project}-verifier-sfn"
   role             = aws_iam_role.verifier_sfn.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.verifier_sfn.output_path
-  source_code_hash = data.archive_file.verifier_sfn.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["x86_64"]
+  filename         = local.health_verifier_package
+  source_code_hash = fileexists(local.health_verifier_package) ? filebase64sha256(local.health_verifier_package) : null
   timeout          = 60
 
   environment {

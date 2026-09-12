@@ -13,17 +13,14 @@ ADMIN_TOKEN=continuum-demo-token
 ERROR_RATE_THRESHOLD=0.5
 ENVEOF
 
-dnf install -y python3-pip aws-cli
+dnf install -y aws-cli
 
 aws s3 cp "s3://${bundle_bucket}/bundles/app.tar.gz" /tmp/app.tar.gz --region ${region}
-mkdir -p /opt/continuum
-tar -xzf /tmp/app.tar.gz -C /opt/continuum
-
-python3 -m venv /opt/venv
-/opt/venv/bin/pip install --no-cache-dir -r /opt/continuum/app/requirements.txt
+mkdir -p /opt/continuum/app
+tar -xzf /tmp/app.tar.gz -C /opt/continuum/app
 
 cp /opt/continuum/app/continuum.service /etc/systemd/system/continuum.service
-chmod +x /opt/continuum/app/set_role.sh
+chmod +x /opt/continuum/app/continuum-api /opt/continuum/app/set_role.sh
 systemctl daemon-reload
 systemctl enable continuum
 systemctl start continuum

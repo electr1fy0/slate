@@ -28,7 +28,17 @@ locals {
 
 resource "aws_iam_role" "state_machine" {
   name               = "${var.project}-sfn-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+  assume_role_policy = data.aws_iam_policy_document.sfn_assume.json
+}
+
+data "aws_iam_policy_document" "sfn_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+  }
 }
 
 data "aws_iam_policy_document" "sfn_permissions" {
@@ -88,11 +98,6 @@ resource "aws_sfn_state_machine" "failback" {
 resource "aws_cloudwatch_log_group" "sfn_failback" {
   name              = "/aws/states/${var.project}-failback"
   retention_in_days = 14
-}
-
-resource "aws_iam_role" "eventbridge_trigger" {
-  name               = "${var.project}-eb-trigger-role"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
 data "aws_iam_policy_document" "trigger_assume" {

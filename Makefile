@@ -27,6 +27,7 @@ validate:
 	  (cd $$d && $(TF) init -backend=false >/dev/null 2>&1 && $(TF) validate); \
 	done
 	@python3 -m compileall -q app lambdas chaos scripts && echo "python OK"
+	@go vet ./... && go build ./... && echo "go OK"
 	@for f in statemachine/*.json; do jq empty "$$f" && echo "$$f OK"; done
 
 destroy-all:
@@ -38,6 +39,7 @@ chaos-help:
 	python3 chaos/continuum_chaos.py --help
 
 test:
+	go test -race ./...
 	$(PY) -m pytest
 
 test-live:

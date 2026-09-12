@@ -15,7 +15,7 @@
                                           │
         ap-south-1 (PRIMARY)              │             ap-southeast-1 (STANDBY)
 ┌───────────────────────────────┐         │      ┌───────────────────────────────┐
-│ EC2 t3.micro: FastAPI app     │         │      │ EC2 t3.micro: same app        │
+│ EC2 t3.micro: Go API          │         │      │ EC2 t3.micro: same app        │
 │ role=ACTIVE                   │         │      │ role=STANDBY (read-only page) │
 │ Verifier Lambda (rate 1 min)  │         │      │ Verifier Lambda (rate 1 min)  │
 │   → CW metric Health{primary} │         │      │   → CW metric Health{standby} │
@@ -41,7 +41,7 @@
 
 ### Compute
 - One **t3.micro** per region in a minimal VPC (public subnet, no NAT gateway, no ALB —
-  cost discipline). Elastic IP per instance. systemd-managed uvicorn.
+  cost discipline). Elastic IP per instance. A statically linked Go API is managed by systemd.
 - The app exposes `/health/live` (process up) and `/health/deep` (DynamoDB roundtrip probe,
   rolling 5xx rate, disk, load). Standby nodes answer `/` with a read-only maintenance page.
 - Built-in chaos middleware (`/admin/chaos`) injects error rates, latency, or a "DB stall"

@@ -72,10 +72,8 @@ resource "aws_iam_role_policy" "verifier_permissions" {
   })
 }
 
-data "archive_file" "verifier" {
-  type        = "zip"
-  source_dir  = "${path.root}/../../lambdas/health_verifier"
-  output_path = "${path.root}/build/health_verifier.zip"
+locals {
+  health_verifier_package = "${path.root}/../../build/lambda/health-verifier.zip"
 }
 
 resource "aws_cloudwatch_log_group" "verifier" {
@@ -86,10 +84,11 @@ resource "aws_cloudwatch_log_group" "verifier" {
 resource "aws_lambda_function" "verifier_standby" {
   function_name    = "${var.project}-verifier-standby"
   role             = aws_iam_role.verifier.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.verifier.output_path
-  source_code_hash = data.archive_file.verifier.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["x86_64"]
+  filename         = local.health_verifier_package
+  source_code_hash = fileexists(local.health_verifier_package) ? filebase64sha256(local.health_verifier_package) : null
   timeout          = 60
   memory_size      = 128
 

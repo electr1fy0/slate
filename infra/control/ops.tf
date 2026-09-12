@@ -37,7 +37,7 @@ resource "aws_iam_role_policy" "ops_permissions" {
       {
         Sid      = "SsmDocuments"
         Effect   = "Allow"
-        Action   = ["ssm:DescribeDocument", "ssm:GetDocument", "ssm:ListCommandInvocations"]
+        Action   = ["ssm:DescribeDocument", "ssm:GetDocument", "ssm:ListCommandInvocations", "ssm:GetCommandInvocation"]
         Resource = ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:*"]
       },
       {
@@ -56,12 +56,6 @@ resource "aws_iam_role_policy" "ops_permissions" {
   })
 }
 
-data "archive_file" "ops" {
-  type        = "zip"
-  source_dir  = "${path.root}/../../lambdas/failover_ops"
-  output_path = "${path.root}/build/failover_ops.zip"
-}
-
 resource "aws_cloudwatch_log_group" "ops" {
   name              = "/aws/lambda/${var.project}-failover-ops"
   retention_in_days = 14
@@ -70,10 +64,11 @@ resource "aws_cloudwatch_log_group" "ops" {
 resource "aws_lambda_function" "ops" {
   function_name    = "${var.project}-failover-ops"
   role             = aws_iam_role.ops.arn
-  runtime          = "python3.12"
-  handler          = "handler.handler"
-  filename         = data.archive_file.ops.output_path
-  source_code_hash = data.archive_file.ops.output_base64sha256
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  architectures    = ["x86_64"]
+  filename         = "${path.root}/../../build/lambda/failover-ops.zip"
+  source_code_hash = fileexists("${path.root}/../../build/lambda/failover-ops.zip") ? filebase64sha256("${path.root}/../../build/lambda/failover-ops.zip") : null
   # Promote/demote now poll the SSM command to completion (up to ~3 min).
   timeout = 300
 
