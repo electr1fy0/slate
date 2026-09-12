@@ -1,7 +1,6 @@
 TF := terraform
-PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
 
-.PHONY: core standby control app-deploy fmt validate destroy-all chaos-help test test-live api-dev web-install web-dev web-build web-check
+.PHONY: core standby control app-deploy fmt validate destroy-all test api-dev web-install web-dev web-build web-check
 
 core:
 	cd infra/core && $(TF) init && $(TF) apply -auto-approve
@@ -26,7 +25,6 @@ validate:
 	@for d in infra/core infra/standby infra/control; do \
 	  (cd $$d && $(TF) init -backend=false >/dev/null 2>&1 && $(TF) validate); \
 	done
-	@python3 -m compileall -q app lambdas chaos scripts && echo "python OK"
 	@go vet ./... && go build ./... && echo "go OK"
 	@for f in statemachine/*.json; do jq empty "$$f" && echo "$$f OK"; done
 
@@ -35,15 +33,8 @@ destroy-all:
 	cd infra/standby && $(TF) destroy -auto-approve || true
 	cd infra/core && $(TF) destroy -auto-approve || true
 
-chaos-help:
-	python3 chaos/continuum_chaos.py --help
-
 test:
 	go test -race ./...
-	$(PY) -m pytest
-
-test-live:
-	CONTINUUM_LIVE_TESTS=1 $(PY) -m pytest -m live
 
 api-dev:
 	bash scripts/dev_api.sh

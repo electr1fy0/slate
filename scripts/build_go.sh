@@ -35,7 +35,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO_BIN" build \
   -trimpath -ldflags='-s -w' -o "$APP_PACKAGE_DIR/continuum-api" "$ROOT/cmd/api"
 chmod 0755 "$APP_PACKAGE_DIR/continuum-api"
 cp "$ROOT/deploy/continuum.service" "$APP_PACKAGE_DIR/continuum.service"
-cp "$ROOT/app/set_role.sh" "$APP_PACKAGE_DIR/set_role.sh"
+cp "$ROOT/deploy/set_role.sh" "$APP_PACKAGE_DIR/set_role.sh"
 chmod 0755 "$APP_PACKAGE_DIR/set_role.sh"
 tar -czf "$APP_BUILD_DIR/app.tar.gz" -C "$APP_PACKAGE_DIR" .
 

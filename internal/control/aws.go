@@ -175,7 +175,7 @@ func (c *AWSHealthCheckClient) Update(ctx context.Context, healthCheckID string,
 
 // ReconcilerStore is the DynamoDB surface needed by the journal replay. The
 // adapter applies the same filter and conditional version expression as the
-// Python worker.
+// worker.
 type ReconcilerStore interface {
 	Scan(ctx context.Context, startKey map[string]dynamodbtypes.AttributeValue, cutoffMS int64) (ScanPage, error)
 	GetItem(ctx context.Context, key map[string]dynamodbtypes.AttributeValue) (map[string]dynamodbtypes.AttributeValue, error)

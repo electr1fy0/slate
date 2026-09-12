@@ -197,7 +197,7 @@ func round(value float64, places int) float64 {
 }
 
 // StandardDiskUsage probes the filesystem containing path. Passing "/"
-// reproduces the Python service's deep-health check.
+// reproduces the deployed service's deep-health check.
 func StandardDiskUsage(ctx context.Context, path string) (used, total uint64, err error) {
 	if ctx == nil {
 		ctx = context.Background()

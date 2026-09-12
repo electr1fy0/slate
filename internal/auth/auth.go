@@ -1,5 +1,5 @@
 // Package auth implements the account, bcrypt, and HS256 JWT contract used by
-// the legacy FastAPI service. It deliberately has no HTTP framework coupling.
+// the HTTP service. It deliberately has no HTTP framework coupling.
 package auth
 
 import (
@@ -64,10 +64,10 @@ func (s *Service) now() time.Time {
 func NormalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
 func ValidEmail(email string) bool       { return EmailPattern.MatchString(email) }
 
-// HashPassword emits the standard modular bcrypt format accepted by Python's
+// HashPassword emits the standard modular bcrypt format accepted by the
 // bcrypt package (and by other bcrypt implementations).
 func HashPassword(password string) (string, error) {
-	// bcrypt.gensalt() in the legacy Python service defaults to 12 rounds.
+	// The deployed service uses bcrypt's 12-round default.
 	// Keep that work factor when accounts are created by Go.
 	digest, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if err != nil {
@@ -159,7 +159,7 @@ func (s *Service) Authenticate(ctx context.Context, email, password string) (*mo
 }
 
 // Claims is the decoded JWT claims set. Numeric timestamps are represented as
-// int64 in newly issued tokens and are accepted from Python's JSON decoder.
+// int64 in newly issued tokens and are accepted by standard JSON decoders.
 type Claims struct {
 	Subject   string `json:"sub"`
 	Role      string `json:"role"`

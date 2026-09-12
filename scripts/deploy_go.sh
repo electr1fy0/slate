@@ -21,24 +21,17 @@ deploy_instance() {
   local instance="$1"
   local bucket="$2"
   local commands
-  commands="$(python3 - "$bucket" "$STAMP" <<'PY'
-import json
-import sys
-
-bucket, stamp = sys.argv[1:]
-print(json.dumps([
-    f"aws s3 cp s3://{bucket}/bundles/app.tar.gz /tmp/app-{stamp}.tar.gz",
+  commands="$(jq -nc --arg bucket "$bucket" --arg stamp "$STAMP" '[
+    ("aws s3 cp s3://" + $bucket + "/bundles/app.tar.gz /tmp/app-" + $stamp + ".tar.gz"),
     "rm -rf /opt/continuum/app.new && mkdir -p /opt/continuum/app.new",
-    f"tar -xzf /tmp/app-{stamp}.tar.gz -C /opt/continuum/app.new",
+    ("tar -xzf /tmp/app-" + $stamp + ".tar.gz -C /opt/continuum/app.new"),
     "chmod +x /opt/continuum/app.new/continuum-api /opt/continuum/app.new/set_role.sh",
     "rm -rf /opt/continuum/app.old && mv /opt/continuum/app /opt/continuum/app.old 2>/dev/null || true",
     "mv /opt/continuum/app.new /opt/continuum/app",
     "cp /opt/continuum/app/continuum.service /etc/systemd/system/continuum.service",
     "systemctl daemon-reload && systemctl restart continuum",
-    "sleep 2 && curl -fsS http://localhost/health/live || (journalctl -u continuum -n 30 --no-pager; exit 1)",
-]))
-PY
-)"
+    "sleep 2 && curl -fsS http://localhost/health/live || (journalctl -u continuum -n 30 --no-pager; exit 1)"
+  ]')"
   local command_id
   command_id="$(aws ssm send-command \
     --instance-ids "$instance" \

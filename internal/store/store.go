@@ -348,7 +348,7 @@ func (s *Store) GetExam(ctx context.Context, examID string, includeAnswers bool)
 		return nil, nil
 	}
 	sort.Slice(exam.Questions, func(i, j int) bool { return exam.Questions[i].Index < exam.Questions[j].Index })
-	exam.ID = examID
+	exam.ExamMeta.ID = examID
 	if !includeAnswers {
 		for i := range exam.Questions {
 			exam.Questions[i].Answer = 0
@@ -677,7 +677,7 @@ func (s *Store) DeleteExam(ctx context.Context, examID string) (int, error) {
 				break
 			}
 			// DynamoDB may return throttled writes without an API error. Match
-			// boto3's batch_writer by backing off and retrying those writes,
+			// Batch writes can be throttled, so back off and retry those writes,
 			// while still allowing cancellation of a stuck delete.
 			delay := 50 * time.Millisecond * time.Duration(1<<min(attempt, 6))
 			timer := time.NewTimer(delay)
@@ -744,7 +744,7 @@ func (m *MemoryStore) EnsureExam(_ context.Context, id, title string, qs []model
 	if m.exams == nil {
 		m.exams = map[string]*model.Exam{}
 	}
-	v := &model.Exam{ID: id, ExamMeta: model.ExamMeta{PK: "EXAM#" + id, SK: "META", ID: id, Title: title, CreatedAt: iso(m.now()), QuestionCount: len(qs)}}
+	v := &model.Exam{ExamMeta: model.ExamMeta{PK: "EXAM#" + id, SK: "META", ID: id, Title: title, CreatedAt: iso(m.now()), QuestionCount: len(qs)}}
 	for field, val := range w {
 		switch field {
 		case "opens_at":

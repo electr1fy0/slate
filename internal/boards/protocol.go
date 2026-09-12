@@ -95,7 +95,7 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 	case "join":
 		requestedName := s.Identity.Name
 		if value, exists := frame["name"]; exists {
-			// Python's handler accepts any JSON value after str(). Name is
+			// The handler accepts any JSON value after stringification. Name is
 			// clamped by Identify, so preserve that forgiving behavior.
 			if text, ok := value.(string); ok {
 				requestedName = text
@@ -148,11 +148,11 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 
 	default:
 		return 0, s.Manager.Send(ctx, s.Socket, errorFrame(
-			ErrorUnknownType, fmt.Sprintf("unrecognised type %s", pythonRepr(frame["type"]))))
+			ErrorUnknownType, fmt.Sprintf("unrecognised type %s", valueRepr(frame["type"]))))
 	}
 }
 
-func pythonRepr(value any) string {
+func valueRepr(value any) string {
 	if value == nil {
 		return "None"
 	}
@@ -194,7 +194,7 @@ func (s *Session) Close(ctx context.Context) {
 	}
 }
 
-// OriginForbidden matches the Python browser-origin policy: absent origins
+// OriginForbidden matches the browser-origin policy: absent origins
 // and an empty allow-list are accepted; a present origin must exactly match.
 func OriginForbidden(origin string, allowList []string) bool {
 	if origin == "" || len(allowList) == 0 {

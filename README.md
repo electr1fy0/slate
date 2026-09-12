@@ -26,17 +26,16 @@ in-flight writes found in the transactional outbox.
 cmd/api/              Go exam API entrypoint
 cmd/*/                Go Lambda entrypoints (verifier, failover ops, reconciler)
 internal/             Go domain, DynamoDB, auth, HTTP, WebSocket, health, and control-plane packages
-app/                  Legacy Python compatibility oracle retained during migration
 web/                  Slate — TanStack Start frontend (classroom boards, quizzes, ops console)
-lambdas/              Legacy Python Lambda compatibility oracle
 statemachine/         Step Functions ASL definition
 infra/
   modules/            network, compute (reusable)
   core/               ap-south-1 stack + global data plane (DynamoDB GT, S3 CRR)
   standby/            ap-southeast-1 stack (network + compute only)
   control/            Route 53, Step Functions, ops/reconciler Lambdas, dashboards
-chaos/                Fault injection CLI (hard-down, degrade, db-stall, blip)
 scripts/              App bundling/deployment helpers (+ local dev stack)
+deploy/               systemd and instance lifecycle assets
+scripts/              Go build, deployment, and local development helpers
 docs/                 architecture, runbook, demo script
 ```
 
@@ -45,7 +44,6 @@ docs/                 architecture, runbook, demo script
 - AWS account with admin credentials configured (`aws configure` or env vars), MFA on root.
 - Terraform >= 1.6 (`brew install hashicorp/tap/hashicorp`)
 - Go 1.27+
-- Python 3.11+ (legacy compatibility tests and local moto only)
 - A Route 53 domain (optional but strongly recommended — see below)
 
 ## Deploy order
@@ -61,20 +59,16 @@ Copy each `terraform.tfvars.example` to `terraform.tfvars` first.
 
 ## Validation tests
 
-Automated suite (no AWS account needed — AWS is mocked with moto):
+Automated suite:
 
 ```bash
 go test -race ./...
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-make test          # legacy parity, workflow, and infrastructure suite
+make test          # Go unit and integration suite
 ```
 
-Layers: unit/integration for `app/`, all three lambda handlers and the chaos
-CLI; a mini Step Functions simulator executing the real ASL graph through
-failover, rollback, false-alarm and catch paths; end-to-end T1-T5 style
-journeys (`tests/e2e/`), including the legacy parity tier plus Go handler and
-race-detector coverage; Terraform fmt/validate,
-ASL structural checks and shell syntax checks (`tests/infra/`).
+The Go suite covers the API, WebSocket protocol, DynamoDB persistence, health
+verification, failover operations, reconciliation, and chaos middleware. CI also
+builds the Linux API bundle and all Lambda artifacts.
 
 See `docs/demo-script.md` for the live T1-T5 demo scenarios.
 
@@ -88,7 +82,7 @@ Continuum ops console with chaos injection (`/ops`). Students take quizzes at
 
 ```bash
 make web-install    # bun install
-scripts/dev_go_api.sh # terminal 1: moto DynamoDB + Go API on :8000
+scripts/dev_go_api.sh # terminal 1: Go API on :8000 (set DDB_ENDPOINT_MODE for local DynamoDB)
 make web-dev        # terminal 2: Vite dev server on :3000, /api + /ws proxied
 make web-check      # typecheck + eslint + production build
 ```

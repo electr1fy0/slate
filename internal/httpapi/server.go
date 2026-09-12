@@ -217,7 +217,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p) {
 		return
 	}
-	// FastAPI's LoginPayload requires both fields. Do this check before
+	// The login payload requires both fields. Do this check before
 	// touching DynamoDB so malformed requests are 422s rather than being
 	// treated as failed credentials (401).
 	if p.Email == "" || p.Password == "" {
@@ -733,7 +733,7 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 		validation(w, "invalid request body")
 		return false
 	}
-	// FastAPI rejects extra JSON values after the request object. Without
+	// The API rejects extra JSON values after the request object. Without
 	// this second decode, Go would silently accept bodies such as
 	// {"email":"x"}{"password":"y"}.
 	var extra any

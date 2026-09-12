@@ -1,97 +1,92 @@
 # Continuum Demo Script (T1–T5)
 
-Open before starting:
-- Terminal with `python3 chaos/continuum_chaos.py` ready
-- Browser tabs: CloudWatch dashboard "continuum-overview", Step Functions executions page,
-  Route 53 health checks page, inbox for SNS emails
-
-Baseline: both nodes healthy, `status` shows green, one submission works.
-
----
-
-## T1 — Hard crash: automatic DNS failover (Route 53 fast path)
-
-1. `python3 continuum_chaos.py hard-down --target primary`
-2. Watch Route 53 health check `continuum-primary-hc` flip to Unhealthy (~90s).
-3. DNS failover record now serves standby EIP. With a domain: `dig +short <domain>`
-   shows the Singapore IP. Without a domain: show the record sets in the console.
-4. Meanwhile the alarm breaches → Step Functions execution runs → standby promoted,
-   reconciliation, "FAILOVER COMPLETE" email.
-5. Submit an attempt against the domain/standby — it succeeds.
-
-**Claim demonstrated:** downtime bounded by detection + TTL, zero human action.
-
-## T2 — Partial degradation: orchestrated verified failover
-
-Restore posture first (`heal`, demote standby, promote primary, un-invert HC).
-
-1. `python3 continuum_chaos.py degrade --error-pct 60 --latency-ms 400`
-2. `/health/live` still returns 200 — a ping-style check stays GREEN. Show this.
-3. `/health/deep` fails on error-rate. Verifier metric drops to 0.
-4. After ~3 min the composite alarm fires → Step Functions graph walks through
-   VerifyCheck1→3 (all unhealthy) → promote → shift → verify standby → reconcile.
-5. Show the execution visual + the "FAILOVER STARTING"/"COMPLETE" emails.
-
-**Claim demonstrated:** application-aware verification catches degradation that
-infrastructure-level checks miss; failover is an auditable workflow, not a reflex.
-
-## T3 — DB stall: process alive, platform dead
-
-1. `heal`, restore roles, then `db-stall on`
-2. Pages serve fine (process up), but every exam submit fails and deep checks report
-   ddb probe failure while port checks stay green.
-3. Same pipeline as T2 takes over.
-
-**Claim demonstrated:** the verifier inspects real system state, not liveness.
-
-## T4 — In-flight writes: reconciliation closes the gap
-
-During a T2/T3 failover window, hammer submissions:
+Before starting, export the API URL and admin token:
 
 ```bash
-for i in $(seq 1 30); do python3 continuum_chaos.py submit --student burst$i; sleep 0.3; done
+export API_URL=https://<domain>
+export ADMIN_TOKEN=<admin-token>
 ```
 
-Some land before death (replicated), some are accepted-then-lost at commit time.
-After failover completes:
+Keep CloudWatch, Step Functions, Route 53, and the SNS inbox open. Baseline is
+`curl -fsS "$API_URL/health/live"` returning 200 and one successful submission.
+
+## T1 — Hard crash: automatic DNS failover
+
+1. Stop the primary service with SSM:
+   `aws ssm send-command --instance-ids "$PRIMARY_INSTANCE_ID" --document-name AWS-RunShellScript --parameters commands='["sudo systemctl stop continuum"]'`.
+2. Watch the Route 53 health check flip to Unhealthy and the failover record serve the standby.
+3. Observe the Step Functions execution promote the standby, reconcile, and send the completion alert.
+4. Submit an attempt against the domain; it should succeed.
+
+Claim demonstrated: downtime is bounded by detection and DNS TTL with no human action.
+
+## T2 — Partial degradation: verified failover
+
+Restore posture, then inject errors and latency through the Go admin API:
 
 ```bash
-python3 continuum_chaos.py reconcile
+curl -fsS -X POST "$API_URL/admin/chaos" \
+  -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
+  -d '{"error_pct":60,"latency_ms":400}'
 ```
 
-Output shows scanned / repaired / already_replicated / conflicts; repaired submissions
-appear in `/admin/submissions`. Idempotency: rerun reconcile → all already_ok, no
-duplicates.
+`/health/live` remains a process check while `/health/deep` reports the degraded
+application. After the composite alarm fires, observe the verification, promotion,
+traffic shift, standby verification, and reconciliation states.
 
-**Claim demonstrated:** RPO gap handled by design, not luck; replays are idempotent.
+## T3 — DB stall: process alive, platform unavailable
 
-## T5 — Transient blip suppression (negative test)
+```bash
+curl -fsS -X POST "$API_URL/admin/chaos" \
+  -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
+  -d '{"db_stall":true}'
+```
 
-1. Restore posture. Then: `hard-down --target primary --seconds 40`
-2. Instance returns after ~40s+boot. The alarm may breach briefly or not at all;
-   if an execution starts, Check2/Check3 find the app healthy again → workflow ends
-   with **"Transient blip suppressed - no failover."**
+Pages remain reachable while submissions and deep checks fail. The same verified
+failover pipeline should take over.
 
-**Claim demonstrated:** the system does not flap. Verified intent gates every shift.
+## T4 — In-flight writes: reconciliation
 
----
+During a failover, submit a burst with a previously issued student token:
+
+```bash
+for i in $(seq 1 30); do
+  curl -fsS -X POST "$API_URL/exam/cs101-midterm/submit" \
+    -H "Authorization: Bearer $STUDENT_TOKEN" -H 'content-type: application/json' \
+    -d "{\"answers\":{},\"request_id\":\"burst-$i\"}" >/dev/null
+  sleep 0.3
+done
+```
+
+Run the Go reconciler Lambda and inspect its summary:
+
+```bash
+aws lambda invoke --function-name continuum-reconciler --payload '{}' /tmp/continuum-reconcile.json
+cat /tmp/continuum-reconcile.json
+```
+
+Rerunning reconciliation is idempotent; repaired submissions appear in
+`/admin/submissions`.
+
+## T5 — Transient blip suppression
+
+Restore posture, stop the primary for roughly 40 seconds, then restart it with
+SSM. If an execution starts, the later checks should find the service healthy and
+end with **Transient blip suppressed — no failover**.
 
 ## Reset between scenarios
 
 ```bash
-heal && demote --target standby && promote --target primary
-aws route53 update-health-check --health-check-id $(terraform -chdir=infra/control output -raw primary_health_check_id) --no-inverted
+curl -fsS -X POST "$API_URL/admin/chaos/reset" -H "x-admin-token: $ADMIN_TOKEN"
+curl -fsS -X POST "$API_URL/admin/promote" -H "x-admin-token: $ADMIN_TOKEN"
+aws route53 update-health-check \
+  --health-check-id "$(terraform -chdir=infra/control output -raw primary_health_check_id)" \
+  --no-inverted
 ```
 
-## Talking points for evaluation
+## Talking points
 
-- Why DynamoDB Global Tables instead of RDS promotion? Cost, active-standby simplicity,
-  and honest RPO story vs irreversible replica promotion.
-- Why invert the health check instead of ChangeResourceRecordSets? Reversible single API
-  call, keeps Route 53 native failover as the safety net, full CloudTrail auditability.
-- What's the actual RPO? Measured replication lag (<1s typical) + outbox replay for the
-  app-to-DDB window. Show the reconciler numbers live in T4.
-- Well-Architected mapping: reliability (this whole demo), cost optimization (teardown
-  discipline, no NAT/ALB), operational excellence (IaC, runbook, chaos CLI), security
-  (least privilege per component, KMS-by-default services), performance (single-table
-  access patterns).
+- DynamoDB Global Tables provide active-standby simplicity and an explicit RPO story.
+- Health-check inversion is reversible, auditable, and composes with Route 53 failover.
+- The outbox and reconciler make the in-flight write gap measurable and idempotent.
+- The Go admin API and Lambda binaries are the only operational control paths.

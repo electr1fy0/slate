@@ -1,5 +1,5 @@
 // Package config contains the runtime settings shared by the API and Lambda
-// binaries. Defaults intentionally mirror app/config.py.
+// binaries.
 package config
 
 import (
@@ -10,7 +10,7 @@ import (
 )
 
 // Settings is the complete set of backend settings. Durations are expressed
-// in seconds to keep the configuration contract compatible with Python.
+// in seconds to keep the configuration contract explicit.
 type Settings struct {
 	Region                string
 	AppRole               string

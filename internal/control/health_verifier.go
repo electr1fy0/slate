@@ -83,7 +83,7 @@ func (h *HealthVerifier) ProbeHTTP(ctx context.Context, targetURL string) map[st
 	if checks, ok := body["checks"]; ok {
 		result["detail"] = checks
 	} else {
-		// Python's body.get("checks", {}) includes an empty detail key when the
+		// A verifier response with an empty checks object includes an empty detail key when the
 		// application omits checks, including on a healthy response.
 		result["detail"] = map[string]any{}
 	}

@@ -95,7 +95,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws := &websocketSocket{conn: conn}
 
 	// Closing after the upgrade is intentional: it lets clients and tests
-	// observe the stable protocol close codes used by the Python service.
+	// observe the stable protocol close codes used by the service.
 	if h.resolveToken == nil || r.URL.Query().Get("token") == "" {
 		_ = ws.Close(CloseInvalidToken)
 		return

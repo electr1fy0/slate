@@ -2,41 +2,35 @@
 
 ## First-time setup
 
-1. Configure AWS credentials (`aws configure` or environment). Confirm identity:
+1. Configure AWS credentials (`aws configure` or environment) and confirm identity:
    `aws sts get-caller-identity`.
-2. Set a billing alarm at $15 (AWS Console → Billing → Budgets) before anything else.
-3. Install Terraform: `brew install hashicorp/tap/hashicorp`
-4. Copy tfvars examples and edit:
-   ```bash
-   cp infra/core/terraform.tfvars.example infra/core/terraform.tfvars
-   cp infra/standby/terraform.tfvars.example infra/standby/terraform.tfvars
-   cp infra/control/terraform.tfvars.example infra/control/terraform.tfvars
-   ```
-   Set `admin_token` (same value in core + standby) and `alert_email`. If you own a
-   domain, set `domain_name` in control; then delegate the nameservers printed by its
-   output to your registrar.
+2. Set a billing alarm at $15 before creating resources.
+3. Install Terraform: `brew install hashicorp/tap/hashicorp`.
+4. Copy each `terraform.tfvars.example` to `terraform.tfvars`, then set the shared
+   `admin_token` and `alert_email`. If using a domain, set `domain_name` in control.
 
 ## Deploy
 
 ```bash
-make core        # ~5 min: VPC, EC2 primary, DynamoDB GT, S3, verifier, alarm
-make standby     # ~5 min: VPC, EC2 standby, verifier
-make app-deploy  # bundle app -> both buckets -> SSM deploy to both instances
-make control     # Route53 HCs/records, Step Functions, ops lambdas, dashboard
+make core        # primary region, data plane, and verifier
+make standby     # standby region compute and verifier
+make app-deploy  # Go API bundle -> both buckets -> SSM deploy
+make control     # Route 53, Step Functions, Lambdas, dashboard
 ```
 
-Wait for user-data bootstrap (~3–4 min after instance running), then:
+After instance bootstrap completes, export the endpoint and admin token:
 
 ```bash
-python3 chaos/continuum_chaos.py status      # both nodes healthy?
-python3 chaos/continuum_chaos.py verify      # force deep check via lambda
-python3 chaos/continuum_chaos.py submit --student test001   # end-to-end write
+export API_URL=https://<domain-or-primary-ip>
+export ADMIN_TOKEN=<admin-token>
+curl -fsS "$API_URL/health/live"
+curl -fsS "$API_URL/health/deep"
+curl -fsS -H "x-admin-token: $ADMIN_TOKEN" "$API_URL/admin/status"
 ```
 
-Confirm the scheduled verifiers are publishing: CloudWatch → Metrics → Continuum namespace
-→ Health{Role=primary|standby} should be 1s.
+Confirm scheduled verifiers publish `Continuum/Health{Role}` metrics in CloudWatch.
 
-## Redeploying the app after code changes
+## Redeploying the app
 
 ```bash
 make app-deploy
@@ -45,49 +39,47 @@ make app-deploy
 ## Teardown between demo windows
 
 ```bash
-make destroy-all    # order: control -> standby -> core (enforced)
+make destroy-all    # control -> standby -> core
 ```
 
-DynamoDB data is lost on destroy (fine for demos). Buckets are force_destroy.
+DynamoDB data and force-destroy buckets are intentionally removed by teardown.
 
 ## Manual operations
 
 | Action | Command |
 |---|---|
-| Promote standby manually | `python3 chaos/continuum_chaos.py promote --target standby` |
-| Demote a node | `python3 chaos/continuum_chaos.py demote --target primary` |
-| Inject 30% errors | `python3 chaos/continuum_chaos.py degrade --error-pct 30` |
-| DB stall (process alive) | `python3 chaos/continuum_chaos.py db-stall on` |
-| 30s blip (should NOT fail over) | `python3 chaos/continuum_chaos.py hard-down --seconds 40` |
-| Run reconciler now | `python3 chaos/continuum_chaos.py reconcile` |
+| Promote the current node manually | `curl -fsS -X POST "$API_URL/admin/promote" -H "x-admin-token: $ADMIN_TOKEN"` |
+| Inject 30% errors | `curl -fsS -X POST "$API_URL/admin/chaos" -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"error_pct":30}'` |
+| Add 400 ms latency | `curl -fsS -X POST "$API_URL/admin/chaos" -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"latency_ms":400}'` |
+| Stall the database probe | `curl -fsS -X POST "$API_URL/admin/chaos" -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' -d '{"db_stall":true}'` |
+| Reset chaos | `curl -fsS -X POST "$API_URL/admin/chaos/reset" -H "x-admin-token: $ADMIN_TOKEN"` |
+| Run reconciler now | `aws lambda invoke --function-name continuum-reconciler --payload '{}' /tmp/continuum-reconcile.json` |
+| Stop a node for a crash test | `aws ssm send-command --instance-ids <instance-id> --document-name AWS-RunShellScript --parameters commands='["sudo systemctl stop continuum"]'` |
 
-After any failover test, restore normal posture:
+After a failover test, reset chaos, promote the intended primary, and clear any
+manual health-check inversion:
 
 ```bash
-python3 chaos/continuum_chaos.py heal
-python3 chaos/continuum_chaos.py demote --target standby
-python3 chaos/continuum_chaos.py promote --target primary
-# if Route 53 health check was left inverted by a manual experiment:
-aws route53 update-health-check --health-check-id <PRIMARY_HC_ID> --no-inverted
+curl -fsS -X POST "$API_URL/admin/chaos/reset" -H "x-admin-token: $ADMIN_TOKEN"
+curl -fsS -X POST "$API_URL/admin/promote" -H "x-admin-token: $ADMIN_TOKEN"
+aws route53 update-health-check \
+  --health-check-id "$(terraform -chdir=infra/control output -raw primary_health_check_id)" \
+  --no-inverted
 ```
-
-Get the HC id from `terraform -chdir=infra/control output primary_health_check_id`.
 
 ## Troubleshooting
 
-**App not reachable on :80** — `aws ssm send-command` a `journalctl -u continuum -n 50`
-or SSH in. Most common cause: instance booted before `app-deploy` ran; rerun
-`make app-deploy`.
+**App not reachable on :80** — use `aws ssm send-command` to inspect
+`journalctl -u continuum -n 50`, then rerun `make app-deploy` if the bundle is stale.
 
-**Verifier metric absent** — check `/aws/lambda/continuum-verifier-primary` logs; usually
-IAM or security group. SG must allow :80 from 0.0.0.0/0 (health checks come from AWS IPs).
+**Verifier metric absent** — inspect the verifier Lambda logs. Check IAM permissions,
+the table name, target URL, and the security group rule allowing health checks.
 
-**Alarm fires but SFN doesn't start** — EventBridge rule pattern matches on the alarm ARN;
-confirm `terraform -chdir=infra/control apply` ran *after* the alarm existed, and check the
-rule's metrics (Invocations).
+**Alarm fires but Step Functions does not start** — verify the EventBridge alarm rule,
+its invocation metric, and that `make control` ran after the alarm existed.
 
-**Global table replica missing** — `aws dynamodb describe-table --table-name
-continuum-state --region ap-southeast-1`; replicas take a few minutes to become ACTIVE.
+**Global table replica missing** — run
+`aws dynamodb describe-table --table-name continuum-state --region ap-southeast-1`.
 
-**Promotion didn't serve traffic** — SSM command output shows role file + service state.
-The app reads `/etc/continuum/role` only at boot; promotion always restarts the service.
+**Promotion did not serve traffic** — inspect the SSM command output and service state.
+Promotion writes `/etc/continuum/role` and restarts the Go systemd service.

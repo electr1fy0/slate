@@ -3,7 +3,7 @@
 // A room keeps the newest revision of each element and the currently connected
 // peers.  The manager is safe for use by several HTTP/WebSocket goroutines.
 // Board state is deliberately process-local and ephemeral, matching the
-// Python implementation this package replaces.
+// legacy implementation this package replaces.
 package boards
 
 import (
@@ -232,7 +232,7 @@ func (m *Manager) Absorb(roomID string, elements []map[string]any) int {
 		}
 		version, ok := versionValue(element["version"])
 		if !ok {
-			// Python's default is zero, but non-numeric versions cannot be
+			// The default is zero, but non-numeric versions cannot be
 			// meaningfully ordered and are safer to discard.
 			continue
 		}

@@ -7,7 +7,7 @@ import (
 
 // HealthVerifierConfig is the environment contract for the deep-health
 // verifier Lambda. Required values are checked when the binary starts, while
-// the defaults mirror the Python implementation.
+// the defaults mirror the deployed API contract.
 type HealthVerifierConfig struct {
 	Region          string
 	TableName       string

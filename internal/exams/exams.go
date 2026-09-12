@@ -47,7 +47,7 @@ func (s *Service) now() time.Time {
 }
 
 // EnforceWindow allows staff (any role other than student) to preview an exam.
-// Invalid stored ISO boundaries are ignored for compatibility with Python's
+// Invalid stored ISO boundaries are ignored for compatibility with the
 // corruption-tolerant serving behavior.
 func EnforceWindow(meta *model.ExamMeta, role string, now time.Time) error {
 	if meta == nil || role != "student" {

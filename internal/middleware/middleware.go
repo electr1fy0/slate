@@ -146,7 +146,7 @@ func (l *RateLimiter) SetClock(clock func() time.Time) {
 }
 
 // Allow checks and consumes one hit. RetryAfter is in whole seconds and is at
-// least one when denied, matching the Python middleware's header behavior.
+// least one when denied, matching the API middleware's header behavior.
 func (l *RateLimiter) Allow(method, path, client string) (allowed bool, retryAfter int) {
 	if l == nil {
 		return true, 0

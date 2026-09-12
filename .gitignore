@@ -1,9 +1,4 @@
 .DS_Store
-__pycache__/
-*.pyc
-.venv/
-venv/
-
 *.zip
 app.tar.gz
 app-bundle/
@@ -17,8 +12,3 @@ tfplan*
 !*.tfvars.example
 
 .env
-
-.pytest_cache/
-.coverage
-coverage.xml
-htmlcov/

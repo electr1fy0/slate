@@ -57,7 +57,7 @@ type State struct {
 type ChaosState = State
 
 // NewState constructs state from config. A non-positive window uses 100, the
-// Python service's default.
+// service's default.
 func NewState(config Config) *State {
 	window := config.ErrorWindow
 	if window <= 0 {
@@ -152,7 +152,7 @@ func (s *State) DBStall() bool {
 }
 
 // Reset clears flags but intentionally preserves the status window. The
-// Python reset endpoint has the same behavior; use ClearStatuses in tests or
+// reset endpoint has the same behavior; use ClearStatuses in tests or
 // when a deployment needs a fresh health-rate baseline.
 func (s *State) Reset() {
 	if s == nil {
@@ -212,7 +212,7 @@ func (s *State) RecordStatus(status int) {
 }
 
 // Statuses returns completed statuses in arrival order. Zero/pending entries
-// are omitted, as in the Python error_rate implementation.
+// are omitted, matching the error_rate implementation.
 func (s *State) Statuses() []int {
 	if s == nil {
 		return nil
@@ -251,7 +251,7 @@ func (s *State) ErrorRate() float64 {
 	return float64(errors) / float64(total)
 }
 
-// ShouldInject applies the Python path exemptions and samples the configured
+// ShouldInject applies the API path exemptions and samples the configured
 // percentage. /health/live and every /admin/ route are never injected.
 func (s *State) ShouldInject(path string) bool {
 	if s == nil || isProbeExempt(path) {

@@ -162,7 +162,7 @@ func (o *FailoverOps) ReplicationStatus(ctx context.Context) (map[string]any, er
 	started := o.Now()
 	deadline := started.Add(30 * time.Second)
 	for {
-		// Match the Python loop's pre-flight deadline check: a slow probe is
+		// Match the verifier loop's pre-flight deadline check: a slow probe is
 		// allowed to complete the current read, then backs off once before the
 		// next iteration notices the 30-second limit.
 		if !o.Now().Before(deadline) {
