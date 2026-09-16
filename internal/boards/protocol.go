@@ -104,11 +104,15 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 			}
 		}
 		s.Manager.Identify(s.RoomID, s.Socket, requestedName, s.Identity.Role)
+		if err := s.Manager.Resume(ctx, s.RoomID); err != nil {
+			return 0, s.Manager.Send(ctx, s.Socket, errorFrame(
+				ErrorPersistence, "board snapshot is temporarily unavailable"))
+		}
 		snapshot := s.Manager.Snapshot(s.RoomID)
 		peers := s.Manager.Peers(s.RoomID, s.Socket)
 		if err := s.Manager.Send(ctx, s.Socket, map[string]any{
 			"type": "init", "you": s.PeerID, "elements": snapshot.Elements,
-			"peers": peers,
+			"peers": peers, "room": snapshot.RoomMetadata,
 		}); err != nil {
 			return 0, err
 		}

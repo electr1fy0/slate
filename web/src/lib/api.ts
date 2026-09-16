@@ -1,10 +1,14 @@
 import { clearAuth, getAccessToken, getRefreshToken, setAuth } from "./auth"
 import type {
   AdminStatus,
+  BoardElement,
   Exam,
   ExamDraft,
   ExamMeta,
   ExamResultsResponse,
+  AttemptSaveResult,
+  AttemptSnapshot,
+  QuizDraft,
   ResultResponse,
   Submission,
   SubmitResult,
@@ -22,6 +26,26 @@ export class ApiError extends Error {
     this.status = status
     this.code = code
   }
+}
+
+export interface ClassroomRecord {
+  id: string
+  owner_id: string
+  name: string
+  description?: string
+  join_code?: string
+  created_at: string
+  updated_at: string
+  member_count: number
+}
+
+export interface ClassroomMemberRecord {
+  classroom_id: string
+  user_id: string
+  name: string
+  email: string
+  role: "teacher" | "student"
+  joined_at: string
 }
 
 interface TokenResponse {
@@ -97,6 +121,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, response.status, code)
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -113,12 +138,105 @@ export const api = {
 
   listExams: () => request<ExamMeta[]>("/exams"),
 
+  listClassrooms: () => request<ClassroomRecord[]>("/classrooms"),
+
+  createClassroom: (payload: { name: string; description?: string }) =>
+    request<ClassroomRecord>("/classrooms", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  joinClassroom: (joinCode: string) =>
+    request<ClassroomRecord>("/classrooms/join", {
+      method: "POST",
+      body: JSON.stringify({ join_code: joinCode }),
+    }),
+
+  classroomRoster: (classroomId: string) =>
+    request<ClassroomMemberRecord[]>(`/classrooms/${encodeURIComponent(classroomId)}/roster`),
+
+  removeClassroomMember: (classroomId: string, memberId: string) =>
+    request<void>(`/classrooms/${encodeURIComponent(classroomId)}/members/${encodeURIComponent(memberId)}`, {
+      method: "DELETE",
+    }),
+
+  boardHistory: (roomId: string, limit = 50) =>
+    request<Array<{ room_id: string; version: number; element_count: number; saved_at?: string }>>(
+      `/boards/${encodeURIComponent(roomId)}/history?limit=${limit}`,
+    ),
+
+  boardExport: (roomId: string) =>
+    request<{ schema_version: number; room_id: string; version: number; elements: BoardElement[] }>(
+      `/boards/${encodeURIComponent(roomId)}/export`,
+    ),
+
+  boardRestore: (roomId: string, version: number) =>
+    request<{ room_id: string; version: number; elements: BoardElement[] }>(
+      `/boards/${encodeURIComponent(roomId)}/restore`,
+      { method: "POST", body: JSON.stringify({ version }) },
+    ),
+
   getExam: (examId: string) => request<Exam>(`/exam/${encodeURIComponent(examId)}`),
+
+  previewExam: (examId: string) =>
+    request<Exam>(`/exam/${encodeURIComponent(examId)}/preview`),
 
   createExam: (draft: ExamDraft) =>
     request<{ id: string; title: string; question_count: number }>("/exam", {
       method: "POST",
       body: JSON.stringify(draft),
+    }),
+
+  listQuizDrafts: () => request<QuizDraft[]>("/quiz/drafts"),
+
+  getQuizDraft: (draftId: string) =>
+    request<QuizDraft>(`/quiz/drafts/${encodeURIComponent(draftId)}`),
+
+  createQuizDraft: (draft: ExamDraft) =>
+    request<QuizDraft>("/quiz/drafts", {
+      method: "POST",
+      body: JSON.stringify(draft),
+    }),
+
+  updateQuizDraft: (draftId: string, draft: ExamDraft) =>
+    request<QuizDraft>(`/quiz/drafts/${encodeURIComponent(draftId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(draft),
+    }),
+
+  deleteQuizDraft: (draftId: string) =>
+    request<void>(`/quiz/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" }),
+
+  publishQuizDraft: (draftId: string) =>
+    request<ExamMeta>(`/quiz/drafts/${encodeURIComponent(draftId)}/publish`, { method: "POST" }),
+
+  duplicateQuiz: (payload: { source_id: string; id?: string; title?: string }) =>
+    request<QuizDraft>("/quiz/duplicate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  duplicateQuizDraft: (draftId: string, payload?: { id?: string; title?: string }) =>
+    request<QuizDraft>(`/quiz/drafts/${encodeURIComponent(draftId)}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+
+  getAttempt: (examId: string) =>
+    request<AttemptSnapshot>(`/exam/${encodeURIComponent(examId)}/attempt`),
+
+  saveAttempt: (
+    examId: string,
+    payload: { answers: Record<string, number>; expected_version: number; request_id: string },
+  ) => request<AttemptSaveResult>(`/exam/${encodeURIComponent(examId)}/attempt`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  }),
+
+  submitSavedAttempt: (examId: string, requestId?: string) =>
+    request<SubmitResult>(`/exam/${encodeURIComponent(examId)}/attempt/submit`, {
+      method: "POST",
+      body: JSON.stringify({ request_id: requestId }),
     }),
 
   submitAnswers: (

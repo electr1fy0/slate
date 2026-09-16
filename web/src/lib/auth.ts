@@ -96,13 +96,16 @@ export function setAuth(next: AuthState): void {
 }
 
 export function clearAuth(): void {
-  persist(EMPTY)
+  cached = EMPTY
   try {
-    // Legacy pre-auth keys are cleared too so stale state never resurfaces.
+    // Remove entirely (rather than writing an empty blob) so nothing about
+    // the previous session lingers on disk; legacy pre-auth keys go too.
+    window.localStorage.removeItem(STORAGE_KEY)
     window.localStorage.removeItem("slate.session")
   } catch {
     // ignore
   }
+  for (const listener of listeners) listener()
 }
 
 /** React binding; identical snapshot across server render for hydration. */

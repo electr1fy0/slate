@@ -62,8 +62,9 @@ Copy each `terraform.tfvars.example` to `terraform.tfvars` first.
 Automated suite:
 
 ```bash
-go test -race ./...
+go test -race ./cmd/... ./internal/...
 make test          # Go unit and integration suite
+make coverage      # Go + frontend suites, both enforced at 100% coverage
 ```
 
 The Go suite covers the API, WebSocket protocol, DynamoDB persistence, health
@@ -82,10 +83,14 @@ Continuum ops console with chaos injection (`/ops`). Students take quizzes at
 
 ```bash
 make web-install    # bun install
-scripts/dev_go_api.sh # terminal 1: Go API on :8000 (set DDB_ENDPOINT_MODE for local DynamoDB)
+scripts/dev_go_api.sh # terminal 1: Go API on :8000 (uses an in-memory store by default)
 make web-dev        # terminal 2: Vite dev server on :3000, /api + /ws proxied
-make web-check      # typecheck + eslint + production build
+make web-check      # typecheck + eslint + coverage-enforced tests + production build
 ```
+
+The local API uses the in-memory store by default so login and classroom flows work
+without AWS credentials. Set `STORE_BACKEND=dynamodb` with valid AWS credentials, or
+set `DDB_ENDPOINT_MODE` for DynamoDB Local/LocalStack, when persistence is needed.
 
 Notes:
 - Boards relay through `internal/boards` (in-memory rooms); snapshots autosave to the

@@ -12,3 +12,6 @@ tfplan*
 !*.tfvars.example
 
 .env
+web/coverage/
+web/test-results/
+web/dist/

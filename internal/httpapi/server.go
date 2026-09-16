@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/ayush/slate/internal/auth"
 	"github.com/ayush/slate/internal/boards"
 	"github.com/ayush/slate/internal/chaos"
+	"github.com/ayush/slate/internal/classrooms"
 	"github.com/ayush/slate/internal/config"
 	"github.com/ayush/slate/internal/exams"
 	"github.com/ayush/slate/internal/health"
@@ -42,6 +44,7 @@ type Backend interface {
 	HeartbeatProbe(context.Context, string) (bool, float64, error)
 	auth.UserStore
 	exams.Store
+	exams.QuizStore
 }
 
 type RoleManager struct {
@@ -73,24 +76,34 @@ func (r *RoleManager) Promote() {
 }
 
 type Server struct {
-	Settings config.Settings
-	Store    Backend
-	Auth     *auth.Service
-	Exams    *exams.Service
-	Boards   *boards.Manager
-	Chaos    *chaos.State
-	Roles    *RoleManager
-	Now      func() time.Time
-	WS       http.Handler
+	Settings   config.Settings
+	Store      Backend
+	Auth       *auth.Service
+	Exams      *exams.Service
+	Classrooms *classrooms.Service
+	Boards     *boards.Manager
+	Chaos      *chaos.State
+	Roles      *RoleManager
+	Now        func() time.Time
+	WS         http.Handler
 }
 
 func New(settings config.Settings, backend Backend) *Server {
+	var classroomStore classrooms.Store
+	if candidate, ok := backend.(classrooms.Store); ok {
+		classroomStore = candidate
+	}
+	var boardStore boards.BoardSnapshotStore
+	if candidate, ok := backend.(*store.Store); ok {
+		boardStore = store.NewBoardStore(candidate)
+	}
 	return &Server{
-		Settings: settings,
-		Store:    backend,
-		Auth:     auth.New(backend, settings),
-		Exams:    exams.New(backend),
-		Boards:   boards.NewManager(),
+		Settings:   settings,
+		Store:      backend,
+		Auth:       auth.New(backend, settings),
+		Exams:      exams.New(backend),
+		Classrooms: classrooms.New(classroomStore),
+		Boards:     boards.NewManagerWithPersistence(boardStore, boards.DefaultSaveDebounce),
 		Chaos: chaos.NewState(chaos.Config{ErrorPct: settings.ChaosErrorPct, LatencyMS: settings.ChaosLatencyMS,
 			DBStall: settings.DBStall, ErrorWindow: settings.ErrorRateWindow}),
 		Roles: NewRoleManager(settings.RoleFile, settings.AppRole),
@@ -107,15 +120,42 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/login", s.login)
 	mux.HandleFunc("POST /auth/refresh", s.refresh)
 	mux.HandleFunc("GET /auth/me", s.me)
+	if s.Classrooms != nil {
+		classroomHandler := classrooms.NewHTTPHandler(s.Classrooms, s.Auth, func(w http.ResponseWriter, _ *http.Request) bool {
+			return s.requireActive(w)
+		})
+		// The project historically mounted API resources at the root. Keep both
+		// forms so existing clients continue to work while new clients can use
+		// the conventional /api prefix.
+		mux.Handle("/classrooms", classroomHandler)
+		mux.Handle("/classrooms/", classroomHandler)
+		mux.Handle("/api/classrooms", classroomHandler)
+		mux.Handle("/api/classrooms/", classroomHandler)
+	}
 	mux.HandleFunc("POST /admin/users", s.adminCreateUser)
 	mux.HandleFunc("GET /exams", s.listExams)
 	mux.HandleFunc("POST /exam", s.createExam)
 	mux.HandleFunc("GET /exam/{examID}", s.getExam)
+	mux.HandleFunc("GET /exam/{examID}/preview", s.previewExam)
+	mux.HandleFunc("GET /exam/{examID}/attempt", s.getAttempt)
+	mux.HandleFunc("PUT /exam/{examID}/attempt", s.saveAttempt)
+	mux.HandleFunc("POST /exam/{examID}/attempt/submit", s.submitSavedAttempt)
 	mux.HandleFunc("POST /exam/{examID}/submit", s.submit)
 	mux.HandleFunc("GET /exam/{examID}/result", s.result)
 	mux.HandleFunc("PATCH /exam/{examID}", s.patchExam)
 	mux.HandleFunc("POST /exam/{examID}/close", s.closeExam)
 	mux.HandleFunc("DELETE /exam/{examID}", s.deleteExam)
+	mux.HandleFunc("GET /quiz/drafts", s.listQuizDrafts)
+	mux.HandleFunc("POST /quiz/drafts", s.createQuizDraft)
+	mux.HandleFunc("GET /quiz/drafts/{draftID}", s.getQuizDraft)
+	mux.HandleFunc("PATCH /quiz/drafts/{draftID}", s.updateQuizDraft)
+	mux.HandleFunc("DELETE /quiz/drafts/{draftID}", s.deleteQuizDraft)
+	mux.HandleFunc("POST /quiz/drafts/{draftID}/publish", s.publishQuizDraft)
+	mux.HandleFunc("POST /quiz/drafts/{draftID}/duplicate", s.duplicateQuizDraft)
+	mux.HandleFunc("POST /quiz/duplicate", s.duplicateQuiz)
+	mux.HandleFunc("GET /api/boards/{roomID}/history", s.boardHistory)
+	mux.HandleFunc("GET /api/boards/{roomID}/export", s.boardExport)
+	mux.HandleFunc("POST /api/boards/{roomID}/restore", s.boardRestore)
 	mux.HandleFunc("GET /admin/exams/{examID}/results", s.examResults)
 	mux.HandleFunc("GET /admin/outbox", s.outbox)
 	mux.HandleFunc("GET /admin/submissions", s.submissions)
@@ -332,6 +372,94 @@ func (s *Server) getExam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, exam)
 }
 
+// previewExam deliberately includes answer metadata, but only for staff. The
+// student delivery route above always redacts it through exams.Service.
+func (s *Server) previewExam(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) || !s.requireStaff(w, r) {
+		return
+	}
+	exam, err := s.Store.GetExam(r.Context(), r.PathValue("examID"), true)
+	if err != nil {
+		detail(w, 503, "data layer unavailable")
+		return
+	}
+	if exam == nil {
+		detail(w, 404, "exam not found")
+		return
+	}
+	writeJSON(w, 200, exam)
+}
+
+func (s *Server) getAttempt(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	attempt, deadline, err := s.Exams.Resume(r.Context(), r.PathValue("examID"), user)
+	if s.writeExamError(w, err) {
+		return
+	}
+	writeJSON(w, 200, attemptResponse(attempt, deadline))
+}
+
+func (s *Server) saveAttempt(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		Answers         map[string]int `json:"answers"`
+		ExpectedVersion int            `json:"expected_version"`
+		RequestID       string         `json:"request_id"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if payload.Answers == nil {
+		validation(w, "answers is required")
+		return
+	}
+	result, err := s.Exams.Save(r.Context(), r.PathValue("examID"), user, payload.Answers, payload.ExpectedVersion, payload.RequestID)
+	if s.writeExamError(w, err) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"status":      result.Status,
+		"request_id":  result.RequestID,
+		"version":     result.Attempt.Version,
+		"answers":     result.Attempt.Answers,
+		"started_at":  result.Attempt.StartedAt,
+		"deadline_ms": result.DeadlineMS,
+	})
+}
+
+func (s *Server) submitSavedAttempt(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		RequestID string `json:"request_id"`
+	}
+	if r.Body != nil && r.ContentLength != 0 && !decode(w, r, &payload) {
+		return
+	}
+	result, err := s.Exams.SubmitSaved(r.Context(), r.PathValue("examID"), user, payload.RequestID)
+	if s.writeExamError(w, err) {
+		return
+	}
+	writeJSON(w, 200, result)
+}
+
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireActive(w) {
 		return
@@ -405,18 +533,276 @@ func (s *Server) listExams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, rows)
 }
 
+func (s *Server) boardHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	if _, ok := s.currentUser(w, r); !ok {
+		return
+	}
+	versions, err := s.Boards.ListVersions(r.Context(), r.PathValue("roomID"), clamp(queryInt(r, "limit", 50), 1, 100))
+	if err != nil {
+		s.writeBoardError(w, err)
+		return
+	}
+	if versions == nil {
+		versions = []boards.BoardVersion{}
+	}
+	writeJSON(w, http.StatusOK, versions)
+}
+
+func (s *Server) boardExport(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	if _, ok := s.currentUser(w, r); !ok {
+		return
+	}
+	roomID := r.PathValue("roomID")
+	if err := s.Boards.Resume(r.Context(), roomID); err != nil {
+		s.writeBoardError(w, err)
+		return
+	}
+	snapshot, err := s.Boards.ExportSnapshot(roomID)
+	if err != nil {
+		s.writeBoardError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) boardRestore(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) || !s.requireStaff(w, r) {
+		return
+	}
+	var payload struct {
+		Version int64 `json:"version"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	snapshot, err := s.Boards.Restore(r.Context(), r.PathValue("roomID"), payload.Version)
+	if err != nil {
+		s.writeBoardError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) writeBoardError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, boards.ErrRoomNotFound), errors.Is(err, boards.ErrSnapshotNotFound):
+		detail(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, boards.ErrPersistenceUnavailable):
+		detail(w, http.StatusServiceUnavailable, err.Error())
+	default:
+		detail(w, http.StatusServiceUnavailable, "board persistence unavailable")
+	}
+}
+
+func (s *Server) listQuizDrafts(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.Store.ListQuizDrafts(r.Context(), user.UserID, clamp(queryInt(r, "limit", 50), 1, 100))
+	if err != nil {
+		detail(w, 503, "data layer unavailable")
+		return
+	}
+	if rows == nil {
+		rows = []model.QuizDraft{}
+	}
+	writeJSON(w, 200, rows)
+}
+
+func (s *Server) createQuizDraft(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	var payload quizDraftPayload
+	if !decode(w, r, &payload) {
+		return
+	}
+	draft, err := s.quizDraftFromPayload(payload, user.UserID, "")
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	created, err := s.Store.CreateQuizDraft(r.Context(), draft)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) getQuizDraft(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	draft, err := s.Store.GetQuizDraft(r.Context(), r.PathValue("draftID"))
+	if err != nil {
+		detail(w, 503, "data layer unavailable")
+		return
+	}
+	if draft == nil {
+		detail(w, 404, "quiz draft not found")
+		return
+	}
+	if draft.OwnerID != user.UserID {
+		detail(w, 403, "quiz ownership violation")
+		return
+	}
+	writeJSON(w, 200, draft)
+}
+
+func (s *Server) updateQuizDraft(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	var payload quizDraftPayload
+	if !decode(w, r, &payload) {
+		return
+	}
+	draft, err := s.quizDraftFromPayload(payload, user.UserID, r.PathValue("draftID"))
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	updated, err := s.Store.UpdateQuizDraft(r.Context(), user.UserID, draft)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	writeJSON(w, 200, updated)
+}
+
+func (s *Server) deleteQuizDraft(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := s.Store.DeleteQuizDraft(r.Context(), r.PathValue("draftID"), user.UserID)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	if !deleted {
+		detail(w, 404, "quiz draft not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) publishQuizDraft(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	meta, err := s.Store.PublishQuizDraft(r.Context(), r.PathValue("draftID"), user.UserID)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, meta)
+}
+
+func (s *Server) duplicateQuizDraft(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	if r.Body != nil && r.ContentLength != 0 && !decode(w, r, &payload) {
+		return
+	}
+	draft, err := s.Store.DuplicateQuiz(r.Context(), r.PathValue("draftID"), user.UserID, slugify(payload.ID), payload.Title)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, draft)
+}
+
+func (s *Server) duplicateQuiz(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		SourceID string `json:"source_id"`
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if strings.TrimSpace(payload.SourceID) == "" {
+		validation(w, "source_id is required")
+		return
+	}
+	draft, err := s.Store.DuplicateQuiz(r.Context(), payload.SourceID, user.UserID, slugify(payload.ID), payload.Title)
+	if err != nil {
+		s.writeQuizError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, draft)
+}
+
 type questionPayload struct {
 	Question string   `json:"question"`
 	Options  []string `json:"options"`
 	Answer   *int     `json:"answer"`
+	Points   int      `json:"points,omitempty"`
+	Feedback string   `json:"feedback,omitempty"`
 }
 type examPayload struct {
-	ID              string            `json:"id"`
-	Title           string            `json:"title"`
-	Questions       []questionPayload `json:"questions"`
-	OpensAt         *string           `json:"opens_at"`
-	ClosesAt        *string           `json:"closes_at"`
-	DurationMinutes *int              `json:"duration_minutes"`
+	ID               string            `json:"id"`
+	Title            string            `json:"title"`
+	Questions        []questionPayload `json:"questions"`
+	OpensAt          *string           `json:"opens_at"`
+	ClosesAt         *string           `json:"closes_at"`
+	DurationMinutes  *int              `json:"duration_minutes"`
+	MaxAttempts      *int              `json:"max_attempts"`
+	AllowLate        *bool             `json:"allow_late"`
+	LateGraceMinutes *int              `json:"late_grace_minutes"`
+}
+
+type quizDraftPayload struct {
+	ID               string            `json:"id"`
+	Title            string            `json:"title"`
+	Questions        []questionPayload `json:"questions"`
+	OpensAt          *string           `json:"opens_at"`
+	ClosesAt         *string           `json:"closes_at"`
+	DurationMinutes  *int              `json:"duration_minutes"`
+	MaxAttempts      *int              `json:"max_attempts"`
+	AllowLate        *bool             `json:"allow_late"`
+	LateGraceMinutes *int              `json:"late_grace_minutes"`
 }
 
 func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
@@ -459,9 +845,18 @@ func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
 	}
 	qs := make([]model.Question, len(p.Questions))
 	for i, q := range p.Questions {
-		qs[i] = model.Question{Index: i, Question: q.Question, Options: q.Options, Answer: *q.Answer}
+		qs[i] = model.Question{Index: i, Question: q.Question, Options: trimStrings(q.Options), Answer: *q.Answer, Points: q.Points, Feedback: strings.TrimSpace(q.Feedback)}
 	}
 	window := payloadWindow(p.OpensAt, p.ClosesAt, p.DurationMinutes)
+	if p.MaxAttempts != nil {
+		window["max_attempts"] = *p.MaxAttempts
+	}
+	if p.AllowLate != nil {
+		window["allow_late"] = *p.AllowLate
+	}
+	if p.LateGraceMinutes != nil {
+		window["late_grace_minutes"] = *p.LateGraceMinutes
+	}
 	if err := s.Store.EnsureExam(r.Context(), id, strings.TrimSpace(p.Title), qs, window); err != nil {
 		detail(w, 503, "data layer unavailable")
 		return
@@ -486,10 +881,13 @@ func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p struct {
-		Title           *string `json:"title"`
-		OpensAt         *string `json:"opens_at"`
-		ClosesAt        *string `json:"closes_at"`
-		DurationMinutes *int    `json:"duration_minutes"`
+		Title            *string `json:"title"`
+		OpensAt          *string `json:"opens_at"`
+		ClosesAt         *string `json:"closes_at"`
+		DurationMinutes  *int    `json:"duration_minutes"`
+		MaxAttempts      *int    `json:"max_attempts"`
+		AllowLate        *bool   `json:"allow_late"`
+		LateGraceMinutes *int    `json:"late_grace_minutes"`
 	}
 	if !decode(w, r, &p) {
 		return
@@ -498,7 +896,17 @@ func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
 		validation(w, "duration_minutes must be greater than 0 and at most 1440")
 		return
 	}
-	updated, err := s.Store.UpdateExamWindow(r.Context(), id, p.Title, payloadWindow(p.OpensAt, p.ClosesAt, p.DurationMinutes))
+	window := payloadWindow(p.OpensAt, p.ClosesAt, p.DurationMinutes)
+	if p.MaxAttempts != nil {
+		window["max_attempts"] = *p.MaxAttempts
+	}
+	if p.AllowLate != nil {
+		window["allow_late"] = *p.AllowLate
+	}
+	if p.LateGraceMinutes != nil {
+		window["late_grace_minutes"] = *p.LateGraceMinutes
+	}
+	updated, err := s.Store.UpdateExamWindow(r.Context(), id, p.Title, window)
 	if err != nil {
 		detail(w, 503, "data layer unavailable")
 		return
@@ -572,11 +980,39 @@ func (s *Server) examResults(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"student_id": strings.TrimPrefix(row.SK, "STUDENT#"), "student_name": row.StudentName, "answers": row.Answers, "score": row.Score, "total": row.Total, "submitted_at": row.UpdatedAtISO})
 	}
+	questionStats := make([]map[string]any, 0)
+	if exam, err := s.Store.GetExam(r.Context(), id, true); err == nil && exam != nil {
+		for _, question := range exam.Questions {
+			optionCounts := make([]int, len(question.Options))
+			answered, correct := 0, 0
+			for _, row := range rows {
+				chosen, ok := row.Answers[strconv.Itoa(question.Index)]
+				if !ok {
+					continue
+				}
+				answered++
+				if chosen >= 0 && chosen < len(optionCounts) {
+					optionCounts[chosen]++
+				}
+				if chosen == question.Answer {
+					correct++
+				}
+			}
+			var correctPct any
+			if answered > 0 {
+				correctPct = float64(int((float64(correct)/float64(answered)*100)*10+0.5)) / 10
+			}
+			questionStats = append(questionStats, map[string]any{
+				"index": question.Index, "question": question.Question, "answered": answered,
+				"correct": correct, "correct_pct": correctPct, "option_counts": optionCounts,
+			})
+		}
+	}
 	var avg any
 	if scored > 0 {
 		avg = float64(int((totalPct/float64(scored))*10+0.5)) / 10
 	}
-	writeJSON(w, 200, map[string]any{"exam_id": id, "count": len(rows), "average_pct": avg, "submissions": items})
+	writeJSON(w, 200, map[string]any{"exam_id": id, "count": len(rows), "average_pct": avg, "submissions": items, "question_stats": questionStats})
 }
 
 func (s *Server) outbox(w http.ResponseWriter, r *http.Request) {
@@ -681,6 +1117,148 @@ func (s *Server) requireStaff(w http.ResponseWriter, r *http.Request) bool {
 	}
 	return false
 }
+
+func (s *Server) teacherUser(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return nil, false
+	}
+	if user.Role != auth.RoleTeacher {
+		detail(w, http.StatusForbidden, "teacher access required")
+		return nil, false
+	}
+	return user, true
+}
+
+func (s *Server) quizDraftFromPayload(payload quizDraftPayload, ownerID, forcedID string) (*model.QuizDraft, error) {
+	id := strings.TrimSpace(forcedID)
+	if id == "" {
+		id = strings.TrimSpace(payload.ID)
+	}
+	if id == "" {
+		id = slugify(payload.Title) + "-draft"
+	} else {
+		id = slugify(id)
+	}
+	if strings.TrimSpace(payload.Title) == "" {
+		return nil, fmt.Errorf("quiz draft title is required")
+	}
+	if len(payload.Questions) == 0 {
+		return nil, fmt.Errorf("at least one question is required")
+	}
+	if len(payload.Questions) > 100 {
+		return nil, fmt.Errorf("quiz draft has too many questions")
+	}
+	questions := make([]model.Question, len(payload.Questions))
+	for index, question := range payload.Questions {
+		if strings.TrimSpace(question.Question) == "" || len(question.Options) < 2 {
+			return nil, fmt.Errorf("question %d needs text and at least two non-empty options", index)
+		}
+		for _, option := range question.Options {
+			if strings.TrimSpace(option) == "" {
+				return nil, fmt.Errorf("question %d needs non-empty options", index)
+			}
+		}
+		if question.Answer == nil || *question.Answer < 0 || *question.Answer >= len(question.Options) {
+			return nil, fmt.Errorf("question %d answer index out of range", index)
+		}
+		if question.Points < 0 || question.Points > 1000 {
+			return nil, fmt.Errorf("question %d points must be between 0 and 1000", index)
+		}
+		questions[index] = model.Question{
+			Index: index, Question: strings.TrimSpace(question.Question), Options: trimStrings(question.Options),
+			Answer: *question.Answer, Points: question.Points, Feedback: strings.TrimSpace(question.Feedback),
+		}
+	}
+	if payload.DurationMinutes != nil && (*payload.DurationMinutes <= 0 || *payload.DurationMinutes > 1440) {
+		return nil, fmt.Errorf("duration_minutes must be greater than 0 and at most 1440")
+	}
+	if payload.MaxAttempts != nil && (*payload.MaxAttempts <= 0 || *payload.MaxAttempts > 20) {
+		return nil, fmt.Errorf("max_attempts must be between 1 and 20")
+	}
+	if payload.LateGraceMinutes != nil && (*payload.LateGraceMinutes < 0 || *payload.LateGraceMinutes > 10080) {
+		return nil, fmt.Errorf("late_grace_minutes must be between 0 and 10080")
+	}
+	if payload.OpensAt != nil && payload.ClosesAt != nil {
+		opens, openErr := time.Parse(time.RFC3339Nano, *payload.OpensAt)
+		closes, closeErr := time.Parse(time.RFC3339Nano, *payload.ClosesAt)
+		if openErr != nil || closeErr != nil || !closes.After(opens) {
+			return nil, fmt.Errorf("closes_at must be after opens_at")
+		}
+	}
+	draft := &model.QuizDraft{ID: id, OwnerID: ownerID, Title: strings.TrimSpace(payload.Title), Questions: questions}
+	if payload.OpensAt != nil {
+		draft.OpensAt = strings.TrimSpace(*payload.OpensAt)
+	}
+	if payload.ClosesAt != nil {
+		draft.ClosesAt = strings.TrimSpace(*payload.ClosesAt)
+	}
+	if payload.DurationMinutes != nil {
+		draft.DurationMinutes = *payload.DurationMinutes
+	}
+	if payload.MaxAttempts != nil {
+		draft.MaxAttempts = *payload.MaxAttempts
+	}
+	if payload.AllowLate != nil {
+		draft.AllowLate = *payload.AllowLate
+	}
+	if payload.LateGraceMinutes != nil {
+		draft.LateGraceMinutes = *payload.LateGraceMinutes
+	}
+	return draft, nil
+}
+
+func trimStrings(values []string) []string {
+	trimmed := make([]string, len(values))
+	for i, value := range values {
+		trimmed[i] = strings.TrimSpace(value)
+	}
+	return trimmed
+}
+
+func attemptResponse(attempt *model.Attempt, deadline *int64) map[string]any {
+	response := map[string]any{"answers": map[string]int{}, "version": 0}
+	if attempt != nil {
+		answers := attempt.Answers
+		if answers == nil {
+			answers = map[string]int{}
+		}
+		response["answers"] = answers
+		response["version"] = attempt.Version
+		response["started_at"] = attempt.StartedAt
+		response["updated_at"] = attempt.UpdatedAt
+		response["attempt_number"] = attempt.AttemptNumber
+	}
+	if deadline != nil {
+		response["deadline_ms"] = *deadline
+	}
+	return response
+}
+
+func (s *Server) writeQuizError(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	var window *exams.WindowError
+	if errors.As(err, &window) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"detail": map[string]any{"code": window.Code, "message": window.Message}})
+		return
+	}
+	switch {
+	case errors.Is(err, store.ErrQuizNotFound):
+		detail(w, http.StatusNotFound, "quiz not found")
+	case errors.Is(err, store.ErrQuizForbidden):
+		detail(w, http.StatusForbidden, "quiz ownership violation")
+	case errors.Is(err, store.ErrQuizConflict), errors.Is(err, store.ErrAttemptConflict), errors.Is(err, store.ErrAttemptSubmitted):
+		detail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, exams.ErrAttemptNotFound):
+		detail(w, http.StatusNotFound, "no saved attempt")
+	case errors.Is(err, store.ErrInvalidAnswer):
+		validation(w, err.Error())
+	default:
+		validation(w, err.Error())
+	}
+}
 func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
@@ -693,6 +1271,12 @@ func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 		detail(w, 404, "exam not found")
 	case errors.Is(err, store.ErrSubmissionConflict):
 		detail(w, 409, "this student already submitted for this exam")
+	case errors.Is(err, exams.ErrAttemptNotFound):
+		detail(w, 404, "no saved attempt")
+	case errors.Is(err, store.ErrAttemptConflict), errors.Is(err, store.ErrAttemptSubmitted):
+		detail(w, 409, err.Error())
+	case errors.Is(err, store.ErrInvalidAnswer):
+		validation(w, err.Error())
 	default:
 		detail(w, 503, "data layer unavailable")
 	}
@@ -794,9 +1378,21 @@ func validateExam(w http.ResponseWriter, p examPayload) bool {
 			detail(w, 400, fmt.Sprintf("question %d answer index out of range", i))
 			return false
 		}
+		if q.Points < 0 || q.Points > 1000 {
+			validation(w, fmt.Sprintf("question %d points must be between 0 and 1000", i))
+			return false
+		}
 	}
 	if p.DurationMinutes != nil && (*p.DurationMinutes <= 0 || *p.DurationMinutes > 1440) {
 		validation(w, "duration_minutes must be greater than 0 and at most 1440")
+		return false
+	}
+	if p.MaxAttempts != nil && (*p.MaxAttempts <= 0 || *p.MaxAttempts > 20) {
+		validation(w, "max_attempts must be between 1 and 20")
+		return false
+	}
+	if p.LateGraceMinutes != nil && (*p.LateGraceMinutes < 0 || *p.LateGraceMinutes > 10080) {
+		validation(w, "late_grace_minutes must be between 0 and 10080")
 		return false
 	}
 	if p.OpensAt != nil && p.ClosesAt != nil {

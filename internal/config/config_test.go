@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestDefaultsMatchLegacy(t *testing.T) {
 	s := Defaults()
@@ -38,5 +42,78 @@ func TestLoadFromReturnsInvalidNumericError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestLoadFromRejectsEveryNumericSetting(t *testing.T) {
+	keys := []string{
+		"DEEP_PROBE_INTERVAL_S", "ERROR_RATE_WINDOW", "ERROR_RATE_THRESHOLD", "DISK_THRESHOLD_PCT",
+		"LOAD_THRESHOLD", "CHAOS_ERROR_PCT", "CHAOS_LATENCY_MS", "HEARTBEAT_TTL_S",
+		"ACCESS_TOKEN_TTL_S", "REFRESH_TOKEN_TTL_S", "RATE_LIMIT_WINDOW_S", "LOGIN_RATE_LIMIT",
+		"REGISTER_RATE_LIMIT", "WS_MAX_MESSAGE_BYTES", "WS_MAX_IDLE_S", "WS_SWEEP_INTERVAL_S",
+	}
+	for _, key := range keys {
+		t.Run(key, func(t *testing.T) {
+			_, err := LoadFrom(func(name string) string {
+				if name == key {
+					return "not-a-number"
+				}
+				return ""
+			})
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("LoadFrom(%s) error = %v", key, err)
+			}
+		})
+	}
+}
+
+func TestConfigHelpersAndMustLoad(t *testing.T) {
+	getenv := func(key string) string {
+		if key == "INT" {
+			return "42"
+		}
+		if key == "FLOAT" {
+			return "3.5"
+		}
+		return ""
+	}
+	if got, err := intEnv(getenv, "INT", 1); err != nil || got != 42 {
+		t.Fatalf("intEnv valid = %d, %v", got, err)
+	}
+	if got, err := intEnv(getenv, "MISSING", 7); err != nil || got != 7 {
+		t.Fatalf("intEnv fallback = %d, %v", got, err)
+	}
+	if got, err := floatEnv(getenv, "FLOAT", 1); err != nil || got != 3.5 {
+		t.Fatalf("floatEnv valid = %v, %v", got, err)
+	}
+	if got, err := floatEnv(getenv, "MISSING", 7); err != nil || got != 7 {
+		t.Fatalf("floatEnv fallback = %v, %v", got, err)
+	}
+	if _, err := intEnv(func(string) string { return "bad" }, "INT", 1); err == nil {
+		t.Fatal("invalid int accepted")
+	}
+	if _, err := floatEnv(func(string) string { return "bad" }, "FLOAT", 1); err == nil {
+		t.Fatal("invalid float accepted")
+	}
+
+	old := os.Getenv("LOGIN_RATE_LIMIT")
+	t.Setenv("LOGIN_RATE_LIMIT", old)
+	if got := MustLoad(); got.LoginRateLimit == 0 {
+		t.Fatalf("MustLoad returned empty settings: %+v", got)
+	}
+	t.Setenv("LOGIN_RATE_LIMIT", "bad")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustLoad did not panic on invalid configuration")
+		}
+	}()
+	_ = MustLoad()
+}
+
+func TestLoadUsesProcessEnvironment(t *testing.T) {
+	t.Setenv("AWS_REGION", "eu-central-1")
+	s, err := Load()
+	if err != nil || s.Region != "eu-central-1" {
+		t.Fatalf("Load = %+v, %v", s, err)
 	}
 }

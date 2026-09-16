@@ -14,18 +14,31 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+var (
+	loadAWSConfig = awsconfig.LoadDefaultConfig
+	startLambda   = lambda.Start
+	exit          = os.Exit
+	fatal         = func(err error) { log.Print(err); exit(1) }
+)
+
+func run() error {
 	ctx := context.Background()
 	cfg, err := control.LoadFailoverOpsConfig(os.Getenv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.LocalRegion))
+	awsCfg, err := loadAWSConfig(ctx, awsconfig.WithRegion(cfg.LocalRegion))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	standbyCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.StandbyRegion))
+	standbyCfg, err := loadAWSConfig(ctx, awsconfig.WithRegion(cfg.StandbyRegion))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	ops := control.NewFailoverOps(
 		cfg,
@@ -33,5 +46,6 @@ func main() {
 		control.NewAWSHealthCheckClient(route53.NewFromConfig(awsCfg)),
 		control.NewAWSDynamoProbe(dynamodb.NewFromConfig(awsCfg), cfg.TableName),
 	)
-	lambda.Start(ops.Handle)
+	startLambda(ops.Handle)
+	return nil
 }

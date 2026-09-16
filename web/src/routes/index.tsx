@@ -15,9 +15,12 @@ import {
 
 import { api } from "@/lib/api"
 import { clearAuth, useAuth } from "@/lib/auth"
+import { recordBoardVisit } from "@/lib/board-history"
+import { setClassroomActiveRoom } from "@/lib/classrooms"
 import { newRoomCode, normaliseRoomCode } from "@/lib/room-code"
 import { examState } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
+import { ClassroomDashboard, classBoardRoom } from "@/components/classroom-dashboard"
 import { AppShell } from "@/components/layout/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -58,41 +61,54 @@ function HomePage() {
     enabled: mounted,
   })
 
-  function signOut() {
+  function signOut(): void {
     clearAuth()
     void queryClient.invalidateQueries()
     toast.info("Signed out")
   }
 
-  function joinBoard(code: string) {
+  function joinBoard(code: string): void {
     const clean = normaliseRoomCode(code)
     if (!clean) {
       toast.error("Enter a room code first")
       return
     }
+    recordBoardVisit(clean)
     void navigate({ to: "/board/$roomId", params: { roomId: clean } })
   }
 
+  function openClassBoard(classroom: Parameters<typeof classBoardRoom>[0]): void {
+    const roomId = classBoardRoom(classroom)
+    setClassroomActiveRoom(classroom.id, roomId)
+    recordBoardVisit(roomId)
+    void navigate({ to: "/board/$roomId", params: { roomId } })
+  }
+
   return (
-    <AppShell title="Home" description="Your classroom at a glance">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+    <AppShell title="Classroom dashboard" description="Your classes, live boards, and quizzes at a glance">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <section className="flex flex-col gap-1.5">
-          <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
-            {isTeacher ? "Run today's class" : "Join today's class"}
-          </h2>
-          <p className="max-w-prose text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
+              {isTeacher ? "Run today's class" : "Join today's class"}
+            </h2>
+            <Badge variant="secondary">{isTeacher ? "Teacher view" : "Learner view"}</Badge>
+          </div>
+          <p className="max-w-2xl text-sm text-muted-foreground">
             {isTeacher
-              ? "Spin up a live board, publish a quiz, and keep every student on the same page."
-              : "Hop onto the live board or take the quiz your teacher published."}
+              ? "Organize a roster, open a live board, publish a quiz, and keep the room visible while class is in motion."
+              : "Select a class, join the live board, and keep your published quizzes close at hand."}
           </p>
         </section>
 
-        <div className="grid gap-4 lg:grid-cols-3">
-          <Card className="lg:col-span-2">
+        <ClassroomDashboard onOpenBoard={openClassBoard} />
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,0.7fr)]">
+          <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <PresentationIcon data-icon="inline-start" />
-                Live board
+                Join a live board
               </CardTitle>
               <CardDescription>
                 Rooms are live the moment two people open them. Share the code with your class.
@@ -125,20 +141,13 @@ function HomePage() {
                 </Field>
               </FieldGroup>
             </CardContent>
-            <CardFooter className="gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  const code = newRoomCode()
-                  setJoinCode(code)
-                  void navigate({ to: "/board/$roomId", params: { roomId: code } })
-                }}
-              >
+            <CardFooter className="flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => joinBoard(newRoomCode())}>
                 <PlusIcon data-icon="inline-start" />
                 New room
               </Button>
               {isTeacher ? (
-                <Button render={<Link to="/teacher" />}>
+                <Button nativeButton={false} render={<Link to="/teacher" />}>
                   <ClipboardListIcon data-icon="inline-start" />
                   Create a quiz
                 </Button>
@@ -183,7 +192,7 @@ function HomePage() {
                   Sign out
                 </Button>
               ) : (
-                <Button render={<Link to="/login" />}>
+                <Button nativeButton={false} render={<Link to="/login" />}>
                   <LogInIcon data-icon="inline-start" />
                   Sign in
                 </Button>
@@ -193,8 +202,11 @@ function HomePage() {
         </div>
 
         <section className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Published quizzes</h3>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Published quizzes</h3>
+              <p className="text-xs text-muted-foreground">Live catalog from the exam API.</p>
+            </div>
             <Badge variant="secondary">{examsQuery.data?.length ?? "…"}</Badge>
           </div>
           {!mounted || examsQuery.isPending ? (
@@ -209,9 +221,9 @@ function HomePage() {
                 <EmptyMedia variant="icon">
                   <SparklesIcon />
                 </EmptyMedia>
-                <EmptyTitle>Couldn't load quizzes</EmptyTitle>
+                <EmptyTitle>Quiz catalog unavailable</EmptyTitle>
                 <EmptyDescription>
-                  Is the API running? Try <code>make api-dev</code>, then retry.
+                  The dashboard still works with local classes and boards. Start the API to load published quizzes.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -222,9 +234,7 @@ function HomePage() {
                   <ClipboardListIcon />
                 </EmptyMedia>
                 <EmptyTitle>No quizzes yet</EmptyTitle>
-                <EmptyDescription>
-                  Teachers can publish one from the Quizzes page.
-                </EmptyDescription>
+                <EmptyDescription>Teachers can publish one from the Teacher studio.</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -242,24 +252,19 @@ function HomePage() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="px-4">
-                      {state === "open" ? null : (
-                        <Badge variant={state === "closed" ? "destructive" : "secondary"}>
-                          {state}
-                        </Badge>
+                      {state === "open" ? <Badge variant="default">open</Badge> : (
+                        <Badge variant={state === "closed" ? "destructive" : "secondary"}>{state}</Badge>
                       )}
                     </CardContent>
                     <CardFooter className="px-4">
                       {closedForStudent ? (
-                        <Button size="sm" variant="outline" disabled>
-                          Closed
-                        </Button>
+                        <Button size="sm" variant="outline" disabled>Closed</Button>
                       ) : (
                         <Button
                           size="sm"
                           variant={!auth.user || auth.user.role === "student" ? "default" : "outline"}
-                          render={
-                            <Link to="/quiz/$examId" params={{ examId: exam.id }} />
-                          }
+                          nativeButton={false}
+                          render={<Link to="/quiz/$examId" params={{ examId: exam.id }} />}
                         >
                           {!auth.user || auth.user.role === "student" ? "Take quiz" : "Preview"}
                           <ArrowRightIcon data-icon="inline-end" />

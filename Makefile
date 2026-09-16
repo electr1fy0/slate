@@ -1,6 +1,6 @@
 TF := terraform
 
-.PHONY: core standby control app-deploy fmt validate destroy-all test api-dev web-install web-dev web-build web-check
+.PHONY: core standby control app-deploy fmt validate destroy-all test coverage api-dev web-install web-dev web-build web-check
 
 core:
 	cd infra/core && $(TF) init && $(TF) apply -auto-approve
@@ -34,7 +34,12 @@ destroy-all:
 	cd infra/core && $(TF) destroy -auto-approve || true
 
 test:
-	go test -race ./...
+	go test -race ./cmd/... ./internal/...
+
+coverage:
+	go test -race -covermode=atomic -coverpkg=./cmd/...,./internal/... -coverprofile=/tmp/slate-go.cover ./cmd/... ./internal/...
+	@test "$$(go tool cover -func=/tmp/slate-go.cover | awk '/^total:/ {print $$NF}')" = "100.0%"
+	cd web && bun run test:coverage
 
 api-dev:
 	bash scripts/dev_api.sh
@@ -49,4 +54,4 @@ web-build:
 	cd web && bun run build
 
 web-check:
-	cd web && bun run typecheck && bunx eslint src && bun run build
+	cd web && bun run typecheck && bun run lint && bun run test:coverage && bun run build

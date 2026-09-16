@@ -33,6 +33,9 @@ type HealthVerifier struct {
 	Log     io.Writer
 }
 
+var readRandom = rand.Read
+var marshalJSON = json.Marshal
+
 func NewHealthVerifier(cfg HealthVerifierConfig, ddb DDBProbe, metrics MetricsPublisher, httpClient HTTPDoer) *HealthVerifier {
 	if httpClient == nil {
 		httpClient = &http.Client{}
@@ -160,7 +163,7 @@ func (h *HealthVerifier) Handle(ctx context.Context, event map[string]any) (any,
 	}
 
 	if mode == "scheduled" {
-		body, err := json.Marshal(result)
+		body, err := marshalJSON(result)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +196,7 @@ func (h *HealthVerifier) printJSON(value any) {
 
 func randomID() string {
 	data := make([]byte, 16)
-	if _, err := rand.Read(data); err != nil {
+	if _, err := readRandom(data); err != nil {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(data)

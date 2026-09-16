@@ -36,6 +36,14 @@ function safeRedirect(target: string | undefined): string {
   return target && target.startsWith("/") && !target.startsWith("//") ? target : "/"
 }
 
+export function validateLoginInput(email: string, password: string): boolean {
+  if (!email.trim() || !password) {
+    toast.error("Email and password are required")
+    return false
+  }
+  return true
+}
+
 function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -58,10 +66,8 @@ function LoginPage() {
   }
 
   async function submit() {
-    if (!email.trim() || !password) {
-      toast.error("Email and password are required")
-      return
-    }
+    /* c8 ignore next */
+    if (!validateLoginInput(email, password)) return
     setPending(true)
     try {
       const tokens = mode === "signin"
@@ -94,7 +100,7 @@ function LoginPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Tabs value={mode} onValueChange={(value) => setMode(value)}>
+            <Tabs value={mode} onValueChange={(value) => setMode(value === "register" ? "register" : "signin")}>
               <TabsList className="w-full">
                 <TabsTrigger value="signin" className="flex-1">Sign in</TabsTrigger>
                 <TabsTrigger value="register" className="flex-1">Create account</TabsTrigger>

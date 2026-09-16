@@ -47,6 +47,8 @@ type Report struct {
 	Chaos   ChaosSnapshot  `json:"chaos"`
 }
 
+var readFile = os.ReadFile
+
 // Deep aggregates DDB, rolling error rate, disk and load checks. Status is
 // 200 when healthy and 503 otherwise, matching /health/deep.
 func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) (Report, int) {
@@ -103,25 +105,20 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 			return StandardDiskUsage(ctx, "/")
 		}
 	}
-	if diskUsage == nil {
-		report.Checks["disk"] = map[string]any{"ok": false, "reason": "disk probe unavailable"}
+	used, total, err := diskUsage(ctx)
+	if err != nil || total == 0 {
+		reason := "disk probe unavailable"
+		if err != nil {
+			reason = trimReason(err)
+		}
+		report.Checks["disk"] = map[string]any{"ok": false, "reason": reason}
 		report.Healthy = false
 	} else {
-		used, total, err := diskUsage(ctx)
-		if err != nil || total == 0 {
-			reason := "disk probe unavailable"
-			if err != nil {
-				reason = trimReason(err)
-			}
-			report.Checks["disk"] = map[string]any{"ok": false, "reason": reason}
+		usedPct := float64(used) / float64(total) * 100
+		diskCheck := map[string]any{"used_pct": round(usedPct, 1), "ok": usedPct < config.DiskThresholdPct}
+		report.Checks["disk"] = diskCheck
+		if !diskCheck["ok"].(bool) {
 			report.Healthy = false
-		} else {
-			usedPct := float64(used) / float64(total) * 100
-			diskCheck := map[string]any{"used_pct": round(usedPct, 1), "ok": usedPct < config.DiskThresholdPct}
-			report.Checks["disk"] = diskCheck
-			if !diskCheck["ok"].(bool) {
-				report.Healthy = false
-			}
 		}
 	}
 
@@ -134,20 +131,15 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 			return StandardLoad1(ctx, "/proc/loadavg")
 		}
 	}
-	if load1Probe == nil {
-		report.Checks["load"] = map[string]any{"ok": false, "reason": "load probe unavailable"}
+	load1, err := load1Probe(ctx)
+	if err != nil {
+		report.Checks["load"] = map[string]any{"ok": false, "reason": trimReason(err)}
 		report.Healthy = false
 	} else {
-		load1, err := load1Probe(ctx)
-		if err != nil {
-			report.Checks["load"] = map[string]any{"ok": false, "reason": trimReason(err)}
+		loadCheck := map[string]any{"loadavg": round(load1, 2), "ok": load1 < config.LoadThreshold}
+		report.Checks["load"] = loadCheck
+		if !loadCheck["ok"].(bool) {
 			report.Healthy = false
-		} else {
-			loadCheck := map[string]any{"loadavg": round(load1, 2), "ok": load1 < config.LoadThreshold}
-			report.Checks["load"] = loadCheck
-			if !loadCheck["ok"].(bool) {
-				report.Healthy = false
-			}
 		}
 	}
 
@@ -211,10 +203,15 @@ func StandardDiskUsage(ctx context.Context, path string) (used, total uint64, er
 	}
 	total = uint64(stat.Blocks) * uint64(stat.Bsize)
 	free := uint64(stat.Bavail) * uint64(stat.Bsize)
+	used, total = diskUsageBytes(total, free)
+	return used, total, nil
+}
+
+func diskUsageBytes(total, free uint64) (used, available uint64) {
 	if total < free {
-		return 0, total, nil
+		return 0, total
 	}
-	return total - free, total, nil
+	return total - free, total
 }
 
 // StandardLoad1 reads Linux /proc/loadavg. On unsupported systems it falls
@@ -229,7 +226,7 @@ func StandardLoad1(ctx context.Context, path string) (float64, error) {
 	if path == "" {
 		path = "/proc/loadavg"
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFile(path)
 	if err != nil {
 		if path != "/proc/loadavg" {
 			return 0, err

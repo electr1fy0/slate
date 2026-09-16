@@ -50,7 +50,7 @@ function NotFound() {
     <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
       <p className="text-7xl font-semibold tracking-tight text-primary">404</p>
       <p className="text-muted-foreground">That page isn't on the board.</p>
-      <Button variant="outline" render={<Link to="/" />}>
+      <Button variant="outline" nativeButton={false} render={<Link to="/" />}>
         Back home
       </Button>
     </div>

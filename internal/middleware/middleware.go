@@ -19,6 +19,8 @@ type contextKey string
 
 const requestIDKey contextKey = "request-id"
 
+var readRandom = rand.Read
+
 // RequestIDFromContext reads the correlation ID installed by RequestID.
 func RequestIDFromContext(ctx context.Context) string {
 	if ctx == nil {
@@ -82,7 +84,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler { return RequestID(next
 
 func newRequestID() string {
 	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := readRandom(b); err != nil {
 		// A monotonically changing timestamp still supplies a useful local
 		// correlation value if the OS entropy source is unavailable.
 		now := time.Now().UnixNano()

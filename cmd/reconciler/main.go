@@ -13,19 +13,33 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+var (
+	loadAWSConfig = awsconfig.LoadDefaultConfig
+	startLambda   = lambda.Start
+	exit          = os.Exit
+	fatal         = func(err error) { log.Print(err); exit(1) }
+)
+
+func run() error {
 	ctx := context.Background()
 	cfg, err := control.LoadReconcilerConfig(os.Getenv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	awsCfg, err := loadAWSConfig(ctx)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	reconciler := control.NewReconciler(
 		cfg,
 		control.NewAWSReconcilerStore(dynamodb.NewFromConfig(awsCfg), cfg.TableName),
 		control.NewAWSCloudWatchMetrics(cloudwatch.NewFromConfig(awsCfg)),
 	)
-	lambda.Start(reconciler.Handle)
+	startLambda(reconciler.Handle)
+	return nil
 }

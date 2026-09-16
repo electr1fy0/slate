@@ -36,6 +36,7 @@ type HTTPHandler struct {
 	allowedOrigins  []string
 	maxMessageBytes int
 	upgrader        websocket.Upgrader
+	sessionFactory  func(*Manager, string, any, Identity) *Session
 }
 
 // NewHandler constructs a WebSocket HTTP handler from a config value.
@@ -54,7 +55,8 @@ func NewHandler(config HandlerConfig) *HTTPHandler {
 	// the protocol-level 4403 code rather than a framework-specific HTTP 403.
 	upgrader.CheckOrigin = func(_ *http.Request) bool { return true }
 	return &HTTPHandler{manager: manager, resolveToken: config.ResolveToken,
-		allowedOrigins: origins, maxMessageBytes: maxBytes, upgrader: upgrader}
+		allowedOrigins: origins, maxMessageBytes: maxBytes, upgrader: upgrader,
+		sessionFactory: NewSession}
 }
 
 // NewHTTPHandler is the compact constructor used by the API binary.
@@ -110,7 +112,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := NewSession(h.manager, roomIDFromRequest(r), ws, identity)
+	session := h.sessionFactory(h.manager, roomIDFromRequest(r), ws, identity)
 	if session == nil {
 		_ = ws.Close(CloseInvalidToken)
 		return

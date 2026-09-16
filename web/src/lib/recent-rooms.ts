@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react"
 
 const STORAGE_KEY = "slate.recent-rooms"
 const MAX_ROOMS = 8
+const SERVER_SNAPSHOT: string[] = []
 
 let cached: string[] | null = null
 const listeners = new Set<() => void>()
@@ -29,7 +30,7 @@ function getSnapshot(): string[] {
 }
 
 function getServerSnapshot(): string[] {
-  return []
+  return SERVER_SNAPSHOT
 }
 
 export function rememberRoom(roomId: string): void {

@@ -1,23 +1,37 @@
-import { useState } from "react"
-import { createFileRoute } from "@tanstack/react-router"
+import { useEffect, useState } from "react"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
+  BarChart3Icon,
+  CopyIcon,
   DownloadIcon,
   EyeIcon,
+  FilePenLineIcon,
+  FilePlus2Icon,
   LockIcon,
+  PlayIcon,
   PlusIcon,
+  RadioIcon,
   RefreshCwIcon,
+  SaveIcon,
   SendIcon,
   Trash2Icon,
+  UsersIcon,
 } from "lucide-react"
 
 import { api, ApiError } from "@/lib/api"
 import { useAdminToken } from "@/lib/admin-token"
-import { requireAuth } from "@/lib/guard"
-import type { ExamMeta, ExamResultsResponse, QuestionDraft } from "@/lib/types"
+import { useQuizDrafts, removeQuizDraft, saveQuizDraft } from "@/lib/quiz-drafts"
+import { removeQuestionFromBank, saveQuestionToBank, useQuestionBank } from "@/lib/question-bank"
+import { useBoardHistory } from "@/lib/board-history"
+import { useSelectedClassroom } from "@/lib/classrooms"
+import { requireTeacher } from "@/lib/guard"
+import type { ExamDraft, ExamMeta, ExamResultsResponse, QuestionDraft, QuestionStats, QuizDraft } from "@/lib/types"
 import { useMounted } from "@/hooks/use-mounted"
 import { AppShell } from "@/components/layout/app-shell"
+import { QuizPreviewDialog } from "@/components/quiz-preview-dialog"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -40,10 +54,12 @@ import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Progress } from "@/components/ui/progress"
+import { Input } from "@/components/ui/input"
 
 export const Route = createFileRoute("/teacher")({
   ssr: false,
-  beforeLoad: ({ location }) => requireAuth(location),
+  beforeLoad: ({ location }) => requireTeacher(location),
   component: TeacherPage,
   head: () => ({ meta: [{ title: "Quizzes · Slate" }] }),
 })
@@ -63,8 +79,21 @@ function optionLetter(index: number): string {
   return String.fromCharCode(65 + index)
 }
 
+export function draftCustomId(id: string | undefined): string {
+  return id ?? ""
+}
+
+export function displayDraftTitle(title: string): string {
+  return title || "Untitled draft"
+}
+
+export function draftDeleteLabel(title: string): string {
+  return title || "draft"
+}
+
 function TeacherPage() {
   const [tab, setTab] = useState("create")
+  const [draftSeed, setDraftSeed] = useState<ExamDraft | null>(null)
 
   return (
     <AppShell
@@ -75,18 +104,35 @@ function TeacherPage() {
           <TabsList>
             <TabsTrigger value="create">Create</TabsTrigger>
             <TabsTrigger value="manage">Manage</TabsTrigger>
+            <TabsTrigger value="analytics">Analytics</TabsTrigger>
             <TabsTrigger value="submissions">Submissions</TabsTrigger>
           </TabsList>
         </Tabs>
       }
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-        <Tabs value={tab} onValueChange={(value) => setTab(value)}>
+        <TeacherPulse />
+        <Tabs value={tab}>
           <TabsContent value="create">
-            <QuizBuilder onPublished={() => setTab("manage")} />
+            <QuizBuilder
+              key={draftSeed?.id ?? "new-quiz"}
+              initialDraft={draftSeed}
+              onPublished={() => {
+                setDraftSeed(null)
+                setTab("manage")
+              }}
+            />
           </TabsContent>
           <TabsContent value="manage">
-            <ExamManager />
+            <ExamManager
+              onDuplicate={(draft) => {
+                setDraftSeed(draft)
+                setTab("create")
+              }}
+            />
+          </TabsContent>
+          <TabsContent value="analytics">
+            <AnalyticsOverview />
           </TabsContent>
           <TabsContent value="submissions">
             <SubmissionsPanel />
@@ -108,13 +154,72 @@ function windowBadge(meta: ExamMeta): { label: string; variant: "default" | "sec
   return { label: "open", variant: "default" }
 }
 
-function ExamManager() {
+function TeacherPulse() {
+  const classroom = useSelectedClassroom()
+  const history = useBoardHistory()
+  const latestRoom = classroom?.active_room_id
+    ? history.find((entry) => entry.room_id === classroom.active_room_id)
+    : history[0]
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Card size="sm">
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <CardDescription>Current class</CardDescription>
+          <UsersIcon className="size-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <p className="truncate text-sm font-semibold">{classroom?.name ?? "No class selected"}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {classroom ? `${classroom.members.length} roster members` : "Create one from the dashboard"}
+          </p>
+        </CardContent>
+      </Card>
+      <Card size="sm">
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <CardDescription>Live session</CardDescription>
+          <RadioIcon className="size-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{classroom?.active_room_id ?? "Not started"}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {latestRoom ? `${latestRoom.visits} local visit${latestRoom.visits === 1 ? "" : "s"}` : "Board metadata is local"}
+            </p>
+          </div>
+          <Badge variant={classroom?.active_room_id ? "default" : "secondary"}>
+            {classroom?.active_room_id ? "ready" : "idle"}
+          </Badge>
+        </CardContent>
+      </Card>
+      <Card size="sm">
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <CardDescription>Roster sync</CardDescription>
+          <Badge variant="outline">local</Badge>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm font-semibold">{classroom ? "Available" : "Waiting"}</p>
+            <p className="truncate text-xs text-muted-foreground">Roster API is connected; live presence stays in the board.</p>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function ExamManager({ onDuplicate }: { onDuplicate: (draft: ExamDraft) => void }) {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<ExamMeta | null>(null)
+  const [previewExamId, setPreviewExamId] = useState<string | null>(null)
 
   const examsQuery = useQuery({
     queryKey: ["exams"],
     queryFn: api.listExams,
+  })
+
+  const previewQuery = useQuery({
+    queryKey: ["exam-preview", previewExamId],
+    queryFn: () => api.previewExam(previewExamId ?? ""),
+    enabled: previewExamId !== null,
   })
 
   function refresh() {
@@ -142,13 +247,39 @@ function ExamManager() {
     }
   }
 
+  async function duplicateExam(exam: ExamMeta): Promise<void> {
+    try {
+      const source = await api.duplicateQuiz({ source_id: exam.id })
+      onDuplicate({
+        id: source.id,
+        title: source.title,
+        questions: source.questions.map((question) => ({
+          question: question.question,
+          options: [...question.options],
+          answer: question.answer,
+          points: question.points,
+          feedback: question.feedback,
+        })),
+        opens_at: source.opens_at,
+        closes_at: source.closes_at,
+        duration_minutes: source.duration_minutes,
+        max_attempts: source.max_attempts,
+        allow_late: source.allow_late,
+        late_grace_minutes: source.late_grace_minutes,
+      })
+      toast.success(`Created a draft copy of "${exam.title}"`)
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "Could not duplicate quiz")
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div className="flex flex-col gap-1">
             <CardTitle>Your quizzes</CardTitle>
-            <CardDescription>Close a quiz to stop new submissions, or remove it entirely.</CardDescription>
+            <CardDescription>Preview, duplicate, close, or remove a published quiz.</CardDescription>
           </div>
           <Button
             variant="outline"
@@ -194,9 +325,10 @@ function ExamManager() {
                         : "rounded-lg border p-3"
                     }
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <button
-                        className="min-w-0 flex-1 text-left"
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Button
+                        variant="ghost"
+                        className="h-auto min-w-0 flex-1 flex-col items-start gap-0.5 px-2 py-1 text-left"
                         onClick={() =>
                           setSelected((current) => (current?.id === exam.id ? null : exam))
                         }
@@ -207,18 +339,32 @@ function ExamManager() {
                           {exam.duration_minutes ? ` · ${exam.duration_minutes} min limit` : ""}
                           {exam.closes_at ? ` · closes ${new Date(exam.closes_at).toLocaleString()}` : ""}
                         </span>
-                      </button>
-                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                      {badge.label !== "closed" ? (
-                        <Button size="sm" variant="outline" onClick={() => void closeExam(exam)}>
-                          <LockIcon data-icon="inline-start" />
-                          Close
-                        </Button>
-                      ) : null}
-                      <Button size="icon-sm" variant="ghost" aria-label={`Delete ${exam.title}`}
-                              onClick={() => void deleteExam(exam)}>
-                        <Trash2Icon />
                       </Button>
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setPreviewExamId(exam.id)}>
+                          <EyeIcon data-icon="inline-start" />
+                          Preview
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => void duplicateExam(exam)}>
+                          <CopyIcon data-icon="inline-start" />
+                          Duplicate
+                        </Button>
+                        {badge.label !== "closed" ? (
+                          <Button size="sm" variant="outline" onClick={() => void closeExam(exam)}>
+                            <LockIcon data-icon="inline-start" />
+                            Close
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Delete ${exam.title}`}
+                          onClick={() => void deleteExam(exam)}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
                     </div>
                     {selected?.id === exam.id ? <ResultsPanel examId={exam.id} /> : null}
                   </li>
@@ -228,7 +374,198 @@ function ExamManager() {
           )}
         </CardContent>
       </Card>
+      <QuizPreviewDialog
+        open={previewExamId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewExamId(null)
+        }}
+        title={previewQuery.data?.title ?? "Quiz preview"}
+        questions={previewQuery.data?.questions ?? []}
+        loading={previewQuery.isPending}
+        error={previewQuery.isError ? "This quiz preview is unavailable. Check the API and try again." : undefined}
+      />
     </div>
+  )
+}
+
+function AnalyticsOverview() {
+  const examsQuery = useQuery({
+    queryKey: ["exams"],
+    queryFn: api.listExams,
+  })
+  const focusExam = examsQuery.data?.[0]
+  const resultsQuery = useQuery({
+    queryKey: ["exam-results", focusExam?.id],
+    queryFn: () => api.examResults(focusExam?.id ?? ""),
+    enabled: Boolean(focusExam),
+    refetchInterval: 15_000,
+  })
+
+  if (examsQuery.isPending || (focusExam && resultsQuery.isPending)) {
+    return (
+      <div className="grid gap-4 md:grid-cols-2">
+        {[0, 1, 2, 3].map((index) => <Skeleton key={index} className="h-32 rounded-xl" />)}
+      </div>
+    )
+  }
+
+  if (examsQuery.isError) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>Analytics unavailable</EmptyTitle>
+          <EmptyDescription>Load the exam API to build a class snapshot.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  if (!focusExam) {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>Nothing to analyze yet</EmptyTitle>
+          <EmptyDescription>Publish a quiz and student results will appear here.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  if (resultsQuery.isError || !resultsQuery.data) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Alert>
+          <BarChart3Icon />
+          <AlertTitle>Quiz catalog is ready, results are not</AlertTitle>
+          <AlertDescription>
+            Analytics uses the existing exam-results endpoint. It may be unavailable on a standby node or without teacher access.
+          </AlertDescription>
+        </Alert>
+        <QuestionAnalytics stats={[]} />
+      </div>
+    )
+  }
+
+  const results = resultsQuery.data
+  const average = results.average_pct ?? 0
+  const openCount = examsQuery.data.filter((exam) => windowBadge(exam).label === "open").length
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <AnalyticsMetric icon={<FilePlus2Icon />} label="Published" value={String(examsQuery.data.length)} detail={`${openCount} open now`} />
+        <AnalyticsMetric icon={<BarChart3Icon />} label="Latest average" value={`${average}%`} detail={focusExam.title} />
+        <AnalyticsMetric icon={<FilePenLineIcon />} label="Submissions" value={String(results.count)} detail="Latest published quiz" />
+        <AnalyticsMetric icon={<PlayIcon />} label="Latest quiz" value={`${focusExam.question_count}`} detail="questions" />
+      </div>
+
+      <Card>
+        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+          <div>
+            <CardTitle>Class performance snapshot</CardTitle>
+            <CardDescription>Live results for {focusExam.title}; refreshes every 15 seconds.</CardDescription>
+          </div>
+          <Button size="sm" variant="outline" nativeButton={false} render={<Link to="/teacher" />}>
+            Manage quizzes
+          </Button>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-medium">Average score</p>
+              <span className="text-sm tabular-nums text-muted-foreground">{average}%</span>
+            </div>
+            <Progress value={average} />
+          </div>
+          {results.submissions.length === 0 ? (
+            <Empty className="min-h-40 border border-dashed">
+              <EmptyHeader>
+                <EmptyTitle>Waiting for the first submission</EmptyTitle>
+                <EmptyDescription>When learners submit, their scores will be summarized here.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Learner</TableHead>
+                  <TableHead className="text-right">Score</TableHead>
+                  <TableHead className="text-right">Percent</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {results.submissions.slice(0, 5).map((row) => (
+                  <TableRow key={row.student_id}>
+                    <TableCell className="font-medium">{row.student_name || row.student_id}</TableCell>
+                    <TableCell className="text-right">{row.score}/{row.total}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {row.total > 0 ? `${Math.round((row.score / row.total) * 100)}%` : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <QuestionAnalytics stats={results.question_stats} />
+    </div>
+  )
+}
+
+function AnalyticsMetric({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <Card size="sm">
+      <CardHeader className="flex-row items-start justify-between space-y-0">
+        <CardDescription>{label}</CardDescription>
+        <span className="text-muted-foreground [&_svg]:size-4">{icon}</span>
+      </CardHeader>
+      <CardContent>
+        <p className="text-xl font-semibold tracking-tight">{value}</p>
+        <p className="truncate text-xs text-muted-foreground">{detail}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function QuestionAnalytics({ stats }: { stats: QuestionStats[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Question analytics</CardTitle>
+        <CardDescription>See where learners are succeeding or getting stuck on the latest quiz.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {stats.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Question-level analytics will appear after the first submission.</p>
+        ) : stats.map((stat) => (
+          <div key={stat.index} className="flex flex-col gap-2 rounded-lg border p-3">
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 text-sm font-medium">{stat.index + 1}. {stat.question}</p>
+              <Badge variant={stat.correct_pct !== null && stat.correct_pct < 50 ? "destructive" : "secondary"}>
+                {stat.correct_pct === null ? "no answers" : `${stat.correct_pct}% correct`}
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span>{stat.correct}/{stat.answered} correct</span>
+              <span>{stat.answered} answered</span>
+            </div>
+            <Progress value={stat.correct_pct ?? 0} />
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -325,11 +662,41 @@ function downloadResultsCsv(results: ExamResultsResponse): void {
   URL.revokeObjectURL(url)
 }
 
-function QuizBuilder({ onPublished }: { onPublished: () => void }) {
+function QuizBuilder({
+  initialDraft,
+  onPublished,
+}: {
+  initialDraft: ExamDraft | null
+  onPublished: () => void
+}) {
   const queryClient = useQueryClient()
+  const drafts = useQuizDrafts()
+  const questionBank = useQuestionBank()
+  const serverDraftsQuery = useQuery({
+    queryKey: ["quiz-drafts"],
+    queryFn: api.listQuizDrafts,
+    retry: false,
+  })
   const [title, setTitle] = useState("")
   const [customId, setCustomId] = useState("")
   const [questions, setQuestions] = useState<BuilderQuestion[]>(() => [blankQuestion()])
+  const [draftId, setDraftId] = useState<string | undefined>(undefined)
+  const [serverDraftId, setServerDraftId] = useState<string | undefined>(initialDraft?.id)
+  const [previewOpen, setPreviewOpen] = useState(false)
+
+  useEffect(() => {
+    if (!initialDraft) return
+    setTitle(initialDraft.title)
+    setCustomId(initialDraft.id ?? "")
+    setServerDraftId(initialDraft.id)
+    setQuestions(
+      initialDraft.questions.map((question, index) => ({
+        ...question,
+        options: [...question.options],
+        key: `seed-${index}-${Date.now()}`,
+      })),
+    )
+  }, [initialDraft])
 
   function patchQuestion(key: string, patch: Partial<BuilderQuestion>) {
     setQuestions((current) =>
@@ -361,27 +728,132 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
     )
   }
 
+  function buildDraft(): ExamDraft {
+    return {
+      id: customId.trim() || undefined,
+      title: title.trim(),
+      questions: questions.map(({ question, options, answer, points, feedback }) => ({
+        question: question.trim(),
+        options: options.map((option) => option.trim()),
+        answer,
+        points,
+        feedback: feedback?.trim() || undefined,
+      })),
+    }
+  }
+
+  async function saveDraft(): Promise<void> {
+    const nextDraft = {
+      ...buildDraft(),
+      title: title.trim() || "Untitled draft",
+    }
+    const saved = saveQuizDraft(nextDraft, draftId)
+    setDraftId(saved.draft_id)
+    try {
+      let synced: QuizDraft
+      if (serverDraftId) {
+        try {
+          synced = await api.updateQuizDraft(serverDraftId, nextDraft)
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 404) throw error
+          synced = await api.createQuizDraft(nextDraft)
+        }
+      } else {
+        synced = await api.createQuizDraft(nextDraft)
+      }
+      setServerDraftId(synced.id)
+      void queryClient.invalidateQueries({ queryKey: ["quiz-drafts"] })
+      toast.success("Draft saved", { description: "Synced to your teacher workspace." })
+    } catch (error) {
+      toast.warning("Draft saved locally", {
+        description: error instanceof ApiError ? error.message : "The server could not be reached.",
+      })
+    }
+  }
+
+  function loadDraft(draft: ExamDraft & { draft_id: string }): void {
+    setDraftId(draft.draft_id)
+    setServerDraftId(undefined)
+    setTitle(draft.title)
+    setCustomId(draftCustomId(draft.id))
+    setQuestions(
+      draft.questions.map((question, index) => ({
+        ...question,
+        options: [...question.options],
+        key: `saved-${index}-${Date.now()}`,
+      })),
+    )
+    toast.info("Draft loaded")
+  }
+
+  function loadServerDraft(draft: QuizDraft): void {
+    setDraftId(undefined)
+    setServerDraftId(draft.id)
+    setTitle(draft.title)
+    setCustomId(draft.id)
+    setQuestions(
+      draft.questions.map((question, index) => ({
+        ...question,
+        options: [...question.options],
+        key: `server-${index}-${Date.now()}`,
+      })),
+    )
+    toast.info("Server draft loaded")
+  }
+
+  function saveQuestion(question: BuilderQuestion): void {
+    if (!question.question.trim() || question.options.filter((option) => option.trim()).length < 2) {
+      toast.error("Add a prompt and two options before saving to the bank")
+      return
+    }
+    saveQuestionToBank({
+      question: question.question.trim(),
+      options: question.options.map((option) => option.trim()),
+      answer: question.answer,
+      points: question.points,
+      feedback: question.feedback?.trim() || undefined,
+    })
+    toast.success("Question saved to the bank")
+  }
+
+  function useBankQuestion(question: typeof questionBank[number]): void {
+    setQuestions((current) => [
+      ...current,
+      { ...question, options: [...question.options], key: `bank-${question.id}-${Date.now()}` },
+    ])
+    toast.info("Question added to this quiz")
+  }
+
   const publishMutation = useMutation({
     mutationFn: async () => {
-      const draft = {
-        id: customId.trim() || undefined,
-        title: title.trim(),
-        questions: questions.map(({ question, options, answer }) => ({
-          question: question.trim(),
-          options: options.map((option) => option.trim()),
-          answer,
-        })),
+      const nextDraft = { ...buildDraft(), title: title.trim() }
+      let draftIdToPublish = serverDraftId
+      if (serverDraftId) {
+        try {
+          await api.updateQuizDraft(serverDraftId, nextDraft)
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 404) throw error
+          const created = await api.createQuizDraft(nextDraft)
+          setServerDraftId(created.id)
+          draftIdToPublish = created.id
+        }
+        if (!draftIdToPublish) throw new Error("draft id is required to publish")
+        return api.publishQuizDraft(draftIdToPublish)
       }
-      return api.createExam(draft)
+      const created = await api.createQuizDraft(nextDraft)
+      setServerDraftId(created.id)
+      return api.publishQuizDraft(created.id)
     },
     onSuccess: (created) => {
       toast.success(`Published "${created.title}"`, {
         description: `${created.question_count} questions · id ${created.id}`,
       })
       void queryClient.invalidateQueries({ queryKey: ["exams"] })
+      void queryClient.invalidateQueries({ queryKey: ["quiz-drafts"] })
       setTitle("")
       setCustomId("")
       setQuestions([blankQuestion()])
+      setDraftId(undefined)
       onPublished()
     },
     onError: (error) => {
@@ -443,6 +915,80 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
         </CardContent>
       </Card>
 
+      <Card size="sm">
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FilePenLineIcon data-icon="inline-start" />
+              Local drafts
+            </CardTitle>
+            <CardDescription>Save locally for quick recovery, or sync the draft to your teacher workspace.</CardDescription>
+          </div>
+          <Badge variant="secondary">{drafts.length}</Badge>
+        </CardHeader>
+        {drafts.length > 0 ? (
+          <CardContent className="flex flex-col gap-2">
+            {drafts.slice(0, 3).map((draft) => (
+              <div key={draft.draft_id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{displayDraftTitle(draft.title)}</p>
+                  <p className="text-xs text-muted-foreground">Updated {new Date(draft.updated_at).toLocaleString()}</p>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" variant="outline" onClick={() => loadDraft(draft)}>
+                    Load
+                  </Button>
+                  <Button size="icon-sm" variant="ghost" aria-label={`Delete ${draftDeleteLabel(draft.title)}`} onClick={() => removeQuizDraft(draft.draft_id)}>
+                    <Trash2Icon />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        ) : null}
+        {serverDraftsQuery.data && serverDraftsQuery.data.length > 0 ? (
+          <CardContent className="border-t pt-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Server drafts</p>
+            <div className="flex flex-wrap gap-2">
+              {serverDraftsQuery.data.slice(0, 6).map((draft) => (
+                <Button key={draft.id} size="sm" variant="outline" onClick={() => loadServerDraft(draft)}>
+                  {draft.title}
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+        ) : null}
+      </Card>
+
+      <Card size="sm">
+        <CardHeader className="flex-row items-center justify-between space-y-0">
+          <div className="flex min-w-0 flex-col gap-1">
+            <CardTitle className="text-sm">Question bank</CardTitle>
+            <CardDescription>Reuse strong questions across quizzes in this browser.</CardDescription>
+          </div>
+          <Badge variant="secondary">{questionBank.length}</Badge>
+        </CardHeader>
+        {questionBank.length > 0 ? (
+          <CardContent className="flex flex-col gap-2">
+            {questionBank.slice(0, 6).map((question) => (
+              <div key={question.id} className="flex items-center justify-between gap-2 rounded-lg border p-2">
+                <p className="min-w-0 truncate text-sm">{question.question}</p>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button size="sm" variant="outline" onClick={() => useBankQuestion(question)}>Use</Button>
+                  <Button size="icon-sm" variant="ghost" aria-label={`Delete ${question.question}`} onClick={() => removeQuestionFromBank(question.id)}>
+                    <Trash2Icon />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        ) : (
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Save any completed question here to reuse it later.</p>
+          </CardContent>
+        )}
+      </Card>
+
       {questions.map((question, index) => (
         <Card key={question.key}>
           <CardHeader className="flex-row items-start justify-between space-y-0">
@@ -462,6 +1008,10 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
                 <Trash2Icon />
               </Button>
             ) : null}
+            <Button size="sm" variant="outline" onClick={() => saveQuestion(question)}>
+              <SaveIcon data-icon="inline-start" />
+              Bank
+            </Button>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <Field>
@@ -524,15 +1074,47 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
                 Add option
               </Button>
             ) : null}
+            <FieldGroup className="grid gap-4 sm:grid-cols-[8rem_minmax(0,1fr)]">
+              <Field>
+                <FieldLabel htmlFor={`points-${question.key}`}>Points</FieldLabel>
+                <Input
+                  id={`points-${question.key}`}
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={question.points ?? 1}
+                  onChange={(event) => patchQuestion(question.key, { points: Number(event.target.value) || 0 })}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`feedback-${question.key}`}>Feedback (optional)</FieldLabel>
+                <Textarea
+                  id={`feedback-${question.key}`}
+                  placeholder="Explain why the answer is correct."
+                  value={question.feedback ?? ""}
+                  onChange={(event) => patchQuestion(question.key, { feedback: event.target.value })}
+                />
+              </Field>
+            </FieldGroup>
           </CardContent>
         </Card>
       ))}
 
-      <div className="flex items-center justify-between gap-3">
-        <Button variant="outline" onClick={() => setQuestions((current) => [...current, blankQuestion()])}>
-          <PlusIcon data-icon="inline-start" />
-          Add question
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setQuestions((current) => [...current, blankQuestion()])}>
+            <PlusIcon data-icon="inline-start" />
+            Add question
+          </Button>
+          <Button variant="outline" onClick={() => void saveDraft()}>
+            <SaveIcon data-icon="inline-start" />
+            Save draft
+          </Button>
+          <Button variant="ghost" onClick={() => setPreviewOpen(true)}>
+            <EyeIcon data-icon="inline-start" />
+            Preview
+          </Button>
+        </div>
         <Button disabled={!canPublish} onClick={() => publishMutation.mutate()}>
           {publishMutation.isPending ? (
             <>
@@ -547,6 +1129,12 @@ function QuizBuilder({ onPublished }: { onPublished: () => void }) {
           )}
         </Button>
       </div>
+      <QuizPreviewDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        title={title}
+        questions={questions}
+      />
     </div>
   )
 }

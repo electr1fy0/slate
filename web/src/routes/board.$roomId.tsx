@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import {
   CheckIcon,
   CopyIcon,
+  DownloadIcon,
   RefreshCwIcon,
   WifiOffIcon,
 } from "lucide-react"
@@ -16,6 +17,7 @@ import { normaliseRoomCode } from "@/lib/room-code"
 import { rememberRoom } from "@/lib/recent-rooms"
 import { requireAuth } from "@/lib/guard"
 import { useAuth } from "@/lib/auth"
+import { api } from "@/lib/api"
 import type { BoardElement, ClientMessage } from "@/lib/types"
 import { useBoardSync } from "@/hooks/use-board-sync"
 import { Badge } from "@/components/ui/badge"
@@ -36,7 +38,8 @@ export const Route = createFileRoute("/board/$roomId")({
 const PERMISSION_KEY = "slate.board-perms"
 const CURSOR_THROTTLE_MS = 40
 
-function loadStudentDrawPermission(roomId: string): boolean {  try {
+function loadStudentDrawPermission(roomId: string): boolean {
+  try {
     return JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")[roomId] === true
   } catch {
     return false
@@ -60,7 +63,7 @@ function BoardPage() {
   const [copied, setCopied] = useState(false)
   const [studentDraw, setStudentDraw] = useState(false)
 
-  const canvasHandle = useRef<BoardCanvasHandle>({ mergeRemote: undefined })
+  const canvasHandle = useRef<BoardCanvasHandle>({ mergeRemote: undefined, getSnapshot: undefined })
   const senderRef = useRef<((message: ClientMessage) => void) | null>(null)
 
   useEffect(() => {
@@ -113,6 +116,37 @@ function BoardPage() {
     } catch {
       toast.error("Couldn't copy the room code")
     }
+  }
+
+  async function exportBoard(): Promise<void> {
+    const elements = canvasHandle.current.getSnapshot?.() ?? []
+    let payload: {
+      format: string
+      version: number
+      room_id: string
+      exported_at: string
+      elements: BoardElement[]
+    } = {
+      format: "slate-board",
+      version: 1,
+      room_id: roomId,
+      exported_at: new Date().toISOString(),
+      elements,
+    }
+    try {
+      const persisted = await api.boardExport(roomId)
+      payload = { ...payload, ...persisted, exported_at: new Date().toISOString() }
+    } catch {
+      // The live canvas remains a useful export when the persistence API is unavailable.
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `slate-board-${roomId}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast.success("Board snapshot exported")
   }
 
   if (!roomId) {
@@ -175,6 +209,17 @@ function BoardPage() {
               }
             />
             <TooltipContent>Copy room code</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button variant="outline" size="sm" onClick={() => void exportBoard()}>
+                  <DownloadIcon data-icon="inline-start" />
+                  Export
+                </Button>
+              }
+            />
+            <TooltipContent>Download a portable board snapshot</TooltipContent>
           </Tooltip>
           <div className="flex items-center gap-1.5">
             <PresencePanel

@@ -1,6 +1,6 @@
 import { redirect } from "@tanstack/react-router"
 
-import { isAuthenticated } from "./auth"
+import { getAuth, isAuthenticated } from "./auth"
 
 /**
  * Route guard for beforeLoad. Guarded routes run with `ssr: false`, so this
@@ -13,5 +13,12 @@ export function requireAuth(location: { href: string }): void {
       search: { redirect: location.href },
       replace: true,
     })
+  }
+}
+
+export function requireTeacher(location: { href: string }): void {
+  requireAuth(location)
+  if (getAuth().user?.role !== "teacher") {
+    throw redirect({ to: "/", replace: true })
   }
 }

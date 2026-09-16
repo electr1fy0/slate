@@ -8,15 +8,18 @@ import {
   CheckCircle2Icon,
   CheckIcon,
   ClockIcon,
+  CloudOffIcon,
+  CloudUploadIcon,
   ListChecksIcon,
   SendIcon,
   XCircleIcon,
 } from "lucide-react"
 
 import { api, ApiError } from "@/lib/api"
-import type { ResultResponse } from "@/lib/types"
+import type { AttemptSnapshot, ResultResponse } from "@/lib/types"
 import { requireAuth } from "@/lib/guard"
 import { useMounted } from "@/hooks/use-mounted"
+import { useOnlineStatus } from "@/hooks/use-online-status"
 import { AppShell } from "@/components/layout/app-shell"
 import {
   AlertDialog,
@@ -40,6 +43,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -62,7 +66,7 @@ function draftKey(examId: string): string {
   return `slate.quiz.${examId}`
 }
 
-function loadDraftAnswers(examId: string): Partial<Record<number, number>> {
+export function loadDraftAnswers(examId: string): Partial<Record<number, number>> {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(draftKey(examId)) ?? "{}")
     if (typeof parsed !== "object" || parsed === null) return {}
@@ -75,6 +79,22 @@ function loadDraftAnswers(examId: string): Partial<Record<number, number>> {
   } catch {
     return {}
   }
+}
+
+export function serialiseAnswerMap(answers: Partial<Record<number, number>>): Record<string, number> {
+  const serialised: Record<string, number> = {}
+  for (const [index, choice] of Object.entries(answers)) {
+    if (typeof choice === "number") serialised[index] = choice
+  }
+  return serialised
+}
+
+export function saveFailureStatus(online: boolean): "error" | "offline" {
+  return online ? "error" : "offline"
+}
+
+export function applyRadioChoice(value: unknown, onChoice: (choice: number) => void): void {
+  if (typeof value === "string") onChoice(Number(value))
 }
 
 function saveDraftAnswers(examId: string, answers: Partial<Record<number, number>>): void {
@@ -173,7 +193,7 @@ function ResultView({ result }: { result: ResultResponse }) {
               </Badge>
             ) : null}
             <div className="mt-2 flex gap-2">
-              <Button render={<Link to="/" />}>Back home</Button>
+              <Button nativeButton={false} render={<Link to="/" />}>Back home</Button>
             </div>
           </CardContent>
         </Card>
@@ -275,7 +295,7 @@ function RunnerGate({ examId }: { examId: string }) {
                     : "It may have been unpublished, or the link is stale."}
               </EmptyDescription>
             </EmptyHeader>
-            <Button variant="outline" render={<Link to="/" />}>
+            <Button variant="outline" nativeButton={false} render={<Link to="/" />}>
               <ArrowLeftIcon data-icon="inline-start" />
               Back home
             </Button>
@@ -288,10 +308,14 @@ function RunnerGate({ examId }: { examId: string }) {
   const exam = examQuery.data
   return (
     <ExamRunner
-      key={exam.id}
-      examId={exam.id}
+      // Keep submission identity tied to the URL that was authenticated and
+      // fetched. Older API responses omitted `id`, which produced
+      // /exam/undefined/submit even though the exam loaded successfully.
+      key={examId}
+      examId={examId}
       title={exam.title}
       questions={exam.questions}
+      attempt={exam.attempt}
       deadlineMs={exam.deadline_ms}
     />
   )
@@ -301,21 +325,31 @@ function ExamRunner({
   examId,
   title,
   questions,
+  attempt,
   deadlineMs,
 }: {
   examId: string
   title: string
   questions: { index: number; question: string; options: string[] }[]
+  attempt?: AttemptSnapshot
   deadlineMs?: number
 }) {
   const queryClient = useQueryClient()
   const [position, setPosition] = useState(0)
-  const [answers, setAnswers] = useState<Partial<Record<number, number>>>(() =>
-    loadDraftAnswers(examId),
-  )
+  const [answers, setAnswers] = useState<Partial<Record<number, number>>>(() => ({
+    ...attempt?.answers,
+    ...loadDraftAnswers(examId),
+  }))
+  const online = useOnlineStatus()
   const requestIdRef = useRef<string | null>(loadRequestId(examId))
-  const startedAt = useMemo(() => Date.now(), [])
+  const saveRequestIdRef = useRef<string | null>(null)
+  const serverVersionRef = useRef(attempt?.version ?? 0)
+  const startedAt = useMemo(() => attempt?.started_at ?? Date.now(), [attempt?.started_at])
   const [nowTick, setNowTick] = useState(Date.now())
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
+  const [saveStatus, setSaveStatus] = useState<"saved" | "pending" | "offline" | "error">(
+    attempt?.version ? "saved" : "pending",
+  )
   const autoSubmittedRef = useRef(false)
 
   useEffect(() => {
@@ -326,6 +360,14 @@ function ExamRunner({
   function updateAnswers(next: Partial<Record<number, number>>) {
     setAnswers(next)
     saveDraftAnswers(examId, next)
+    setDraftSavedAt(Date.now())
+    setSaveStatus(online ? "pending" : "offline")
+  }
+
+  function nextSaveRequestId(): string {
+    const id = crypto.randomUUID()
+    saveRequestIdRef.current = id
+    return id
   }
 
   function currentRequestId(): string {
@@ -338,21 +380,62 @@ function ExamRunner({
     return requestId
   }
 
-  function serialiseAnswers(): Record<string, number> {
-    const serialised: Record<string, number> = {}
-    for (const [index, choice] of Object.entries(answers)) {
-      if (typeof choice === "number") serialised[index] = choice
-    }
-    return serialised
-  }
+  const saveMutation = useMutation({
+    mutationFn: (nextAnswers: Record<string, number>) => api.saveAttempt(examId, {
+      answers: nextAnswers,
+      expected_version: serverVersionRef.current,
+      request_id: nextSaveRequestId(),
+    }),
+    onSuccess: (saved) => {
+      serverVersionRef.current = saved.version
+      setSaveStatus("saved")
+      setDraftSavedAt(Date.now())
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        try {
+          const latest = await api.getAttempt(examId)
+          serverVersionRef.current = latest.version
+          setAnswers((current) => ({
+            ...latest.answers,
+            ...current,
+          }))
+          setSaveStatus("error")
+          toast.error("This quiz changed in another tab. Your local answers were kept for review.")
+          return
+        } catch {
+          // Fall through to the generic retryable state.
+        }
+      }
+      setSaveStatus(saveFailureStatus(online))
+    },
+  })
+
+  useEffect(() => {
+    if (!online || Object.keys(answers).length === 0 || submitMutation.isPending) return
+    const timer = window.setTimeout(() => {
+      saveMutation.mutate(serialiseAnswerMap(answers))
+    }, 900)
+    return () => window.clearTimeout(timer)
+  }, [answers, online])
 
   const submitMutation = useMutation({
-    mutationFn: () =>
-      api.submitAnswers(examId, {
-        answers: serialiseAnswers(),
-        request_id: currentRequestId(),
-      }),
+    mutationFn: async () => {
+      const requestId = currentRequestId()
+      const currentAnswers = serialiseAnswerMap(answers)
+      if (online) {
+        const saved = await api.saveAttempt(examId, {
+          answers: currentAnswers,
+          expected_version: serverVersionRef.current,
+          request_id: nextSaveRequestId(),
+        })
+        serverVersionRef.current = saved.version
+        return api.submitSavedAttempt(examId, requestId)
+      }
+      return api.submitAnswers(examId, { answers: currentAnswers, request_id: requestId })
+    },
     onSuccess: () => {
+      setSaveStatus("saved")
       clearDrafts(examId)
       void queryClient.refetchQueries({ queryKey: ["result", examId] })
       toast.success("Answers submitted")
@@ -394,6 +477,15 @@ function ExamRunner({
   return (
     <ResultShell title={title}>
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 pt-2">
+        {!online ? (
+          <Alert variant="destructive">
+            <CloudOffIcon />
+            <AlertDescription>
+              You’re offline. Your answers are saved on this device and will remain here until you
+              reconnect. Do not close this tab before submitting.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <Progress value={(answeredCount / total) * 100} />
 
         <Card>
@@ -404,12 +496,12 @@ function ExamRunner({
             <RadioGroup
               value={currentAnswer !== undefined ? String(currentAnswer) : null}
               onValueChange={(value) => {
-                if (typeof value === "string") {
+                applyRadioChoice(value, (choice) => {
                   updateAnswers({
                     ...answers,
-                    [current.index]: Number(value),
+                    [current.index]: choice,
                   })
-                }
+                })
               }}
               className="gap-2"
             >
@@ -487,22 +579,18 @@ function ExamRunner({
           </CardFooter>
         </Card>
 
-        <div className="flex flex-wrap items-center justify-center gap-1.5">
+        <div className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Question navigator">
           {questions.map((question, index) => (
-            <button
+            <Button
               key={question.index}
+              type="button"
+              size="icon-sm"
+              variant={index === position ? "default" : answers[question.index] !== undefined ? "secondary" : "outline"}
               onClick={() => setPosition(index)}
               aria-label={`Go to question ${index + 1}`}
-              className={
-                index === position
-                  ? "size-7 rounded-md bg-primary text-xs font-medium text-primary-foreground"
-                  : answers[question.index] !== undefined
-                    ? "size-7 rounded-md border border-primary/40 bg-primary/10 text-xs font-medium"
-                    : "size-7 rounded-md border text-xs font-medium text-muted-foreground hover:bg-muted"
-              }
             >
               {index + 1}
-            </button>
+            </Button>
           ))}
         </div>
 
@@ -514,7 +602,7 @@ function ExamRunner({
             : ""}
         </p>
 
-        <div className="flex items-center justify-center gap-2 pb-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-center gap-2 pb-2 text-xs text-muted-foreground">
           <ClockIcon className="size-3.5" />
           {remainingMs !== null ? (
             <Badge
@@ -529,7 +617,19 @@ function ExamRunner({
             </Badge>
           )}
           <Badge variant="secondary">{answeredCount}/{total} answered</Badge>
-          <span>Answers are saved on this device as you go.</span>
+          <Badge variant={!online || saveStatus === "error" ? "destructive" : "outline"}>
+            {online ? <CloudUploadIcon data-icon="inline-start" /> : <CloudOffIcon data-icon="inline-start" />}
+            {online
+              ? saveStatus === "pending"
+                ? "Saving…"
+                : saveStatus === "error"
+                  ? "Save needs retry"
+                  : "Saved to cloud"
+              : "Offline draft"}
+          </Badge>
+          <span>
+            {draftSavedAt ? `Saved locally ${new Date(draftSavedAt).toLocaleTimeString()}` : "Answers save locally as you go."}
+          </span>
         </div>
       </div>
     </ResultShell>

@@ -29,6 +29,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -66,7 +67,7 @@ function useOpsRefetch(): () => Promise<void> {
   return () => queryClient.invalidateQueries({ queryKey: ["ops-status"] })
 }
 
-function handleSliderValue(
+export function handleSliderValue(
   setter: (next: number) => void,
   fallback: number,
 ): (value: number | readonly number[]) => void {
@@ -144,12 +145,29 @@ function OpsPage() {
                 <ServerCogIcon />
               </EmptyMedia>
               <EmptyTitle>Status unavailable</EmptyTitle>
-              <EmptyDescription>Is the API running? Try `make api-dev`.</EmptyDescription>
+              <EmptyDescription>
+                Is the API running? Try `make api-dev`, then retry the health snapshot.
+              </EmptyDescription>
             </EmptyHeader>
+            <Button variant="outline" onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
+              <ActivityIcon data-icon="inline-start" />
+              Retry status
+            </Button>
           </Empty>
         ) : (
           <>
             <StatusCards status={statusQuery.data} />
+            <Alert variant={statusQuery.data.chaos.db_stall || statusQuery.data.chaos.error_pct > 0 ? "destructive" : "default"}>
+              <ServerCogIcon />
+              <AlertTitle>
+                {statusQuery.data.role === "active" ? "Serving traffic" : "Standby node"}
+              </AlertTitle>
+              <AlertDescription>
+                {statusQuery.data.role === "active"
+                  ? `${statusQuery.data.boards.active_rooms} live board room${statusQuery.data.boards.active_rooms === 1 ? "" : "s"} visible on ${regionLabel(statusQuery.data.region)}.`
+                  : "This node is read-only until it is promoted; existing session visibility remains available."}
+              </AlertDescription>
+            </Alert>
             <ChaosConsole token={adminToken} chaos={statusQuery.data.chaos} />
             <FailoverCard token={adminToken} role={statusQuery.data.role} />
           </>

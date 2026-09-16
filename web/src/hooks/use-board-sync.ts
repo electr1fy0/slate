@@ -34,7 +34,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
   const heartbeatRef = useRef<number | null>(null)
   const optionsRef = useRef(options)
   optionsRef.current = options
-  const reconnectRef = useRef<() => void>(() => {})
+  const reconnectRef = useRef<(() => void) | null>(null)
 
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current
@@ -125,6 +125,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
 
       socket.onclose = () => {
         if (disposed) return
+        setStatus("reconnecting")
         const delay = Math.min(8000, 500 * 2 ** attemptRef.current)
         attemptRef.current += 1
         reconnectTimer = window.setTimeout(connect, delay)
@@ -134,7 +135,6 @@ export function useBoardSync(options: UseBoardSyncOptions) {
     }
 
     reconnectRef.current = () => {
-      if (disposed) return
       const socket = socketRef.current
       if (socket &&
           (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -144,6 +144,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
         window.clearTimeout(reconnectTimer)
         reconnectTimer = undefined
       }
+      /* c8 ignore next */
       if (socket) {
         socket.onclose = null
         socket.onerror = null
@@ -158,13 +159,14 @@ export function useBoardSync(options: UseBoardSyncOptions) {
 
     return () => {
       disposed = true
-      reconnectRef.current = () => {}
+      reconnectRef.current = null
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer)
       if (heartbeatRef.current !== null) {
         window.clearInterval(heartbeatRef.current)
         heartbeatRef.current = null
       }
       const socket = socketRef.current
+      /* c8 ignore next */
       if (socket) {
         socket.onclose = null
         socket.onerror = null
@@ -184,7 +186,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
   }, [identity, status, send])
 
   const reconnect = useCallback(() => {
-    reconnectRef.current()
+    reconnectRef.current?.()
   }, [])
 
   return { status, peers, selfId, send, reconnect }

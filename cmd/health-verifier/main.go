@@ -14,14 +14,27 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+var (
+	loadAWSConfig = awsconfig.LoadDefaultConfig
+	startLambda   = lambda.Start
+	exit          = os.Exit
+	fatal         = func(err error) { log.Print(err); exit(1) }
+)
+
+func run() error {
 	ctx := context.Background()
 	cfg, err := control.LoadHealthVerifierConfig(os.Getenv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
+	awsCfg, err := loadAWSConfig(ctx, awsconfig.WithRegion(cfg.Region))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	verifier := control.NewHealthVerifier(
 		cfg,
@@ -29,5 +42,6 @@ func main() {
 		control.NewAWSCloudWatchMetrics(cloudwatch.NewFromConfig(awsCfg)),
 		&http.Client{},
 	)
-	lambda.Start(verifier.Handle)
+	startLambda(verifier.Handle)
+	return nil
 }

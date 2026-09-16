@@ -34,6 +34,8 @@ var (
 	ErrInvalidAdminToken      = errors.New("invalid admin token")
 )
 
+var readRandom = rand.Read
+
 // UserStore is the persistence needed by authentication. store.Store and
 // store.MemoryStore both implement it.
 type UserStore interface {
@@ -46,6 +48,7 @@ type Service struct {
 	Users    UserStore
 	Settings config.Settings
 	Now      func() time.Time
+	sign     func(*jwt.Token, []byte) (string, error)
 }
 
 func New(users UserStore, settings config.Settings) *Service {
@@ -53,6 +56,13 @@ func New(users UserStore, settings config.Settings) *Service {
 		settings.JWTAlgorithm = "HS256"
 	}
 	return &Service{Users: users, Settings: settings, Now: time.Now}
+}
+
+// SetSigner replaces the token signer. Applications normally leave this nil;
+// the hook is useful to embedders that need to supply a signing service and to
+// deterministic transport tests that exercise token-issuance failures.
+func (s *Service) SetSigner(signer func(*jwt.Token, []byte) (string, error)) {
+	s.sign = signer
 }
 func (s *Service) now() time.Time {
 	if s.Now != nil {
@@ -82,7 +92,7 @@ func VerifyPassword(password, digest string) bool {
 
 func randomHexID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := readRandom(b[:]); err != nil {
 		return fmt.Sprintf("%032x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
@@ -174,7 +184,20 @@ func (s *Service) EncodeToken(user *model.User, typ string, ttl time.Duration) (
 	now := s.now().Unix()
 	claims := jwt.MapClaims{"sub": user.UserID, "role": user.Role, "name": user.Name, "typ": typ, "iat": now, "exp": now + int64(ttl/time.Second), "jti": randomHexID()}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	if s.sign != nil {
+		return s.sign(token, []byte(s.Settings.JWTSecret))
+	}
 	return token.SignedString([]byte(s.Settings.JWTSecret))
+}
+
+func (s *Service) tokenKey(method jwt.SigningMethod) (any, error) {
+	if method.Alg() != s.Settings.JWTAlgorithm {
+		return nil, fmt.Errorf("unexpected signing algorithm")
+	}
+	if method != jwt.SigningMethodHS256 {
+		return nil, fmt.Errorf("unexpected signing method")
+	}
+	return []byte(s.Settings.JWTSecret), nil
 }
 
 func (s *Service) IssueTokens(user *model.User) (map[string]any, error) {
@@ -191,17 +214,15 @@ func (s *Service) IssueTokens(user *model.User) (map[string]any, error) {
 
 func (s *Service) DecodeToken(raw, expectedType string) (jwt.MapClaims, error) {
 	parsed, err := jwt.ParseWithClaims(raw, jwt.MapClaims{}, func(t *jwt.Token) (any, error) {
-		if t.Method.Alg() != s.Settings.JWTAlgorithm {
-			return nil, fmt.Errorf("unexpected signing algorithm")
-		}
-		if t.Method != jwt.SigningMethodHS256 {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return []byte(s.Settings.JWTSecret), nil
+		return s.tokenKey(t.Method)
 	}, jwt.WithValidMethods([]string{s.Settings.JWTAlgorithm}))
 	if err != nil {
 		return nil, err
 	}
+	return decodeClaims(parsed, expectedType)
+}
+
+func decodeClaims(parsed *jwt.Token, expectedType string) (jwt.MapClaims, error) {
 	claims, ok := parsed.Claims.(jwt.MapClaims)
 	if !ok || !parsed.Valid {
 		return nil, ErrInvalidSession

@@ -5,9 +5,14 @@ export interface ExamMeta {
   title: string
   question_count: number
   created_at: string
+  owner_id?: string
+  status?: "draft" | "published" | string
   opens_at?: string
   closes_at?: string
   duration_minutes?: number
+  max_attempts?: number
+  allow_late?: boolean
+  late_grace_minutes?: number
 }
 
 export function examState(meta: Pick<ExamMeta, "opens_at" | "closes_at">,
@@ -21,6 +26,9 @@ export interface ExamQuestion {
   index: number
   question: string
   options: string[]
+  answer?: number
+  points?: number
+  feedback?: string
 }
 
 export interface Exam {
@@ -28,6 +36,7 @@ export interface Exam {
   title: string
   question_count: number
   questions: ExamQuestion[]
+  attempt?: AttemptSnapshot
   attempt_started_at?: number
   deadline_ms?: number
 }
@@ -36,12 +45,48 @@ export interface QuestionDraft {
   question: string
   options: string[]
   answer: number
+  points?: number
+  feedback?: string
 }
 
 export interface ExamDraft {
   id?: string
   title: string
   questions: QuestionDraft[]
+  opens_at?: string
+  closes_at?: string
+  duration_minutes?: number
+  max_attempts?: number
+  allow_late?: boolean
+  late_grace_minutes?: number
+}
+
+export interface QuizDraft extends ExamDraft {
+  id: string
+  owner_id: string
+  status: "draft" | "published" | string
+  question_count: number
+  created_at: string
+  updated_at: string
+  published_at?: string
+}
+
+export interface AttemptSnapshot {
+  answers: Record<string, number>
+  version: number
+  started_at?: number
+  updated_at?: number
+  attempt_number?: number
+  deadline_ms?: number
+}
+
+export interface AttemptSaveResult {
+  status: "saved" | "duplicate"
+  request_id: string
+  answers: Record<string, number>
+  version: number
+  started_at?: number
+  deadline_ms?: number
 }
 
 export interface SubmitResult {
@@ -50,6 +95,7 @@ export interface SubmitResult {
   version: number
   score: number
   total: number
+  attempt_number?: number
 }
 
 export interface Submission {
@@ -69,6 +115,8 @@ export interface ReviewQuestion {
   chosen: number | null
   correct_answer: number | null
   was_correct: boolean
+  points?: number
+  feedback?: string
 }
 
 export interface ResultResponse {
@@ -95,6 +143,16 @@ export interface ExamResultsResponse {
   count: number
   average_pct: number | null
   submissions: ExamResultRow[]
+  question_stats: QuestionStats[]
+}
+
+export interface QuestionStats {
+  index: number
+  question: string
+  answered: number
+  correct: number
+  correct_pct: number | null
+  option_counts: number[]
 }
 
 export interface AdminStatus {

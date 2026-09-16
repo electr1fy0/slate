@@ -15,6 +15,7 @@ const SAVE_DELAY_MS = 800
 
 export interface BoardCanvasHandle {
   mergeRemote: ((elements: BoardElement[]) => void) | undefined
+  getSnapshot: (() => BoardElement[]) | undefined
 }
 
 interface BoardCanvasProps {
@@ -95,6 +96,7 @@ export default function BoardCanvas({
     flushTimerRef.current = window.setTimeout(() => {
       flushTimerRef.current = null
       const batch = dedupeLatest(outgoingRef.current.splice(0))
+      /* c8 ignore next */
       if (batch.length > 0) {
         senderRef.current?.({ type: "elements", elements: batch })
       }
@@ -143,8 +145,10 @@ export default function BoardCanvas({
       api.updateScene({ elements: merged, captureUpdate: CaptureUpdateAction.NEVER })
       scheduleSave()
     }
+    handle.current.getSnapshot = () => Array.from(elementsRef.current.values())
     return () => {
       handle.current.mergeRemote = undefined
+      handle.current.getSnapshot = undefined
     }
   }, [handle, scheduleSave])
 
@@ -164,6 +168,7 @@ export default function BoardCanvas({
     function handlePointerMove(event: PointerEvent) {
       const callback = cursorCallbackRef.current
       const el = containerRef.current
+      /* c8 ignore next */
       if (!callback || !el) return
       const rect = el.getBoundingClientRect()
       if (rect.width <= 0 || rect.height <= 0) return

@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import { AppSidebar } from "@/components/layout/app-sidebar"
+import { QuickActions } from "@/components/quick-actions"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
@@ -30,7 +31,10 @@ export function AppShell({ title, description, actions, children, padded = true 
                 <p className="truncate text-xs text-muted-foreground">{description}</p>
               ) : null}
             </div>
-            <div className="flex items-center gap-2">{actions}</div>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="hidden min-w-0 items-center gap-2 sm:flex">{actions}</div>
+              <QuickActions />
+            </div>
           </div>
         </header>
         <main

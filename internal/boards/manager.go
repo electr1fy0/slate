@@ -1,9 +1,9 @@
 // Package boards contains the in-memory relay used by classroom boards.
 //
 // A room keeps the newest revision of each element and the currently connected
-// peers.  The manager is safe for use by several HTTP/WebSocket goroutines.
-// Board state is deliberately process-local and ephemeral, matching the
-// legacy implementation this package replaces.
+// peers. The manager is safe for use by several HTTP/WebSocket goroutines. A
+// persistence adapter can be injected for continuity across reconnects and
+// process restarts; NewManager keeps the legacy process-local behavior.
 package boards
 
 import (
@@ -29,6 +29,7 @@ const (
 	ErrorUnknownType     = "UNKNOWN_MESSAGE_TYPE"
 	ErrorBadElements     = "BAD_ELEMENTS_PAYLOAD"
 	ErrorPayloadTooLarge = "PAYLOAD_TOO_LARGE"
+	ErrorPersistence     = "PERSISTENCE_ERROR"
 )
 
 // Peer is the public representation sent in init, peer-joined, peer-left and
@@ -46,11 +47,18 @@ type room struct {
 	peerOrder    []any
 	elements     map[string]map[string]any
 	elementOrder []string
+	createdAt    time.Time
+	updatedAt    time.Time
+	version      int64
+	loaded       bool
+	loading      bool
+	loadDone     chan struct{}
 }
 
 // RoomSnapshot is a race-free copy of a room. Slices and maps in the result
 // can be safely modified by the caller.
 type RoomSnapshot struct {
+	RoomMetadata
 	Peers    []Peer
 	Elements []map[string]any
 }
@@ -60,19 +68,54 @@ type Manager struct {
 	mu    sync.RWMutex
 	rooms map[string]*room
 	now   func() time.Time
+
+	persistenceMu      sync.Mutex
+	persistence        BoardSnapshotStore
+	saveDebounce       time.Duration
+	pendingSaves       map[string]*pendingBoardSave
+	nextSaveGeneration uint64
+	persistenceErrors  map[string]error
+	persistenceWriteMu sync.Mutex
 }
 
 // NewManager constructs an empty board manager.
 func NewManager() *Manager {
-	return &Manager{rooms: make(map[string]*room), now: time.Now}
+	return NewManagerWithPersistence(nil, 0)
+}
+
+// NewManagerWithPersistence constructs a manager with optional snapshot
+// persistence. The debounce controls automatic saves after accepted element
+// batches; use SaveSnapshot or Flush for an explicit save hook.
+func NewManagerWithPersistence(store BoardSnapshotStore, debounce time.Duration) *Manager {
+	manager := &Manager{
+		rooms:             make(map[string]*room),
+		now:               time.Now,
+		pendingSaves:      make(map[string]*pendingBoardSave),
+		persistenceErrors: make(map[string]error),
+	}
+	manager.configurePersistence(store, debounce)
+	return manager
+}
+
+// SetPersistence replaces the optional store and debounce configuration. It is
+// intended for startup wiring before clients connect; pending saves from the
+// previous store are cancelled.
+func (m *Manager) SetPersistence(store BoardSnapshotStore, debounce time.Duration) {
+	if m == nil {
+		return
+	}
+	m.configurePersistence(store, debounce)
 }
 
 func (m *Manager) roomLocked(id string) *room {
 	r := m.rooms[id]
 	if r == nil {
+		now := m.nowLocked()
 		r = &room{
-			peers:    make(map[any]*Peer),
-			elements: make(map[string]map[string]any),
+			peers:     make(map[any]*Peer),
+			elements:  make(map[string]map[string]any),
+			createdAt: now,
+			updatedAt: now,
 		}
 		m.rooms[id] = r
 	}
@@ -130,8 +173,9 @@ func (m *Manager) Connect(roomID string, socket any, name, role string) string {
 			break
 		}
 	}
-	r.peers[socket] = &Peer{ID: id, Name: normaliseName(name), Role: normaliseRole(role), LastSeen: m.now()}
+	r.peers[socket] = &Peer{ID: id, Name: normaliseName(name), Role: normaliseRole(role), LastSeen: m.nowLocked()}
 	r.peerOrder = append(r.peerOrder, socket)
+	r.updatedAt = m.nowLocked()
 	return id
 }
 
@@ -175,7 +219,7 @@ func (m *Manager) Touch(roomID string, socket any) {
 	defer m.mu.Unlock()
 	if r := m.rooms[roomID]; r != nil {
 		if peer := r.peers[socket]; peer != nil {
-			peer.LastSeen = m.now()
+			peer.LastSeen = m.nowLocked()
 		}
 	}
 }
@@ -212,6 +256,7 @@ func (m *Manager) Disconnect(roomID string, socket any) *Peer {
 			break
 		}
 	}
+	r.updatedAt = m.nowLocked()
 	if len(r.peers) == 0 {
 		delete(m.rooms, roomID)
 	}
@@ -222,35 +267,23 @@ func (m *Manager) Disconnect(roomID string, socket any) *Peer {
 // unidentifiable elements are ignored. The return value counts applied items.
 func (m *Manager) Absorb(roomID string, elements []map[string]any) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	r := m.roomLocked(roomID)
 	applied := 0
 	for _, element := range elements {
-		id, ok := stringValue(element["id"])
-		if !ok || id == "" {
-			continue
+		if m.absorbElementLocked(r, element) {
+			applied++
 		}
-		version, ok := versionValue(element["version"])
-		if !ok {
-			// The default is zero, but non-numeric versions cannot be
-			// meaningfully ordered and are safer to discard.
-			continue
-		}
-		current, exists := r.elements[id]
-		if exists {
-			currentVersion, currentOK := versionValue(current["version"])
-			if !currentOK {
-				currentVersion = 0
-			}
-			if version <= currentVersion {
-				continue
-			}
-		}
-		r.elements[id] = cloneMap(element)
-		if !exists {
-			r.elementOrder = append(r.elementOrder, id)
-		}
-		applied++
+	}
+	var snapshot *BoardSnapshot
+	if applied > 0 {
+		r.version++
+		r.updatedAt = m.nowLocked()
+		exported := m.boardSnapshotLocked(roomID, r)
+		snapshot = &exported
+	}
+	m.mu.Unlock()
+	if snapshot != nil {
+		m.scheduleSnapshotSave(*snapshot)
 	}
 	return applied
 }
@@ -264,21 +297,7 @@ func (m *Manager) Snapshot(roomID string) RoomSnapshot {
 	if r == nil {
 		return RoomSnapshot{}
 	}
-	snapshot := RoomSnapshot{
-		Peers:    make([]Peer, 0, len(r.peers)),
-		Elements: make([]map[string]any, 0, len(r.elements)),
-	}
-	for _, socket := range r.peerOrder {
-		if peer := r.peers[socket]; peer != nil {
-			snapshot.Peers = append(snapshot.Peers, *clonePeer(peer))
-		}
-	}
-	for _, id := range r.elementOrder {
-		if element := r.elements[id]; element != nil {
-			snapshot.Elements = append(snapshot.Elements, cloneMap(element))
-		}
-	}
-	return snapshot
+	return m.roomSnapshotLocked(roomID, r)
 }
 
 // Peers returns peers other than exclude. It is a stable copy.
@@ -320,6 +339,14 @@ func (m *Manager) Reset() {
 	m.mu.Lock()
 	m.rooms = make(map[string]*room)
 	m.mu.Unlock()
+	m.persistenceMu.Lock()
+	for _, pending := range m.pendingSaves {
+		if pending.timer != nil {
+			pending.timer.Stop()
+		}
+	}
+	m.pendingSaves = make(map[string]*pendingBoardSave)
+	m.persistenceMu.Unlock()
 }
 
 // SetClock replaces the clock used for LastSeen. It is primarily useful for
