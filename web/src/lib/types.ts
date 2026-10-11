@@ -96,6 +96,7 @@ export interface AttemptSnapshot {
 }
 
 export interface AttemptSaveResult {
+  attempt_number?: number
   status: "saved" | "duplicate"
   request_id: string
   answers: Record<string, number>
@@ -105,12 +106,12 @@ export interface AttemptSaveResult {
 }
 
 export interface SubmitResult {
+  attempt_number?: number
   status: "committed" | "duplicate"
   request_id: string
   version: number
   score: number
   total: number
-  attempt_number?: number
   committed_at?: number
 }
 
@@ -136,6 +137,7 @@ export interface ReviewQuestion {
 }
 
 export interface ResultResponse {
+  attempt_number?: number
   status: string
   score: number
   total: number

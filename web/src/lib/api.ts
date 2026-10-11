@@ -76,23 +76,24 @@ interface TokenResponse {
   user: { user_id: string; email: string; name: string; role: "student" | "teacher" }
 }
 
-let refreshInFlight: Promise<boolean> | null = null
+let refreshInFlight: { token: string; promise: Promise<boolean> } | null = null
 
-async function refreshTokens(): Promise<boolean> {
-  refreshInFlight ??= (async () => {
-    const refreshToken = getRefreshToken()
-    if (!refreshToken) return false
+async function refreshTokens(refreshToken: string): Promise<boolean> {
+  if (refreshInFlight?.token === refreshToken) return refreshInFlight.promise
+  const promise = (async () => {
     try {
       const response = await fetch(`${BASE}/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       })
+      if (getRefreshToken() !== refreshToken) return false
       if (!response.ok) {
         clearAuth()
         return false
       }
       const tokens = (await response.json()) as TokenResponse
+      if (getRefreshToken() !== refreshToken) return false
       setAuth({
         user: tokens.user,
         accessToken: tokens.access_token,
@@ -103,10 +104,11 @@ async function refreshTokens(): Promise<boolean> {
       // Network hiccup — keep the session; the next call retries.
       return false
     } finally {
-      refreshInFlight = null
+      if (refreshInFlight?.token === refreshToken) refreshInFlight = null
     }
   })()
-  return refreshInFlight
+  refreshInFlight = { token: refreshToken, promise }
+  return promise
 }
 
 async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
@@ -120,9 +122,10 @@ async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const sessionRefreshToken = getRefreshToken()
   let response = await rawRequest(path, init)
-  if (response.status === 401 && getRefreshToken()) {
-    const refreshed = await refreshTokens()
+  if (response.status === 401 && sessionRefreshToken && getRefreshToken() === sessionRefreshToken) {
+    const refreshed = await refreshTokens(sessionRefreshToken)
     if (refreshed) response = await rawRequest(path, init)
   }
   if (!response.ok) {
@@ -285,23 +288,29 @@ export const api = {
   getAttempt: (examId: string) =>
     request<AttemptSnapshot>(`/exam/${encodeURIComponent(examId)}/attempt`),
 
+  retakeExam: (examId: string, expectedAttemptNumber: number) =>
+    request<AttemptSnapshot>(`/exam/${encodeURIComponent(examId)}/retake`, {
+      method: "POST",
+      body: JSON.stringify({ expected_attempt_number: expectedAttemptNumber }),
+    }),
+
   saveAttempt: (
     examId: string,
-    payload: { answers: Record<string, number>; expected_version: number; request_id: string },
+    payload: { answers: Record<string, number>; expected_version: number; request_id: string; attempt_number?: number },
   ) => request<AttemptSaveResult>(`/exam/${encodeURIComponent(examId)}/attempt`, {
     method: "PUT",
     body: JSON.stringify(payload),
   }),
 
-  submitSavedAttempt: (examId: string, requestId?: string) =>
+  submitSavedAttempt: (examId: string, requestId?: string, attemptNumber?: number) =>
     request<SubmitResult>(`/exam/${encodeURIComponent(examId)}/attempt/submit`, {
       method: "POST",
-      body: JSON.stringify({ request_id: requestId }),
+      body: JSON.stringify({ request_id: requestId, attempt_number: attemptNumber }),
     }),
 
   submitAnswers: (
     examId: string,
-    payload: { answers: Record<string, number>; request_id?: string },
+    payload: { answers: Record<string, number>; request_id?: string; attempt_number?: number },
   ) => request<SubmitResult>(`/exam/${encodeURIComponent(examId)}/submit`, {
     method: "POST",
     body: JSON.stringify(payload),

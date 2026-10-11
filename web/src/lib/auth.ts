@@ -19,6 +19,7 @@ const EMPTY: AuthState = { user: null, accessToken: null, refreshToken: null }
 
 let cached: AuthState | null = null
 const listeners = new Set<() => void>()
+let storageListenerInstalled = false
 
 function read(): AuthState {
   try {
@@ -56,6 +57,14 @@ function subscribe(listener: () => void): () => void {
 }
 
 function getSnapshot(): AuthState {
+  if (!storageListenerInstalled && typeof window !== "undefined") {
+    storageListenerInstalled = true
+    window.addEventListener("storage", (event) => {
+      if (event.key !== STORAGE_KEY && event.key !== null) return
+      cached = null
+      for (const listener of listeners) listener()
+    })
+  }
   cached ??= read()
   return cached
 }

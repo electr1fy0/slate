@@ -83,10 +83,10 @@ describe("pending exam submission", () => {
     })
     expect(send).toHaveBeenCalledTimes(4)
     expect(send.mock.calls.map(([payload]) => payload)).toEqual([
-      { request_id: "stable-request", answers: { "0": 1 } },
-      { request_id: "stable-request", answers: { "0": 1 } },
-      { request_id: "stable-request", answers: { "0": 1 } },
-      { request_id: "stable-request", answers: { "0": 1 } },
+      { request_id: "stable-request", answers: { "0": 1 }, attempt_number: 2 },
+      { request_id: "stable-request", answers: { "0": 1 }, attempt_number: 2 },
+      { request_id: "stable-request", answers: { "0": 1 }, attempt_number: 2 },
+      { request_id: "stable-request", answers: { "0": 1 }, attempt_number: 2 },
     ])
     expect(wait).toHaveBeenCalledTimes(3)
   })
@@ -124,6 +124,7 @@ describe("pending exam submission", () => {
     expect(send.mock.calls.map(([payload]) => payload)).toEqual(
       Array.from({ length: 16 }, () => ({
         request_id: "long-recovery-request",
+        attempt_number: 2,
         answers: { "0": 1, "1": 0 },
       }))
     )

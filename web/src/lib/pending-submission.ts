@@ -22,6 +22,7 @@ export interface PendingSubmission {
 export interface PendingSubmissionPayload {
   request_id: string
   answers: Record<string, number>
+  attempt_number?: number
 }
 
 const STORAGE_PREFIX = "slate.exam-session"
@@ -255,7 +256,12 @@ export function clearExamDraft(scope: ExamScope): void {
 export function pendingPayload(
   pending: PendingSubmission
 ): PendingSubmissionPayload {
-  return { request_id: pending.requestId, answers: { ...pending.answers } }
+  return {
+    request_id: pending.requestId,
+    answers: { ...pending.answers },
+    // Preserve the original request hash for receipts created before retakes.
+    ...(pending.attemptNumber > 1 ? { attempt_number: pending.attemptNumber } : {}),
+  }
 }
 
 export function isTransientSubmissionError(error: unknown): boolean {

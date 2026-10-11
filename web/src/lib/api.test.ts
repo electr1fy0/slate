@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { clearAuth, setAuth } from "./auth"
+import { clearAuth, getAuth, setAuth } from "./auth"
 import { ApiError, api, boardSocketUrl, hasExternalApiOrigin } from "./api"
 
 const SESSION = {
@@ -77,6 +77,37 @@ describe("api client", () => {
     expect(apiError.status).toBe(403)
     expect(apiError.code).toBe("EXAM_CLOSED")
     expect(apiError.message).toBe("window shut")
+  })
+
+  it.each([true, false])("does not replace a new session with an old refresh response (success=%s)", async (success) => {
+    setAuth(SESSION)
+    let resolveRefresh!: (response: Response) => void
+    const refresh = new Promise<Response>((resolve) => { resolveRefresh = resolve })
+    const fetchMock = vi.fn((url: string) => String(url).endsWith("/auth/refresh")
+      ? refresh : Promise.resolve(jsonResponse(401, {})))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    const pending = api.listExams()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    const next = { ...SESSION, user: { ...SESSION.user, user_id: "u2" }, accessToken: "new-access", refreshToken: "new-refresh" }
+    setAuth(next)
+    resolveRefresh(jsonResponse(success ? 200 : 401, { user: SESSION.user, access_token: "stale-access", refresh_token: "stale-refresh" }))
+    await expect(pending).rejects.toBeInstanceOf(ApiError)
+    expect(getAuth()).toEqual(next)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps a logout intact while a refresh response is in flight", async () => {
+    setAuth(SESSION)
+    let resolveRefresh!: (response: Response) => void
+    globalThis.fetch = vi.fn((url: string) => String(url).endsWith("/auth/refresh")
+      ? new Promise<Response>((resolve) => { resolveRefresh = resolve })
+      : Promise.resolve(jsonResponse(401, {}))) as unknown as typeof fetch
+    const pending = api.listExams()
+    await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf("function"))
+    clearAuth()
+    resolveRefresh(jsonResponse(200, { user: SESSION.user, access_token: "stale-access", refresh_token: "stale-refresh" }))
+    await expect(pending).rejects.toBeInstanceOf(ApiError)
+    expect(getAuth().user).toBeNull()
   })
 
   it("protects Continuum status and actions with the admin token", async () => {

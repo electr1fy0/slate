@@ -78,6 +78,22 @@ describe("auth store", () => {
     unmount()
   })
 
+  it("updates the active identity when another browser tab signs out or changes profile", () => {
+    const unmount = mount()
+    act(() => setAuth(SESSION))
+    act(() => {
+      localStorage.setItem("slate.auth", JSON.stringify({ ...SESSION, user: { ...SESSION.user, name: "Updated" } }))
+      window.dispatchEvent(new StorageEvent("storage", { key: "slate.auth" }))
+    })
+    expect(getAuth().user?.name).toBe("Updated")
+    act(() => {
+      localStorage.removeItem("slate.auth")
+      window.dispatchEvent(new StorageEvent("storage", { key: "slate.auth" }))
+    })
+    expect(isAuthenticated()).toBe(false)
+    unmount()
+  })
+
   it("recovers from corrupt persisted payloads", () => {
     localStorage.setItem("slate.auth", "{not json")
     const unmount = mount()
