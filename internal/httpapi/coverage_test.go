@@ -176,6 +176,13 @@ func (b *coverageBackend) SaveAttempt(ctx context.Context, examID, studentID str
 	return b.MemoryStore.SaveAttempt(ctx, examID, studentID, answers, version, requestID)
 }
 
+func (b *coverageBackend) SaveAttemptForAttempt(ctx context.Context, examID, studentID string, answers map[string]int, version int, requestID string, attemptNumber int) (*model.Attempt, error) {
+	if b.saveAttemptErr != nil {
+		return nil, b.saveAttemptErr
+	}
+	return b.MemoryStore.SaveAttemptForAttempt(ctx, examID, studentID, answers, version, requestID, attemptNumber)
+}
+
 func (b *coverageBackend) SubmitAttempt(ctx context.Context, examID, studentID, name string, answers map[string]int, requestID string) (model.SubmissionResult, error) {
 	if b.submitAttemptErr != nil {
 		return model.SubmissionResult{}, b.submitAttemptErr
@@ -652,8 +659,12 @@ func TestHTTPAPICoverageHelpersAndErrors(t *testing.T) {
 	}
 	attempt := &model.Attempt{Answers: map[string]int{"0": 1}, Version: 2, StartedAt: 3, UpdatedAt: 4, AttemptNumber: 1}
 	deadline := int64(5)
-	if got := attemptResponse(attempt, &deadline); got["deadline_ms"] != int64(5) || got["version"] != 2 {
+	if got := attemptResponse(attempt, &deadline); got["deadline_ms"] != int64(5) || got["version"] != 2 || got["attempt_number"] != 1 {
 		t.Fatalf("attempt response = %#v", got)
+	}
+	attempt.AttemptNumber = 0
+	if got := attemptResponse(attempt, nil); got["attempt_number"] != 1 {
+		t.Fatalf("legacy attempt response = %#v", got)
 	}
 	if got := payloadWindow(nil, nil, nil); len(got) != 0 {
 		t.Fatalf("empty payload window = %#v", got)

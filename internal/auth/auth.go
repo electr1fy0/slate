@@ -268,8 +268,13 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 	digest := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(digest[:])
 	now := s.now().UTC()
-	record := model.PasswordResetRecord{UserID: id, ExpiresAt: now.Add(time.Hour).Unix(), CreatedAt: now.Format(time.RFC3339Nano)}
+	record := model.PasswordResetRecord{UserID: id, SessionVersion: user.SessionVersion, ExpiresAt: now.Add(time.Hour).Unix(), CreatedAt: now.Format(time.RFC3339Nano)}
 	if err := resetStore.CreatePasswordReset(ctx, recordWithHash(record, tokenHash)); err != nil {
+		if errors.Is(err, store.ErrPasswordResetInvalid) {
+			// A concurrent password change can invalidate the version read above.
+			// Keep that race indistinguishable from any other reset request.
+			return nil
+		}
 		return err
 	}
 	base := strings.TrimRight(strings.TrimSpace(s.Settings.PublicBaseURL), "/")

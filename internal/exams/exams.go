@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ayush/slate/internal/model"
+	"github.com/ayush/slate/internal/store"
 )
 
 var ErrExamNotFound = errors.New("exam not found")
@@ -39,6 +40,30 @@ type Store interface {
 // receipt after a response is lost, even if the exam closes before retry.
 type SubmissionRequestLookup interface {
 	FindSubmissionRequest(context.Context, string, string, map[string]int, string) (model.SubmissionResult, bool, error)
+}
+
+type attemptNumberSaver interface {
+	SaveAttemptForAttempt(context.Context, string, string, map[string]int, int, string, int) (*model.Attempt, error)
+}
+
+type attemptNumberSubmitter interface {
+	SubmitAttemptForAttempt(context.Context, string, string, string, map[string]int, string, int) (model.SubmissionResult, error)
+}
+
+type attemptNumberReceiptLookup interface {
+	FindSubmissionRequestForAttempt(context.Context, string, string, map[string]int, string, int) (model.SubmissionResult, bool, error)
+}
+
+type submissionReceiptLookup interface {
+	FindSubmissionReceiptByID(context.Context, string, string, string, int) (model.SubmissionResult, bool, error)
+}
+
+type retakeStore interface {
+	RetakeAttempt(context.Context, string, string, int) (*model.Attempt, error)
+}
+
+type retakeMetaStore interface {
+	RetakeAttemptWithMeta(context.Context, string, string, int, *model.ExamMeta) (*model.Attempt, error)
 }
 
 // QuizStore is the persistence surface for teacher-owned quiz authoring. It
@@ -121,6 +146,9 @@ func (s *Service) Get(ctx context.Context, examID string, user *model.User) (*mo
 		if err != nil {
 			return nil, err
 		}
+		if attempt.AttemptNumber <= 0 {
+			attempt.AttemptNumber = 1
+		}
 		exam.Attempt = attempt
 		exam.AttemptStartedAt = attempt.StartedAt
 		if exam.DurationMinutes > 0 {
@@ -138,14 +166,31 @@ func userRole(user *model.User) string {
 }
 
 func (s *Service) Submit(ctx context.Context, examID string, user *model.User, answers map[string]int, requestID string) (model.SubmissionResult, error) {
+	return s.SubmitForAttempt(ctx, examID, user, answers, requestID, 0)
+}
+
+// SubmitForAttempt binds the request to one attempt when the client supplies
+// an attempt number. The zero value retains the legacy attempt-one contract.
+func (s *Service) SubmitForAttempt(ctx context.Context, examID string, user *model.User, answers map[string]int, requestID string, attemptNumber int) (model.SubmissionResult, error) {
 	if user == nil {
 		return model.SubmissionResult{}, fmt.Errorf("user is required")
+	}
+	if attemptNumber < 0 {
+		return model.SubmissionResult{}, fmt.Errorf("attempt_number must be positive")
 	}
 	if answers == nil {
 		return model.SubmissionResult{}, fmt.Errorf("answers are required")
 	}
 	if strings.TrimSpace(requestID) != "" {
-		if lookup, ok := s.Store.(SubmissionRequestLookup); ok {
+		if lookup, ok := s.Store.(attemptNumberReceiptLookup); ok {
+			result, found, err := lookup.FindSubmissionRequestForAttempt(ctx, examID, user.UserID, answers, requestID, attemptNumber)
+			if err != nil {
+				return model.SubmissionResult{}, err
+			}
+			if found {
+				return result, nil
+			}
+		} else if lookup, ok := s.Store.(SubmissionRequestLookup); ok {
 			result, found, err := lookup.FindSubmissionRequest(ctx, examID, user.UserID, answers, requestID)
 			if err != nil {
 				return model.SubmissionResult{}, err
@@ -187,6 +232,9 @@ func (s *Service) Submit(ctx context.Context, examID string, user *model.User, a
 			return model.SubmissionResult{}, &WindowError{Code: "ATTEMPT_EXPIRED", Message: "time is up for this attempt"}
 		}
 	}
+	if submitter, ok := s.Store.(attemptNumberSubmitter); ok {
+		return submitter.SubmitAttemptForAttempt(ctx, examID, user.UserID, user.Name, answers, requestID, attemptNumber)
+	}
 	return s.Store.SubmitAttempt(ctx, examID, user.UserID, user.Name, answers, requestID)
 }
 
@@ -194,8 +242,21 @@ func (s *Service) Submit(ctx context.Context, examID string, user *model.User, a
 // client that reconnects after autosaving and intentionally avoids trusting a
 // stale browser copy of the answer map.
 func (s *Service) SubmitSaved(ctx context.Context, examID string, user *model.User, requestID string) (model.SubmissionResult, error) {
+	return s.SubmitSavedForAttempt(ctx, examID, user, requestID, 0)
+}
+
+func (s *Service) SubmitSavedForAttempt(ctx context.Context, examID string, user *model.User, requestID string, attemptNumber int) (model.SubmissionResult, error) {
 	if user == nil {
 		return model.SubmissionResult{}, fmt.Errorf("user is required")
+	}
+	if lookup, ok := s.Store.(submissionReceiptLookup); ok && strings.TrimSpace(requestID) != "" {
+		result, found, err := lookup.FindSubmissionReceiptByID(ctx, examID, user.UserID, requestID, attemptNumber)
+		if err != nil {
+			return model.SubmissionResult{}, err
+		}
+		if found {
+			return result, nil
+		}
 	}
 	attempt, err := s.Store.GetStudentAttempt(ctx, examID, user.UserID)
 	if err != nil {
@@ -204,7 +265,11 @@ func (s *Service) SubmitSaved(ctx context.Context, examID string, user *model.Us
 	if attempt == nil || attempt.Answers == nil {
 		return model.SubmissionResult{}, ErrAttemptNotFound
 	}
-	return s.Submit(ctx, examID, user, attempt.Answers, requestID)
+	currentNumber := attemptNumberOrOne(attempt.AttemptNumber)
+	if attemptNumber > 0 && attemptNumber != currentNumber || attemptNumber == 0 && currentNumber > 1 {
+		return model.SubmissionResult{}, store.ErrAttemptConflict
+	}
+	return s.SubmitForAttempt(ctx, examID, user, attempt.Answers, requestID, attemptNumber)
 }
 
 // Resume starts the current attempt if necessary and returns the durable
@@ -227,6 +292,9 @@ func (s *Service) Resume(ctx context.Context, examID string, user *model.User) (
 	if err != nil {
 		return nil, nil, err
 	}
+	if attempt.AttemptNumber <= 0 {
+		attempt.AttemptNumber = 1
+	}
 	var deadline *int64
 	if meta.DurationMinutes > 0 {
 		value := attempt.StartedAt + int64(meta.DurationMinutes)*60_000
@@ -239,8 +307,15 @@ func (s *Service) Resume(ctx context.Context, examID string, user *model.User) (
 // version check. Reusing requestID is idempotent and does not advance the
 // server version.
 func (s *Service) Save(ctx context.Context, examID string, user *model.User, answers map[string]int, expectedVersion int, requestID string) (model.AttemptSaveResult, error) {
+	return s.SaveForAttempt(ctx, examID, user, answers, expectedVersion, requestID, 0)
+}
+
+func (s *Service) SaveForAttempt(ctx context.Context, examID string, user *model.User, answers map[string]int, expectedVersion int, requestID string, attemptNumber int) (model.AttemptSaveResult, error) {
 	if user == nil {
 		return model.AttemptSaveResult{}, fmt.Errorf("user is required")
+	}
+	if attemptNumber < 0 {
+		return model.AttemptSaveResult{}, fmt.Errorf("attempt_number must be positive")
 	}
 	if expectedVersion < 0 {
 		return model.AttemptSaveResult{}, fmt.Errorf("version must not be negative")
@@ -275,6 +350,14 @@ func (s *Service) Save(ctx context.Context, examID string, user *model.User, ans
 	if err != nil {
 		return model.AttemptSaveResult{}, err
 	}
+	if before != nil {
+		currentNumber := attemptNumberOrOne(before.AttemptNumber)
+		if attemptNumber > 0 && attemptNumber != currentNumber || attemptNumber == 0 && currentNumber > 1 {
+			return model.AttemptSaveResult{}, store.ErrAttemptConflict
+		}
+	} else if attemptNumber > 1 {
+		return model.AttemptSaveResult{}, store.ErrAttemptConflict
+	}
 	if before != nil && before.LastRequestID == requestID {
 		return s.attemptResult("duplicate", requestID, before, meta), nil
 	}
@@ -284,11 +367,76 @@ func (s *Service) Save(ctx context.Context, examID string, user *model.User, ans
 			return model.AttemptSaveResult{}, &WindowError{Code: "ATTEMPT_EXPIRED", Message: "time is up for this attempt"}
 		}
 	}
-	saved, err := s.Store.SaveAttempt(ctx, examID, user.UserID, answers, expectedVersion, requestID)
+	var saved *model.Attempt
+	if saver, ok := s.Store.(attemptNumberSaver); ok {
+		saved, err = saver.SaveAttemptForAttempt(ctx, examID, user.UserID, answers, expectedVersion, requestID, attemptNumber)
+	} else {
+		saved, err = s.Store.SaveAttempt(ctx, examID, user.UserID, answers, expectedVersion, requestID)
+	}
 	if err != nil {
 		return model.AttemptSaveResult{}, err
 	}
 	return s.attemptResult("saved", requestID, saved, meta), nil
+}
+
+// Retake starts the next timed attempt only after the current one was
+// submitted and only if the configured maximum allows it. The persistence
+// layer makes expected_attempt_number idempotent under concurrent retries.
+func (s *Service) Retake(ctx context.Context, examID string, user *model.User, expectedAttemptNumber int) (*model.Attempt, *int64, error) {
+	if user == nil || user.Role != "student" {
+		return nil, nil, fmt.Errorf("student is required")
+	}
+	if expectedAttemptNumber <= 0 {
+		return nil, nil, fmt.Errorf("expected_attempt_number must be positive")
+	}
+	meta, err := s.Store.GetExamMeta(ctx, examID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if meta == nil {
+		return nil, nil, ErrExamNotFound
+	}
+	active, err := s.Store.GetStudentAttempt(ctx, examID, user.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if active != nil && attemptNumberOrOne(active.AttemptNumber) == expectedAttemptNumber+1 {
+		var deadline *int64
+		if meta.DurationMinutes > 0 {
+			value := active.StartedAt + int64(meta.DurationMinutes)*60_000
+			deadline = &value
+		}
+		return active, deadline, nil
+	}
+	if err := EnforceWindow(meta, user.Role, s.now()); err != nil {
+		return nil, nil, err
+	}
+	retaker, ok := s.Store.(retakeStore)
+	if !ok {
+		return nil, nil, fmt.Errorf("retakes are unavailable")
+	}
+	var attempt *model.Attempt
+	if snapshotRetaker, hasSnapshotRetaker := s.Store.(retakeMetaStore); hasSnapshotRetaker {
+		attempt, err = snapshotRetaker.RetakeAttemptWithMeta(ctx, examID, user.UserID, expectedAttemptNumber, meta)
+	} else {
+		attempt, err = retaker.RetakeAttempt(ctx, examID, user.UserID, expectedAttemptNumber)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var deadline *int64
+	if meta.DurationMinutes > 0 {
+		value := attempt.StartedAt + int64(meta.DurationMinutes)*60_000
+		deadline = &value
+	}
+	return attempt, deadline, nil
+}
+
+func attemptNumberOrOne(number int) int {
+	if number > 0 {
+		return number
+	}
+	return 1
 }
 
 func (s *Service) attemptResult(status, requestID string, attempt *model.Attempt, meta *model.ExamMeta) model.AttemptSaveResult {

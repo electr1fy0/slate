@@ -201,7 +201,7 @@ func TestDynamoExamMutationsCarryTransactionalFenceAndStrongReads(t *testing.T) 
 		}
 	}
 	submissionTx := f.transactions[3]
-	if len(submissionTx.TransactItems) != 5 || submissionTx.TransactItems[0].Put == nil || submissionTx.TransactItems[1].Put == nil || submissionTx.TransactItems[2].Put == nil || submissionTx.TransactItems[3].Put == nil {
+	if len(submissionTx.TransactItems) != 6 || submissionTx.TransactItems[0].Put == nil || submissionTx.TransactItems[1].Put == nil || submissionTx.TransactItems[2].Put == nil || submissionTx.TransactItems[3].Put == nil || submissionTx.TransactItems[4].Put == nil {
 		t.Fatalf("submit must atomically write submission, receipt, outbox and attempt: %#v", submissionTx.TransactItems)
 	}
 	if _, err := s.GetStudentAttempt(context.Background(), "fenced", "student"); err != nil {

@@ -99,7 +99,7 @@ type ExamMeta struct {
 	OpensAt          string `json:"opens_at,omitempty" dynamodbav:"opens_at,omitempty"`
 	ClosesAt         string `json:"closes_at,omitempty" dynamodbav:"closes_at,omitempty"`
 	DurationMinutes  int    `json:"duration_minutes,omitempty" dynamodbav:"duration_minutes,omitempty"`
-	MaxAttempts      int    `json:"max_attempts,omitempty" dynamodbav:"max_attempts,omitempty"`
+	MaxAttempts      int    `json:"max_attempts" dynamodbav:"max_attempts,omitempty"`
 	AllowLate        bool   `json:"allow_late,omitempty" dynamodbav:"allow_late,omitempty"`
 	LateGraceMinutes int    `json:"late_grace_minutes,omitempty" dynamodbav:"late_grace_minutes,omitempty"`
 	AttemptStatus    string `json:"attempt_status,omitempty" dynamodbav:"-"`
@@ -133,7 +133,7 @@ type QuizDraft struct {
 	OpensAt          string     `json:"opens_at,omitempty" dynamodbav:"opens_at,omitempty"`
 	ClosesAt         string     `json:"closes_at,omitempty" dynamodbav:"closes_at,omitempty"`
 	DurationMinutes  int        `json:"duration_minutes,omitempty" dynamodbav:"duration_minutes,omitempty"`
-	MaxAttempts      int        `json:"max_attempts,omitempty" dynamodbav:"max_attempts,omitempty"`
+	MaxAttempts      int        `json:"max_attempts" dynamodbav:"max_attempts,omitempty"`
 	AllowLate        bool       `json:"allow_late,omitempty" dynamodbav:"allow_late,omitempty"`
 	LateGraceMinutes int        `json:"late_grace_minutes,omitempty" dynamodbav:"late_grace_minutes,omitempty"`
 	Status           string     `json:"status" dynamodbav:"status"`
@@ -159,11 +159,12 @@ type QuestionBankItem struct {
 // PasswordResetRecord stores no raw reset token. The partition key contains
 // the SHA-256 digest and the value is single-use and time limited.
 type PasswordResetRecord struct {
-	PK        string `json:"-" dynamodbav:"pk"`
-	SK        string `json:"-" dynamodbav:"sk"`
-	UserID    string `json:"-" dynamodbav:"user_id"`
-	ExpiresAt int64  `json:"-" dynamodbav:"expires_at"`
-	CreatedAt string `json:"-" dynamodbav:"created_at"`
+	PK             string `json:"-" dynamodbav:"pk"`
+	SK             string `json:"-" dynamodbav:"sk"`
+	UserID         string `json:"-" dynamodbav:"user_id"`
+	SessionVersion int64  `json:"-" dynamodbav:"session_version"`
+	ExpiresAt      int64  `json:"-" dynamodbav:"expires_at"`
+	CreatedAt      string `json:"-" dynamodbav:"created_at"`
 }
 
 type Attempt struct {

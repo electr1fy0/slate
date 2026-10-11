@@ -128,6 +128,119 @@ func TestExamInfoDoesNotStartAttemptAndAssignedRoutesRequireMembership(t *testin
 	}
 }
 
+func TestExamRetakesAreIdempotentAttemptScopedAndLimited(t *testing.T) {
+	_, handler := newTestServer(t, "active")
+	teacher := registerTeacher(t, handler, "retake-teacher@example.com")
+	student, _ := registerStudent(t, handler, "retake-student@example.com")
+	classroomResponse := call(t, handler, http.MethodPost, "/classrooms", map[string]any{"name": "Retake class", "client_id": "retake-class"}, teacher)
+	if classroomResponse.Code != http.StatusCreated {
+		t.Fatalf("create class: %d %s", classroomResponse.Code, classroomResponse.Body.String())
+	}
+	classroom := decodeBody(t, classroomResponse)
+	joined := call(t, handler, http.MethodPost, "/classrooms/join", map[string]any{"join_code": classroom["join_code"]}, student)
+	if joined.Code != http.StatusOK {
+		t.Fatalf("join class: %d %s", joined.Code, joined.Body.String())
+	}
+	examResponse := call(t, handler, http.MethodPost, "/exam", map[string]any{
+		"id": "retake-quiz", "title": "Retake quiz", "classroom_id": classroom["id"], "max_attempts": 2,
+		"questions": []map[string]any{{"question": "Pick the right answer", "options": []string{"wrong", "right"}, "answer": 1}},
+	}, teacher)
+	if examResponse.Code != http.StatusCreated {
+		t.Fatalf("create quiz: %d %s", examResponse.Code, examResponse.Body.String())
+	}
+	if started := call(t, handler, http.MethodGet, "/exam/retake-quiz/attempt", nil, student); started.Code != http.StatusOK {
+		t.Fatalf("start attempt 1: %d %s", started.Code, started.Body.String())
+	}
+	firstSubmit := call(t, handler, http.MethodPost, "/exam/retake-quiz/submit", map[string]any{
+		"answers": map[string]int{"0": 1}, "request_id": "retake-submit-1", "attempt_number": 1,
+	}, student)
+	if firstSubmit.Code != http.StatusOK || decodeBody(t, firstSubmit)["attempt_number"] != float64(1) {
+		t.Fatalf("submit attempt 1: %d %s", firstSubmit.Code, firstSubmit.Body.String())
+	}
+	retake := call(t, handler, http.MethodPost, "/exam/retake-quiz/retake", map[string]any{"expected_attempt_number": 1}, student)
+	retakeBody := decodeBody(t, retake)
+	if retake.Code != http.StatusOK || retakeBody["attempt_number"] != float64(2) {
+		t.Fatalf("retake response: %d %#v", retake.Code, retakeBody)
+	}
+	retry := call(t, handler, http.MethodPost, "/exam/retake-quiz/retake", map[string]any{"expected_attempt_number": 1}, student)
+	if body := decodeBody(t, retry); retry.Code != http.StatusOK || body["attempt_number"] != float64(2) || body["started_at"] != retakeBody["started_at"] {
+		t.Fatalf("idempotent retake response: %d %#v (initial %#v)", retry.Code, body, retakeBody)
+	}
+	if staleSave := call(t, handler, http.MethodPut, "/exam/retake-quiz/attempt", map[string]any{
+		"answers": map[string]int{"0": 0}, "expected_version": 0, "request_id": "stale-save", "attempt_number": 1,
+	}, student); staleSave.Code != http.StatusConflict {
+		t.Fatalf("stale attempt save: %d %s", staleSave.Code, staleSave.Body.String())
+	}
+	if staleSubmit := call(t, handler, http.MethodPost, "/exam/retake-quiz/submit", map[string]any{
+		"answers": map[string]int{"0": 0}, "request_id": "stale-submit", "attempt_number": 1,
+	}, student); staleSubmit.Code != http.StatusConflict {
+		t.Fatalf("stale attempt submit: %d %s", staleSubmit.Code, staleSubmit.Body.String())
+	}
+	oldReceipt := call(t, handler, http.MethodPost, "/exam/retake-quiz/submit", map[string]any{
+		"answers": map[string]int{"0": 1}, "request_id": "retake-submit-1", "attempt_number": 1,
+	}, student)
+	if body := decodeBody(t, oldReceipt); oldReceipt.Code != http.StatusOK || body["status"] != "duplicate" || body["attempt_number"] != float64(1) {
+		t.Fatalf("old receipt retry after retake: %d %#v", oldReceipt.Code, body)
+	}
+	secondSubmit := call(t, handler, http.MethodPost, "/exam/retake-quiz/submit", map[string]any{
+		"answers": map[string]int{"0": 0}, "request_id": "retake-submit-2", "attempt_number": 2,
+	}, student)
+	if body := decodeBody(t, secondSubmit); secondSubmit.Code != http.StatusOK || body["attempt_number"] != float64(2) {
+		t.Fatalf("submit attempt 2: %d %#v", secondSubmit.Code, body)
+	}
+	result := call(t, handler, http.MethodGet, "/exam/retake-quiz/result", nil, student)
+	if body := decodeBody(t, result); result.Code != http.StatusOK || body["attempt_number"] != float64(2) {
+		t.Fatalf("latest result after retake: %d %#v", result.Code, body)
+	}
+	tooMany := call(t, handler, http.MethodPost, "/exam/retake-quiz/retake", map[string]any{"expected_attempt_number": 2}, student)
+	if tooMany.Code != http.StatusConflict {
+		t.Fatalf("max attempts ignored: %d %s", tooMany.Code, tooMany.Body.String())
+	}
+}
+
+func TestZeroMaxAttemptsSurvivesExamAndDraftHTTPRoundTrip(t *testing.T) {
+	_, handler := newTestServer(t, "active")
+	teacher := registerTeacher(t, handler, "unlimited-teacher@example.com")
+	question := []map[string]any{{"question": "q", "options": []string{"a", "b"}, "answer": 0}}
+	exam := call(t, handler, http.MethodPost, "/exam", map[string]any{"id": "unlimited-exam", "title": "Unlimited", "max_attempts": 0, "questions": question}, teacher)
+	if body := decodeBody(t, exam); exam.Code != http.StatusCreated || body["max_attempts"] != float64(0) {
+		t.Fatalf("create unlimited exam: %d %#v", exam.Code, body)
+	}
+	var examsList []map[string]any
+	list := call(t, handler, http.MethodGet, "/exams", nil, teacher)
+	if err := json.Unmarshal(list.Body.Bytes(), &examsList); err != nil {
+		t.Fatal(err)
+	}
+	foundExam := false
+	for _, row := range examsList {
+		if row["id"] == "unlimited-exam" {
+			foundExam = true
+			if row["max_attempts"] != float64(0) {
+				t.Fatalf("exam list dropped unlimited value: %#v", row)
+			}
+		}
+	}
+	if list.Code != http.StatusOK || !foundExam {
+		t.Fatalf("unlimited exam missing from list: %d %s", list.Code, list.Body.String())
+	}
+	draft := call(t, handler, http.MethodPost, "/quiz/drafts", map[string]any{"id": "unlimited-draft", "title": "Unlimited draft", "max_attempts": 0, "questions": question}, teacher)
+	if body := decodeBody(t, draft); draft.Code != http.StatusCreated || body["max_attempts"] != float64(0) {
+		t.Fatalf("create unlimited draft: %d %#v", draft.Code, body)
+	}
+	readDraft := call(t, handler, http.MethodGet, "/quiz/drafts/unlimited-draft", nil, teacher)
+	if body := decodeBody(t, readDraft); readDraft.Code != http.StatusOK || body["max_attempts"] != float64(0) {
+		t.Fatalf("read unlimited draft: %d %#v", readDraft.Code, body)
+	}
+	defaultExam := call(t, handler, http.MethodPost, "/exam", map[string]any{"id": "default-attempts-exam", "title": "Default", "questions": question}, teacher)
+	if body := decodeBody(t, defaultExam); defaultExam.Code != http.StatusCreated || body["max_attempts"] != float64(1) {
+		t.Fatalf("omitted exam attempt limit default: %d %#v", defaultExam.Code, body)
+	}
+	defaultDraft := call(t, handler, http.MethodPost, "/quiz/drafts", map[string]any{"id": "default-attempts-draft", "title": "Default draft", "questions": question}, teacher)
+	if body := decodeBody(t, defaultDraft); defaultDraft.Code != http.StatusCreated || body["max_attempts"] != float64(1) {
+		t.Fatalf("omitted draft attempt limit default: %d %#v", defaultDraft.Code, body)
+	}
+}
+
 func TestClassroomInvitationsAndCreateRetryAreDurableAndHonest(t *testing.T) {
 	server, _ := newTestServer(t, "active")
 	mailer := &classroomInvitationHTTPStub{}

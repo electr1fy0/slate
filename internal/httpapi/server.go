@@ -163,6 +163,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /exam/{examID}/info", s.examInfo)
 	mux.HandleFunc("GET /exam/{examID}/preview", s.previewExam)
 	mux.HandleFunc("GET /exam/{examID}/attempt", s.getAttempt)
+	mux.HandleFunc("POST /exam/{examID}/retake", s.retakeAttempt)
 	mux.HandleFunc("PUT /exam/{examID}/attempt", s.saveAttempt)
 	mux.HandleFunc("POST /exam/{examID}/attempt/submit", s.submitSavedAttempt)
 	mux.HandleFunc("POST /exam/{examID}/submit", s.submit)
@@ -673,6 +674,18 @@ func (s *Server) canAccessExam(ctx context.Context, user *model.User, meta *mode
 }
 
 func (s *Server) fillExamAttemptStatus(ctx context.Context, meta *model.ExamMeta, studentID string) error {
+	attempt, err := s.Store.GetStudentAttempt(ctx, meta.ID, studentID)
+	if err != nil {
+		return err
+	}
+	if attempt != nil && !attempt.Submitted {
+		meta.AttemptStatus = "in_progress"
+		meta.AttemptNumber = attempt.AttemptNumber
+		if meta.AttemptNumber <= 0 {
+			meta.AttemptNumber = 1
+		}
+		return nil
+	}
 	submission, err := s.Store.GetSubmission(ctx, meta.ID, studentID)
 	if err != nil {
 		return err
@@ -681,19 +694,25 @@ func (s *Server) fillExamAttemptStatus(ctx context.Context, meta *model.ExamMeta
 		meta.AttemptStatus = "submitted"
 		meta.Score, meta.Total = submission.Score, submission.Total
 		meta.SubmittedAt = submission.UpdatedAtISO
-		meta.AttemptNumber = submission.AttemptNumber
+		meta.AttemptNumber = publicAttemptNumber(submission.AttemptNumber)
 		return nil
-	}
-	attempt, err := s.Store.GetStudentAttempt(ctx, meta.ID, studentID)
-	if err != nil {
-		return err
 	}
 	if attempt == nil {
 		meta.AttemptStatus = "not_started"
 		return nil
 	}
-	meta.AttemptStatus = "in_progress"
+	if attempt.Submitted {
+		meta.AttemptStatus = "submitted"
+		if attempt.SubmittedAt > 0 {
+			meta.SubmittedAt = time.UnixMilli(attempt.SubmittedAt).UTC().Format(time.RFC3339Nano)
+		}
+	} else {
+		meta.AttemptStatus = "in_progress"
+	}
 	meta.AttemptNumber = attempt.AttemptNumber
+	if meta.AttemptNumber <= 0 {
+		meta.AttemptNumber = 1
+	}
 	return nil
 }
 
@@ -736,6 +755,38 @@ func (s *Server) getAttempt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, attemptResponse(attempt, deadline))
 }
 
+func (s *Server) retakeAttempt(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	if user.Role != auth.RoleStudent {
+		detail(w, http.StatusForbidden, "student access required")
+		return
+	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), user); !ok {
+		return
+	}
+	var payload struct {
+		ExpectedAttemptNumber int `json:"expected_attempt_number"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if payload.ExpectedAttemptNumber <= 0 {
+		validation(w, "expected_attempt_number must be positive")
+		return
+	}
+	attempt, deadline, err := s.Exams.Retake(r.Context(), r.PathValue("examID"), user, payload.ExpectedAttemptNumber)
+	if s.writeExamError(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, attemptResponse(attempt, deadline))
+}
+
 func (s *Server) saveAttempt(w http.ResponseWriter, r *http.Request) {
 	if !s.requireActive(w) {
 		return
@@ -751,6 +802,7 @@ func (s *Server) saveAttempt(w http.ResponseWriter, r *http.Request) {
 		Answers         map[string]int `json:"answers"`
 		ExpectedVersion int            `json:"expected_version"`
 		RequestID       string         `json:"request_id"`
+		AttemptNumber   *int           `json:"attempt_number"`
 	}
 	if !decode(w, r, &payload) {
 		return
@@ -759,17 +811,26 @@ func (s *Server) saveAttempt(w http.ResponseWriter, r *http.Request) {
 		validation(w, "answers is required")
 		return
 	}
-	result, err := s.Exams.Save(r.Context(), r.PathValue("examID"), user, payload.Answers, payload.ExpectedVersion, payload.RequestID)
+	attemptNumber := 0
+	if payload.AttemptNumber != nil {
+		if *payload.AttemptNumber <= 0 {
+			validation(w, "attempt_number must be positive")
+			return
+		}
+		attemptNumber = *payload.AttemptNumber
+	}
+	result, err := s.Exams.SaveForAttempt(r.Context(), r.PathValue("examID"), user, payload.Answers, payload.ExpectedVersion, payload.RequestID, attemptNumber)
 	if s.writeExamError(w, err) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"status":      result.Status,
-		"request_id":  result.RequestID,
-		"version":     result.Attempt.Version,
-		"answers":     result.Attempt.Answers,
-		"started_at":  result.Attempt.StartedAt,
-		"deadline_ms": result.DeadlineMS,
+		"status":         result.Status,
+		"request_id":     result.RequestID,
+		"version":        result.Attempt.Version,
+		"answers":        result.Attempt.Answers,
+		"started_at":     result.Attempt.StartedAt,
+		"attempt_number": publicAttemptNumber(result.Attempt.AttemptNumber),
+		"deadline_ms":    result.DeadlineMS,
 	})
 }
 
@@ -785,12 +846,21 @@ func (s *Server) submitSavedAttempt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		RequestID string `json:"request_id"`
+		RequestID     string `json:"request_id"`
+		AttemptNumber *int   `json:"attempt_number"`
 	}
 	if r.Body != nil && r.ContentLength != 0 && !decode(w, r, &payload) {
 		return
 	}
-	result, err := s.Exams.SubmitSaved(r.Context(), r.PathValue("examID"), user, payload.RequestID)
+	attemptNumber := 0
+	if payload.AttemptNumber != nil {
+		if *payload.AttemptNumber <= 0 {
+			validation(w, "attempt_number must be positive")
+			return
+		}
+		attemptNumber = *payload.AttemptNumber
+	}
+	result, err := s.Exams.SubmitSavedForAttempt(r.Context(), r.PathValue("examID"), user, payload.RequestID, attemptNumber)
 	if s.writeExamError(w, err) {
 		return
 	}
@@ -813,8 +883,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p struct {
-		Answers   map[string]int `json:"answers"`
-		RequestID string         `json:"request_id"`
+		Answers       map[string]int `json:"answers"`
+		RequestID     string         `json:"request_id"`
+		AttemptNumber *int           `json:"attempt_number"`
 	}
 	if !decode(w, r, &p) {
 		return
@@ -826,7 +897,15 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		validation(w, "answers is required")
 		return
 	}
-	result, err := s.Exams.Submit(r.Context(), r.PathValue("examID"), u, p.Answers, p.RequestID)
+	attemptNumber := 0
+	if p.AttemptNumber != nil {
+		if *p.AttemptNumber <= 0 {
+			validation(w, "attempt_number must be positive")
+			return
+		}
+		attemptNumber = *p.AttemptNumber
+	}
+	result, err := s.Exams.SubmitForAttempt(r.Context(), r.PathValue("examID"), u, p.Answers, p.RequestID, attemptNumber)
 	if s.writeExamError(w, err) {
 		return
 	}
@@ -879,7 +958,7 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"status": "submitted", "score": sub.Score, "total": sub.Total,
-		"answers": sub.Answers, "submitted_at": sub.UpdatedAtISO, "committed_at": sub.UpdatedAt, "request_id": sub.RequestID, "review": review})
+		"answers": sub.Answers, "submitted_at": sub.UpdatedAtISO, "committed_at": sub.UpdatedAt, "request_id": sub.RequestID, "attempt_number": publicAttemptNumber(sub.AttemptNumber), "review": review})
 }
 
 func (s *Server) listExams(w http.ResponseWriter, r *http.Request) {
@@ -1128,6 +1207,9 @@ func (s *Server) createQuizDraft(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeQuizError(w, err)
 		return
+	}
+	if payload.MaxAttempts == nil {
+		draft.MaxAttempts = 1
 	}
 	created, err := s.Store.CreateQuizDraft(r.Context(), draft)
 	if err != nil {
@@ -1392,6 +1474,8 @@ func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.MaxAttempts != nil {
 		window["max_attempts"] = *p.MaxAttempts
+	} else {
+		window["max_attempts"] = 1
 	}
 	if p.AllowLate != nil {
 		window["allow_late"] = *p.AllowLate
@@ -1583,7 +1667,7 @@ func (s *Server) examResults(w http.ResponseWriter, r *http.Request) {
 			totalPct += float64(row.Score) / float64(row.Total) * 100
 			scored++
 		}
-		items = append(items, map[string]any{"student_id": strings.TrimPrefix(row.SK, "STUDENT#"), "student_name": row.StudentName, "answers": row.Answers, "score": row.Score, "total": row.Total, "submitted_at": row.UpdatedAtISO})
+		items = append(items, map[string]any{"student_id": strings.TrimPrefix(row.SK, "STUDENT#"), "student_name": row.StudentName, "answers": row.Answers, "score": row.Score, "total": row.Total, "attempt_number": publicAttemptNumber(row.AttemptNumber), "submitted_at": row.UpdatedAtISO})
 	}
 	questionStats := make([]map[string]any, 0)
 	if exam, err := s.Store.GetExam(r.Context(), id, true); err == nil && exam != nil {
@@ -1918,12 +2002,19 @@ func attemptResponse(attempt *model.Attempt, deadline *int64) map[string]any {
 		response["version"] = attempt.Version
 		response["started_at"] = attempt.StartedAt
 		response["updated_at"] = attempt.UpdatedAt
-		response["attempt_number"] = attempt.AttemptNumber
+		response["attempt_number"] = publicAttemptNumber(attempt.AttemptNumber)
 	}
 	if deadline != nil {
 		response["deadline_ms"] = *deadline
 	}
 	return response
+}
+
+func publicAttemptNumber(number int) int {
+	if number <= 0 {
+		return 1
+	}
+	return number
 }
 
 func (s *Server) writeQuizError(w http.ResponseWriter, err error) {
@@ -1966,6 +2057,8 @@ func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 		detail(w, 409, "this student already submitted for this exam")
 	case errors.Is(err, store.ErrSubmissionRequestConflict):
 		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]any{"code": "REQUEST_ID_CONFLICT", "message": err.Error()}})
+	case errors.Is(err, store.ErrAttemptsExhausted):
+		detail(w, http.StatusConflict, "maximum exam attempts reached")
 	case errors.Is(err, clusterstate.ErrFenced):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{"code": "WRITER_FENCED", "message": "this backend is no longer the active writer", "retryable": true}})
 	case errors.Is(err, exams.ErrAttemptNotFound):
@@ -2152,7 +2245,7 @@ func clamp(v, low, high int) int {
 func submissionMaps(rows []model.Submission) []map[string]any {
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, map[string]any{"pk": row.PK, "sk": row.SK, "answers": row.Answers, "version": row.Version, "request_id": row.RequestID, "updated_at": row.UpdatedAt, "updated_at_iso": row.UpdatedAtISO, "written_by_region": row.WrittenByRegion, "student_name": row.StudentName, "score": row.Score, "total": row.Total})
+		out = append(out, map[string]any{"pk": row.PK, "sk": row.SK, "answers": row.Answers, "version": row.Version, "request_id": row.RequestID, "updated_at": row.UpdatedAt, "updated_at_iso": row.UpdatedAtISO, "written_by_region": row.WrittenByRegion, "student_name": row.StudentName, "attempt_number": row.AttemptNumber, "score": row.Score, "total": row.Total})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return fmt.Sprint(out[i]["updated_at"]) < fmt.Sprint(out[j]["updated_at"]) })
 	return out

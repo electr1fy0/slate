@@ -104,6 +104,59 @@ func TestPasswordChangeAndResetRevokeSessionsAndEnforceSingleUseExpiry(t *testin
 	}
 }
 
+func TestPasswordUpdatesInvalidateEveryOutstandingResetToken(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Defaults()
+	db := store.NewMemory(cfg.Region)
+	service := New(db, cfg)
+	service.Now = func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC) }
+	mailer := &passwordResetMailerStub{}
+	service.ResetMailer = mailer
+	user, err := service.CreateUser(ctx, "student@example.com", "current-password", "Student", RoleStudent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestToken := func() string {
+		t.Helper()
+		if err := service.RequestPasswordReset(ctx, user.Email); err != nil {
+			t.Fatal(err)
+		}
+		resetURL, err := url.Parse(mailer.links[len(mailer.links)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		token := resetURL.Query().Get("token")
+		if token == "" {
+			t.Fatal("reset link omitted token")
+		}
+		return token
+	}
+
+	oldTokens := []string{requestToken(), requestToken()}
+	if err := service.ChangePassword(ctx, user.UserID, "current-password", "changed-password"); err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range oldTokens {
+		if err := service.ResetPassword(ctx, token, "stale-reset-password"); !errors.Is(err, ErrInvalidResetToken) {
+			t.Fatalf("reset token from before a password change was accepted: %v", err)
+		}
+	}
+	if authenticated, err := service.Authenticate(ctx, user.Email, "changed-password"); err != nil || authenticated == nil {
+		t.Fatalf("stale reset token changed the password: %#v, %v", authenticated, err)
+	}
+
+	siblingToken, winningToken := requestToken(), requestToken()
+	if err := service.ResetPassword(ctx, winningToken, "reset-won-password"); err != nil {
+		t.Fatalf("current reset token failed: %v", err)
+	}
+	if err := service.ResetPassword(ctx, siblingToken, "stale-sibling-password"); !errors.Is(err, ErrInvalidResetToken) {
+		t.Fatalf("sibling reset token survived another reset: %v", err)
+	}
+	if authenticated, err := service.Authenticate(ctx, user.Email, "reset-won-password"); err != nil || authenticated == nil {
+		t.Fatalf("stale sibling reset changed the winning password: %#v, %v", authenticated, err)
+	}
+}
+
 func authenticatedUser(t *testing.T, service *Service, ctx context.Context, email, password string) *model.User {
 	t.Helper()
 	user, err := service.Authenticate(ctx, email, password)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,38 @@ func TestMemoryQOLWritesArePersistentAndOwnerScoped(t *testing.T) {
 	}
 }
 
+func TestMemoryPasswordResetRecordsAreSessionVersionBound(t *testing.T) {
+	ctx := context.Background()
+	m := fixedMemory()
+	if err := m.CreateUser(ctx, &model.User{UserID: "student", Email: "student@example.test", Name: "Student"}, "old-hash"); err != nil {
+		t.Fatal(err)
+	}
+	oldToken := model.PasswordResetRecord{PK: "PASSWORD_RESET#old", SK: "TOKEN", UserID: "student", SessionVersion: 0, ExpiresAt: m.now().Add(time.Hour).Unix()}
+	if err := m.CreatePasswordReset(ctx, oldToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ChangePassword(ctx, "student", "old-hash", "changed-hash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CompletePasswordReset(ctx, "old", "stale-reset-hash", m.now().Unix()); !errors.Is(err, ErrPasswordResetInvalid) {
+		t.Fatalf("reset from an earlier password generation was accepted: %v", err)
+	}
+	if err := m.CreatePasswordReset(ctx, model.PasswordResetRecord{PK: "PASSWORD_RESET#stale", SK: "TOKEN", UserID: "student", SessionVersion: 0, ExpiresAt: m.now().Add(time.Hour).Unix()}); !errors.Is(err, ErrPasswordResetInvalid) {
+		t.Fatalf("stale session version created a reset token: %v", err)
+	}
+	currentToken := model.PasswordResetRecord{PK: "PASSWORD_RESET#current", SK: "TOKEN", UserID: "student", SessionVersion: 1, ExpiresAt: m.now().Add(time.Hour).Unix()}
+	if err := m.CreatePasswordReset(ctx, currentToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CompletePasswordReset(ctx, "current", "current-reset-hash", m.now().Unix()); err != nil {
+		t.Fatalf("current generation reset failed: %v", err)
+	}
+	user, err := m.GetUser(ctx, "student")
+	if err != nil || user.PasswordHash != "current-reset-hash" || user.SessionVersion != 2 {
+		t.Fatalf("current generation reset persistence = %#v, %v", user, err)
+	}
+}
+
 func TestMemoryQOLMutationsRejectStaleWriters(t *testing.T) {
 	ctx := context.Background()
 	m := fixedMemory()
@@ -224,7 +257,9 @@ func TestDynamoQOLDurableWritesCarryWriterFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	resetHash := "digest"
-	reset := model.PasswordResetRecord{PK: "PASSWORD_RESET#" + resetHash, SK: "TOKEN", UserID: "teacher", ExpiresAt: s.now().Add(time.Hour).Unix(), CreatedAt: iso(s.now())}
+	userItem := f.items[itemKey(key("USER#teacher", "PROFILE"))]
+	userItem["session_version"] = &types.AttributeValueMemberN{Value: "1"}
+	reset := model.PasswordResetRecord{PK: "PASSWORD_RESET#" + resetHash, SK: "TOKEN", UserID: "teacher", SessionVersion: 1, ExpiresAt: s.now().Add(time.Hour).Unix(), CreatedAt: iso(s.now())}
 	if err := s.CreatePasswordReset(ctx, reset); err != nil {
 		t.Fatal(err)
 	}
@@ -250,6 +285,7 @@ func TestDynamoQOLDurableWritesCarryWriterFence(t *testing.T) {
 	if len(f.transactions) != 9 {
 		t.Fatalf("quality-of-life durable transactions = %d, want 9", len(f.transactions))
 	}
+	var createResetChecked, completeResetChecked bool
 	for index, tx := range f.transactions {
 		if len(tx.TransactItems) == 0 {
 			t.Fatalf("transaction %d is empty", index)
@@ -258,5 +294,38 @@ func TestDynamoQOLDurableWritesCarryWriterFence(t *testing.T) {
 		if fence == nil || avString(fence.Key, "pk") != clusterstate.ActivePK || avString(fence.Key, "sk") != clusterstate.ActiveSK || fence.ExpressionAttributeValues[":backend"].(*types.AttributeValueMemberS).Value != "A" || fence.ExpressionAttributeValues[":epoch"].(*types.AttributeValueMemberN).Value != "31" {
 			t.Fatalf("transaction %d is missing atomic writer fence: %#v", index, tx.TransactItems)
 		}
+		for _, item := range tx.TransactItems {
+			if check := item.ConditionCheck; check != nil && avString(check.Key, "pk") == "USER#teacher" {
+				createResetChecked = check.ConditionExpression != nil && strings.Contains(*check.ConditionExpression, "session_version") && check.ExpressionAttributeValues[":version"].(*types.AttributeValueMemberN).Value == "1"
+			}
+			if update := item.Update; update != nil && avString(update.Key, "pk") == "USER#teacher" && update.UpdateExpression != nil && strings.Contains(*update.UpdateExpression, ":password") {
+				completeResetChecked = update.ConditionExpression != nil && strings.Contains(*update.ConditionExpression, "session_version") && update.ExpressionAttributeValues[":version"].(*types.AttributeValueMemberN).Value == "1"
+			}
+		}
+	}
+	if !createResetChecked || !completeResetChecked {
+		t.Fatalf("reset transactions did not bind to session version: create=%v complete=%v", createResetChecked, completeResetChecked)
+	}
+}
+
+func TestDynamoPasswordResetSupportsVersionZeroProfiles(t *testing.T) {
+	ctx := context.Background()
+	s := fixedDynamo()
+	fake := s.Client.(*scriptedDynamo)
+	seedItem(fake, model.User{PK: "USER#legacy", SK: "PROFILE", UserID: "legacy", Email: "legacy@example.test", PasswordHash: "old-hash"})
+	record := model.PasswordResetRecord{PK: "PASSWORD_RESET#legacy-token", SK: "TOKEN", UserID: "legacy", SessionVersion: 0, ExpiresAt: s.now().Add(time.Hour).Unix()}
+	if err := s.CreatePasswordReset(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	createCheck := fake.transactions[len(fake.transactions)-1].TransactItems[0].ConditionCheck
+	if createCheck == nil || createCheck.ConditionExpression == nil || !strings.Contains(*createCheck.ConditionExpression, "attribute_not_exists(session_version)") {
+		t.Fatalf("version-zero reset creation does not support legacy profiles: %#v", createCheck)
+	}
+	if err := s.CompletePasswordReset(ctx, "legacy-token", "new-hash", s.now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	completeUpdate := fake.transactions[len(fake.transactions)-1].TransactItems[1].Update
+	if completeUpdate == nil || completeUpdate.ConditionExpression == nil || !strings.Contains(*completeUpdate.ConditionExpression, "attribute_not_exists(session_version)") {
+		t.Fatalf("version-zero reset completion does not support legacy profiles: %#v", completeUpdate)
 	}
 }

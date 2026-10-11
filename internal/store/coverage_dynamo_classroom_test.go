@@ -3,10 +3,14 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/ayush/slate/internal/clusterstate"
+	"github.com/ayush/slate/internal/config"
 	"github.com/ayush/slate/internal/model"
 )
 
@@ -246,18 +250,73 @@ func TestDynamoDeleteClassroomAndBatchCancellation(t *testing.T) {
 	if err := s.DeleteClassroom(ctx, "delete", "owner"); err == nil {
 		t.Fatal("classroom delete read errors should be returned")
 	}
+	seedItem(fake, classroomIndexItem{PK: "CLASSROOM_CODE#DEL", SK: "CLASSROOM", ClassroomID: "delete"})
+	seedItem(fake, classroomInvitationCodeRef{PK: "CLASSROOM_INVITE_CODE#DEL", SK: "INVITATION", ClassroomID: "other-classroom", InvitationID: "unrelated-invite"})
+	seedItem(fake, classroomIndexItem{PK: "CLASSROOM_OWNER#owner", SK: "CLASSROOM#delete", ClassroomID: "delete"})
 	seedItem(fake, model.ClassroomMember{PK: "CLASSROOM#delete", SK: "MEMBER#student", ClassroomID: "delete", UserID: "student", JoinedAt: "now"})
+	seedItem(fake, classroomIndexItem{PK: "CLASSROOM_MEMBER#student", SK: "CLASSROOM#delete", ClassroomID: "delete"})
+	seedItem(fake, model.ClassroomInvitation{PK: "CLASSROOM#delete", SK: "INVITATION#invite-1", ID: "invite-1", ClassroomID: "delete", Email: "student@example.test", JoinCode: "INVITE1", Status: "pending"})
+	seedItem(fake, classroomInvitationCodeRef{PK: "CLASSROOM_INVITE_CODE#INVITE1", SK: "INVITATION", ClassroomID: "delete", InvitationID: "invite-1"})
+	for index := 0; index < 26; index++ {
+		seedItem(fake, map[string]any{"pk": "CLASSROOM#delete", "sk": fmt.Sprintf("CHILD#%02d", index)})
+	}
 	fake.items["CLASSROOM#delete\x00BROKEN"] = map[string]types.AttributeValue{
 		"pk":      &types.AttributeValueMemberS{Value: "CLASSROOM#delete"},
 		"sk":      &types.AttributeValueMemberS{Value: "BROKEN"},
 		"user_id": &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}},
 	}
-	fake.batchUnprocessed = [][]types.WriteRequest{{{DeleteRequest: &types.DeleteRequest{Key: classroomMetaKey("delete")}}}}
-	if err := s.DeleteClassroom(ctx, "delete", "owner"); err != nil {
-		t.Fatalf("classroom delete = %v", err)
+	// Lookup cleanup completes, then the first child chunk commits. The next
+	// chunk fails, leaving META/owner intact and allowing a retry to resume.
+	fake.batchErrors = []error{nil, nil, errors.New("second child chunk failed")}
+	if err := s.DeleteClassroom(ctx, "delete", "owner"); err == nil {
+		t.Fatal("partial classroom cleanup error was swallowed")
+	}
+	for _, key := range []map[string]types.AttributeValue{classroomMetaKey("delete"), classroomCodeKey("DEL"), classroomOwnerIndexKey("owner", "delete")} {
+		if fake.items[itemKey(key)] == nil {
+			t.Fatalf("root key removed before child cleanup completed: %s", itemKey(key))
+		}
+	}
+	if fake.items[itemKey(classroomMemberIndexKey("student", "delete"))] != nil || fake.items[itemKey(invitationCodeKey("INVITE1"))] != nil {
+		t.Fatal("member or invitation lookup remained after the lookup cleanup phase")
+	}
+	if fake.items[itemKey(invitationCodeKey("DEL"))] == nil {
+		t.Fatal("classroom join code collision removed an unrelated invitation lookup")
+	}
+	if len(classroomChildren(fake, "delete")) == 0 {
+		t.Fatal("child cleanup did not leave remaining rows for the retry")
 	}
 	if got, _ := s.GetClassroom(ctx, "delete"); got != nil {
-		t.Fatal("deleted classroom still exists")
+		t.Fatal("deleting classroom remained visible to ordinary reads")
+	}
+	if rooms, err := s.ListClassroomsByOwner(ctx, "owner", 10); err != nil || containsClassroom(rooms, "delete") {
+		t.Fatalf("deleting classroom remained in owner listing: %#v, %v", rooms, err)
+	}
+	if got, err := s.FindClassroomByJoinCode(ctx, "DEL"); err != nil || got != nil {
+		t.Fatalf("deleting classroom remained joinable: %#v, %v", got, err)
+	}
+	if err := s.AddClassroomMember(ctx, &model.ClassroomMember{ClassroomID: "delete", UserID: "new-student"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("join raced into deleting classroom: %v", err)
+	}
+	if err := s.CreateClassroomInvitation(ctx, "owner", &model.ClassroomInvitation{ClassroomID: "delete", Email: "new@example.test", JoinCode: "NEWINVITE"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invitation was added to deleting classroom: %v", err)
+	}
+	if _, err := s.UpdateClassroom(ctx, "delete", "owner", model.ClassroomPatch{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleting classroom remained editable: %v", err)
+	}
+	if err := s.AcceptClassroomInvitation(ctx, "delete", "invite-1", &model.ClassroomMember{UserID: "student", Email: "student@example.test"}); err == nil {
+		t.Fatal("invitation acceptance succeeded after delete was fenced")
+	}
+	if err := s.DeleteClassroom(ctx, "delete", "owner"); err != nil {
+		t.Fatalf("retry classroom delete = %v", err)
+	}
+	if fake.items[itemKey(classroomMetaKey("delete"))] != nil || fake.items[itemKey(classroomCodeKey("DEL"))] != nil || fake.items[itemKey(classroomOwnerIndexKey("owner", "delete"))] != nil {
+		t.Fatal("successful retry did not remove the final root keys")
+	}
+	if len(classroomChildren(fake, "delete")) != 0 || fake.items[itemKey(classroomMemberIndexKey("student", "delete"))] != nil || fake.items[itemKey(invitationCodeKey("INVITE1"))] != nil {
+		t.Fatal("successful retry left classroom children or lookup records")
+	}
+	if fake.items[itemKey(invitationCodeKey("DEL"))] == nil {
+		t.Fatal("successful deletion removed unrelated invitation lookup")
 	}
 
 	seedItem(fake, model.Classroom{PK: "CLASSROOM#query-error", SK: "META", OwnerID: "owner", JoinCode: "QE"})
@@ -266,15 +325,137 @@ func TestDynamoDeleteClassroomAndBatchCancellation(t *testing.T) {
 		t.Fatal("classroom delete query errors should be returned")
 	}
 	seedItem(fake, model.Classroom{PK: "CLASSROOM#batch-error", SK: "META", OwnerID: "owner", JoinCode: "BE"})
+	seedItem(fake, map[string]any{"pk": "CLASSROOM#batch-error", "sk": "CHILD#1"})
 	fake.batchErrors = []error{errors.New("classroom delete batch failed")}
 	if err := s.DeleteClassroom(ctx, "batch-error", "owner"); err == nil {
 		t.Fatal("classroom delete batch errors should be returned")
 	}
 	seedItem(fake, model.Classroom{PK: "CLASSROOM#cancel", SK: "META", OwnerID: "owner", JoinCode: "CANCEL"})
+	seedItem(fake, model.ClassroomMember{PK: "CLASSROOM#cancel", SK: "MEMBER#student", ClassroomID: "cancel", UserID: "student"})
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	fake.batchUnprocessed = [][]types.WriteRequest{{{DeleteRequest: &types.DeleteRequest{Key: classroomMetaKey("cancel")}}}}
+	fake.batchUnprocessed = [][]types.WriteRequest{{{DeleteRequest: &types.DeleteRequest{Key: classroomMemberIndexKey("student", "cancel")}}}}
 	if err := s.DeleteClassroom(cancelled, "cancel", "owner"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled classroom delete = %v", err)
 	}
+}
+
+func classroomChildren(fake *scriptedDynamo, classroomID string) []string {
+	prefix := "CLASSROOM#" + classroomID + "\x00"
+	var children []string
+	for id := range fake.items {
+		if strings.HasPrefix(id, prefix) && !strings.HasSuffix(id, "\x00META") {
+			children = append(children, id)
+		}
+	}
+	return children
+}
+
+func TestDynamoDeleteClassroomCleanupPhasesAreFenced(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.FencingEnabled = true
+	s := NewWithClient(newScriptedDynamo(), cfg)
+	s.Now = fixedDynamo().Now
+	fake := s.Client.(*scriptedDynamo)
+	seedItem(fake, model.Classroom{PK: "CLASSROOM#fenced-delete", SK: "META", OwnerID: "owner", JoinCode: "FENCED1"})
+	seedItem(fake, model.ClassroomMember{PK: "CLASSROOM#fenced-delete", SK: "MEMBER#student", ClassroomID: "fenced-delete", UserID: "student"})
+	seedItem(fake, classroomIndexItem{PK: "CLASSROOM_MEMBER#student", SK: "CLASSROOM#fenced-delete", ClassroomID: "fenced-delete"})
+	ctx := clusterstate.WithWriter(context.Background(), clusterstate.Writer{Backend: "A", Epoch: 44})
+	if err := s.DeleteClassroom(ctx, "fenced-delete", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.transactions) < 4 {
+		t.Fatalf("cleanup should fence tombstone, lookups, children, and final delete; transactions=%d", len(fake.transactions))
+	}
+	for index, tx := range fake.transactions {
+		last := tx.TransactItems[len(tx.TransactItems)-1].ConditionCheck
+		if last == nil || avString(last.Key, "pk") != clusterstate.ActivePK || last.ExpressionAttributeValues[":epoch"].(*types.AttributeValueMemberN).Value != "44" {
+			t.Fatalf("cleanup transaction %d omitted the writer fence: %#v", index, tx.TransactItems)
+		}
+	}
+}
+
+func TestDynamoClassroomWritersConditionOnNotDeleting(t *testing.T) {
+	ctx := context.Background()
+	checkCondition := func(t *testing.T, condition *string, operation string) {
+		t.Helper()
+		if condition == nil || !strings.Contains(*condition, "attribute_not_exists(deleting)") {
+			t.Fatalf("%s transaction is not fenced against classroom deletion: %v", operation, condition)
+		}
+	}
+
+	t.Run("member join", func(t *testing.T) {
+		s := fixedDynamo()
+		fake := s.Client.(*scriptedDynamo)
+		seedItem(fake, model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		activeRead := scriptedAttributeMap(model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		fake.items[itemKey(classroomMetaKey("race"))]["deleting"] = &types.AttributeValueMemberBOOL{Value: true}
+		fake.getResponses = []map[string]types.AttributeValue{activeRead}
+		fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
+		if err := s.AddClassroomMember(ctx, &model.ClassroomMember{ClassroomID: "race", UserID: "student"}); !errors.Is(err, ErrClassroomMember) {
+			t.Fatalf("concurrent join = %v", err)
+		}
+		if len(fake.transactions) != 1 {
+			t.Fatalf("join transaction count = %d", len(fake.transactions))
+		}
+		checkCondition(t, fake.transactions[0].TransactItems[2].Update.ConditionExpression, "member join")
+		if fake.items[itemKey(classroomMemberKey("race", "student"))] != nil {
+			t.Fatal("concurrent join wrote a member after deletion started")
+		}
+	})
+
+	t.Run("invitation create", func(t *testing.T) {
+		s := fixedDynamo()
+		fake := s.Client.(*scriptedDynamo)
+		seedItem(fake, model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		activeRead := scriptedAttributeMap(model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		fake.items[itemKey(classroomMetaKey("race"))]["deleting"] = &types.AttributeValueMemberBOOL{Value: true}
+		fake.getResponses = []map[string]types.AttributeValue{activeRead}
+		fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
+		invitation := &model.ClassroomInvitation{ClassroomID: "race", Email: "student@example.test", JoinCode: "INVITE1"}
+		if err := s.CreateClassroomInvitation(ctx, "owner", invitation); !errors.Is(err, ErrClassroomCodeTaken) {
+			t.Fatalf("concurrent invite create = %v", err)
+		}
+		checkCondition(t, fake.transactions[0].TransactItems[0].ConditionCheck.ConditionExpression, "invitation create")
+		if fake.items[itemKey(classroomInvitationKey("race", invitation.ID))] != nil {
+			t.Fatal("concurrent invite create wrote after deletion started")
+		}
+	})
+
+	t.Run("invitation accept", func(t *testing.T) {
+		s := fixedDynamo()
+		fake := s.Client.(*scriptedDynamo)
+		seedItem(fake, model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		invitation := model.ClassroomInvitation{PK: "CLASSROOM#race", SK: "INVITATION#invite", ID: "invite", ClassroomID: "race", Email: "student@example.test", JoinCode: "INVITE1", Status: "pending"}
+		seedItem(fake, invitation)
+		activeRead := scriptedAttributeMap(model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		fake.items[itemKey(classroomMetaKey("race"))]["deleting"] = &types.AttributeValueMemberBOOL{Value: true}
+		fake.getResponses = []map[string]types.AttributeValue{scriptedAttributeMap(invitation), activeRead}
+		fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
+		if err := s.AcceptClassroomInvitation(ctx, "race", "invite", &model.ClassroomMember{UserID: "student", Email: "student@example.test"}); !errors.Is(err, ErrClassroomMember) {
+			t.Fatalf("concurrent invite acceptance = %v", err)
+		}
+		checkCondition(t, fake.transactions[0].TransactItems[2].Update.ConditionExpression, "invitation acceptance")
+		if fake.items[itemKey(classroomMemberKey("race", "student"))] != nil {
+			t.Fatal("invite acceptance wrote membership after deletion started")
+		}
+	})
+
+	t.Run("classroom update", func(t *testing.T) {
+		s := fixedDynamo()
+		fake := s.Client.(*scriptedDynamo)
+		seedItem(fake, model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		activeRead := scriptedAttributeMap(model.Classroom{PK: "CLASSROOM#race", SK: "META", OwnerID: "owner", JoinCode: "RACE123"})
+		fake.items[itemKey(classroomMetaKey("race"))]["deleting"] = &types.AttributeValueMemberBOOL{Value: true}
+		fake.getResponses = []map[string]types.AttributeValue{activeRead}
+		fake.updateErrors = []error{&types.ConditionalCheckFailedException{}}
+		name := "renamed"
+		if _, err := s.UpdateClassroom(ctx, "race", "owner", model.ClassroomPatch{Name: &name}); !errors.Is(err, ErrClassroomForbidden) {
+			t.Fatalf("concurrent class update = %v", err)
+		}
+		if len(fake.updates) != 1 {
+			t.Fatalf("update request count = %d", len(fake.updates))
+		}
+		checkCondition(t, fake.updates[0].ConditionExpression, "classroom update")
+	})
 }

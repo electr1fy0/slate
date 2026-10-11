@@ -112,6 +112,7 @@ func TestDynamoExamAttemptAndSubmissionErrorPaths(t *testing.T) {
 	if _, err := s.SubmitAttempt(ctx, "bad-winner", "student", "Ada", nil, "winner"); !errors.Is(err, ErrSubmissionConflict) {
 		t.Fatalf("bad submission winner = %v", err)
 	}
+	fake.transactionErrors = nil
 	if result, err := s.SubmitAttempt(ctx, "generated-request", "student", "Ada", nil, ""); err != nil || result.RequestID == "" {
 		t.Fatalf("generated request submission = %#v, %v", result, err)
 	}

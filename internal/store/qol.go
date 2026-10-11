@@ -77,7 +77,23 @@ func (s *Store) CreatePasswordReset(ctx context.Context, record model.PasswordRe
 	if err != nil {
 		return err
 	}
-	err = s.fencedPutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: item, ConditionExpression: aws.String("attribute_not_exists(pk)")})
+	version := &types.AttributeValueMemberN{Value: fmt.Sprint(record.SessionVersion)}
+	versionCondition := "session_version = :version"
+	if record.SessionVersion == 0 {
+		// Profiles created before session_version was introduced are at version 0.
+		versionCondition = "(attribute_not_exists(session_version) OR session_version = :version)"
+	}
+	err = s.transactWrite(ctx, []types.TransactWriteItem{
+		{ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(s.TableName), Key: key("USER#"+strings.TrimSpace(record.UserID), "PROFILE"),
+			ConditionExpression:       aws.String("attribute_exists(pk) AND " + versionCondition),
+			ExpressionAttributeValues: map[string]types.AttributeValue{":version": version},
+		}},
+		{Put: &types.Put{
+			TableName: aws.String(s.TableName), Item: item,
+			ConditionExpression: aws.String("attribute_not_exists(pk)"),
+		}},
+	})
 	if isConditional(err) || isTransactionConditional(err) {
 		return ErrPasswordResetInvalid
 	}
@@ -108,10 +124,11 @@ func (s *Store) CompletePasswordReset(ctx context.Context, tokenHash, passwordHa
 		{Update: &types.Update{
 			TableName: aws.String(s.TableName), Key: key("USER#"+reset.UserID, "PROFILE"),
 			UpdateExpression:    aws.String("SET password_hash = :password ADD session_version :one"),
-			ConditionExpression: aws.String("attribute_exists(pk)"),
+			ConditionExpression: aws.String("attribute_exists(pk) AND " + passwordResetSessionVersionCondition(reset.SessionVersion)),
 			ExpressionAttributeValues: map[string]types.AttributeValue{
 				":password": &types.AttributeValueMemberS{Value: passwordHash},
 				":one":      &types.AttributeValueMemberN{Value: "1"},
+				":version":  &types.AttributeValueMemberN{Value: fmt.Sprint(reset.SessionVersion)},
 			},
 		}},
 	})
@@ -119,6 +136,13 @@ func (s *Store) CompletePasswordReset(ctx context.Context, tokenHash, passwordHa
 		return ErrPasswordResetInvalid
 	}
 	return err
+}
+
+func passwordResetSessionVersionCondition(version int64) string {
+	if version == 0 {
+		return "(attribute_not_exists(session_version) OR session_version = :version)"
+	}
+	return "session_version = :version"
 }
 
 func classroomCreateReceiptKey(ownerID, clientID string) map[string]types.AttributeValue {
@@ -261,7 +285,7 @@ func (s *Store) CreateClassroomInvitation(ctx context.Context, ownerID string, i
 		return err
 	}
 	err = s.transactWrite(ctx, []types.TransactWriteItem{
-		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), ConditionExpression: aws.String("owner_id = :owner"), ExpressionAttributeValues: map[string]types.AttributeValue{":owner": &types.AttributeValueMemberS{Value: strings.TrimSpace(ownerID)}}}},
+		{ConditionCheck: &types.ConditionCheck{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), ConditionExpression: aws.String("owner_id = :owner AND attribute_not_exists(deleting)"), ExpressionAttributeValues: map[string]types.AttributeValue{":owner": &types.AttributeValueMemberS{Value: strings.TrimSpace(ownerID)}}}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: item, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: codeRef, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 	})
@@ -310,6 +334,10 @@ func (s *Store) FindClassroomInvitationByJoinCode(ctx context.Context, joinCode 
 	}
 	var ref classroomInvitationCodeRef
 	if err := unmarshal(refItem, &ref); err != nil {
+		return nil, err
+	}
+	classroom, err := s.GetClassroom(ctx, ref.ClassroomID)
+	if err != nil || classroom == nil {
 		return nil, err
 	}
 	item, err := s.get(ctx, classroomInvitationKey(ref.ClassroomID, ref.InvitationID))
@@ -401,7 +429,7 @@ func (s *Store) AcceptClassroomInvitation(ctx context.Context, classroomID, invi
 	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: memberItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: memberRef, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
-		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) + :one, #updated_at = :now"), ConditionExpression: aws.String("attribute_exists(pk)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":now": &types.AttributeValueMemberS{Value: now}}}},
+		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) + :one, #updated_at = :now"), ConditionExpression: aws.String("attribute_exists(pk) AND attribute_not_exists(deleting)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":now": &types.AttributeValueMemberS{Value: now}}}},
 		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomInvitationKey(classroom.ID, invitationID), UpdateExpression: aws.String("SET #status = :accepted, accepted_by = :user, accepted_at = :now"), ConditionExpression: aws.String("#status = :pending AND email = :email"), ExpressionAttributeNames: map[string]string{"#status": "status"}, ExpressionAttributeValues: map[string]types.AttributeValue{":accepted": &types.AttributeValueMemberS{Value: "accepted"}, ":pending": &types.AttributeValueMemberS{Value: "pending"}, ":email": &types.AttributeValueMemberS{Value: strings.ToLower(strings.TrimSpace(v.Email))}, ":user": &types.AttributeValueMemberS{Value: v.UserID}, ":now": &types.AttributeValueMemberS{Value: now}}}},
 	})
 	if isTransactionConditional(err) {
@@ -426,7 +454,7 @@ func (s *Store) LeaveClassroom(ctx context.Context, classroomID, userID string) 
 	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: memberKey, ConditionExpression: aws.String("attribute_exists(pk)")}},
 		{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: classroomMemberIndexKey(userID, classroomID)}},
-		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroomID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) - :one, #updated_at = :now"), ConditionExpression: aws.String("attribute_exists(pk)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":now": &types.AttributeValueMemberS{Value: iso(s.now())}}}},
+		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroomID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) - :one, #updated_at = :now"), ConditionExpression: aws.String("attribute_exists(pk) AND attribute_not_exists(deleting)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":now": &types.AttributeValueMemberS{Value: iso(s.now())}}}},
 	})
 	if isTransactionConditional(err) {
 		return ErrClassroomMemberNotFound
@@ -532,6 +560,10 @@ func (m *MemoryStore) CreatePasswordReset(ctx context.Context, record model.Pass
 		if strings.TrimSpace(record.UserID) == "" || strings.TrimSpace(strings.TrimPrefix(record.PK, "PASSWORD_RESET#")) == "" || record.ExpiresAt <= m.now().Unix() {
 			return fmt.Errorf("invalid password reset record")
 		}
+		user := m.users[strings.TrimSpace(record.UserID)]
+		if user == nil || user.SessionVersion != record.SessionVersion {
+			return ErrPasswordResetInvalid
+		}
 		if m.passwordResets == nil {
 			m.passwordResets = map[string]model.PasswordResetRecord{}
 		}
@@ -553,7 +585,7 @@ func (m *MemoryStore) CompletePasswordReset(ctx context.Context, tokenHash, pass
 			return ErrPasswordResetInvalid
 		}
 		user := m.users[record.UserID]
-		if user == nil {
+		if user == nil || user.SessionVersion != record.SessionVersion {
 			return ErrPasswordResetInvalid
 		}
 		user.PasswordHash = passwordHash
