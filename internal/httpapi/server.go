@@ -644,6 +644,11 @@ func (s *Server) canAccessExam(ctx context.Context, user *model.User, meta *mode
 	if ownerID == "" && classroomID == "" {
 		return user.Role == auth.RoleStudent || user.Role == auth.RoleTeacher, nil
 	}
+	// Ownership survives classroom deletion so the teacher can still archive,
+	// inspect, or reassign their assessment. Learners still need a live class.
+	if user.Role == auth.RoleTeacher {
+		return ownerID != "" && user.UserID == ownerID, nil
+	}
 	if classroomID != "" {
 		if ownerID == "" || s.ClassroomStore == nil {
 			return false, nil
@@ -657,8 +662,6 @@ func (s *Server) canAccessExam(ctx context.Context, user *model.User, meta *mode
 		}
 	}
 	switch user.Role {
-	case auth.RoleTeacher:
-		return ownerID != "" && user.UserID == ownerID, nil
 	case auth.RoleStudent:
 		if classroomID == "" || s.ClassroomStore == nil {
 			return false, nil
