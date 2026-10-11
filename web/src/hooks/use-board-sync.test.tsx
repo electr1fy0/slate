@@ -140,6 +140,22 @@ describe("useBoardSync", () => {
     expect(probe.state.current.selfId).toBe("peer-1")
   })
 
+  it("marks realtime unavailable without opening a socket or buffering local edits", () => {
+    const probe = useProbe({ ...baseOptions, enabled: false })
+    mount(probe)
+
+    expect(probe.state.current.status).toBe("unavailable")
+    expect(MockWebSocket.instances).toHaveLength(0)
+
+    act(() => {
+      probe.state.current.send({
+        type: "elements",
+        elements: [{ id: "local-only", version: 1 }],
+      })
+    })
+    expect(MockWebSocket.instances).toHaveLength(0)
+  })
+
   it("joins as a guest, ignores a duplicate open, and closes on socket errors", () => {
     const probe = useProbe({ ...baseOptions, name: "", role: "student" })
     mount(probe)

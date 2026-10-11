@@ -24,17 +24,21 @@ const (
 // Config is the mutable chaos configuration. ErrorPct is clamped to 0..100;
 // negative latency is treated as zero.
 type Config struct {
-	ErrorPct    int
-	LatencyMS   int
-	DBStall     bool
-	ErrorWindow int
+	ErrorPct          int
+	ErrorPctExpiresMS int64
+	LatencyMS         int
+	DBStall           bool
+	DropResponseOnce  bool
+	ErrorWindow       int
 }
 
 // Snapshot is a race-free copy of current chaos flags.
 type Snapshot struct {
-	ErrorPct  int  `json:"error_pct"`
-	LatencyMS int  `json:"latency_ms"`
-	DBStall   bool `json:"db_stall"`
+	ErrorPct          int   `json:"error_pct"`
+	ErrorPctExpiresMS int64 `json:"error_pct_expires_ms,omitempty"`
+	LatencyMS         int   `json:"latency_ms"`
+	DBStall           bool  `json:"db_stall"`
+	DropResponseOnce  bool  `json:"drop_response_once"`
 }
 
 type statusEntry struct {
@@ -44,13 +48,16 @@ type statusEntry struct {
 
 // State stores chaos flags and a bounded window of completed HTTP statuses.
 type State struct {
-	mu        sync.RWMutex
-	errorPct  int
-	latencyMS int
-	dbStall   bool
-	window    int
-	statuses  []statusEntry
-	nextID    uint64
+	mu                sync.RWMutex
+	errorPct          int
+	errorPctExpiresMS int64
+	latencyMS         int
+	dbStall           bool
+	dropResponseOnce  bool
+	window            int
+	statuses          []statusEntry
+	nextID            uint64
+	now               func() time.Time
 }
 
 // ChaosState is retained as a readable migration alias.
@@ -63,7 +70,7 @@ func NewState(config Config) *State {
 	if window <= 0 {
 		window = defaultErrorWindow
 	}
-	s := &State{window: window}
+	s := &State{window: window, now: time.Now}
 	s.Set(config)
 	return s
 }
@@ -78,8 +85,10 @@ func (s *State) Set(config Config) {
 	}
 	s.mu.Lock()
 	s.errorPct = clampPercent(config.ErrorPct)
+	s.errorPctExpiresMS = config.ErrorPctExpiresMS
 	s.latencyMS = maxInt(config.LatencyMS, 0)
 	s.dbStall = config.DBStall
+	s.dropResponseOnce = config.DropResponseOnce
 	if config.ErrorWindow > 0 && config.ErrorWindow != s.window {
 		s.window = config.ErrorWindow
 		if len(s.statuses) > s.window {
@@ -92,9 +101,11 @@ func (s *State) Set(config Config) {
 // Configure changes only flags that are explicitly supplied by callers. This
 // is useful for an admin endpoint where omitted JSON fields mean "unchanged".
 type Patch struct {
-	ErrorPct  *int  `json:"error_pct"`
-	LatencyMS *int  `json:"latency_ms"`
-	DBStall   *bool `json:"db_stall"`
+	ErrorPct          *int   `json:"error_pct"`
+	ErrorPctExpiresMS *int64 `json:"error_pct_expires_ms"`
+	LatencyMS         *int   `json:"latency_ms"`
+	DBStall           *bool  `json:"db_stall"`
+	DropResponseOnce  *bool  `json:"drop_response_once"`
 }
 
 func (s *State) Configure(p Patch) {
@@ -104,12 +115,23 @@ func (s *State) Configure(p Patch) {
 	s.mu.Lock()
 	if p.ErrorPct != nil {
 		s.errorPct = clampPercent(*p.ErrorPct)
+		if p.ErrorPctExpiresMS == nil {
+			// Explicit manual changes remain in effect until reset unless the
+			// caller provides an expiry in the same patch.
+			s.errorPctExpiresMS = 0
+		}
+	}
+	if p.ErrorPctExpiresMS != nil {
+		s.errorPctExpiresMS = *p.ErrorPctExpiresMS
 	}
 	if p.LatencyMS != nil {
 		s.latencyMS = maxInt(*p.LatencyMS, 0)
 	}
 	if p.DBStall != nil {
 		s.dbStall = *p.DBStall
+	}
+	if p.DropResponseOnce != nil {
+		s.dropResponseOnce = *p.DropResponseOnce
 	}
 	s.mu.Unlock()
 }
@@ -119,15 +141,63 @@ func (s *State) Snapshot() Snapshot {
 	if s == nil {
 		return Snapshot{}
 	}
+	s.expireErrorPctIfDue()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return Snapshot{ErrorPct: s.errorPct, LatencyMS: s.latencyMS, DBStall: s.dbStall}
+	return Snapshot{ErrorPct: s.errorPct, ErrorPctExpiresMS: s.errorPctExpiresMS, LatencyMS: s.latencyMS, DBStall: s.dbStall, DropResponseOnce: s.dropResponseOnce}
+}
+
+// SetNow injects the clock used for lazy fault expiry. Production callers
+// should leave the default wall clock untouched.
+func (s *State) SetNow(now func() time.Time) {
+	if s == nil {
+		return
+	}
+	if now == nil {
+		now = time.Now
+	}
+	s.mu.Lock()
+	s.now = now
+	s.mu.Unlock()
+}
+
+func (s *State) expireErrorPctIfDue() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.errorPctExpiresMS > 0 {
+		now := time.Now
+		if s.now != nil {
+			now = s.now
+		}
+		if !now().Before(time.UnixMilli(s.errorPctExpiresMS)) {
+			s.errorPct = 0
+			s.errorPctExpiresMS = 0
+		}
+	}
+	s.mu.Unlock()
+}
+
+// TakeDropResponseOnce consumes the post-commit response fault atomically.
+func (s *State) TakeDropResponseOnce() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dropResponseOnce {
+		return false
+	}
+	s.dropResponseOnce = false
+	return true
 }
 
 func (s *State) ErrorPct() int {
 	if s == nil {
 		return 0
 	}
+	s.expireErrorPctIfDue()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.errorPct
@@ -159,7 +229,8 @@ func (s *State) Reset() {
 		return
 	}
 	s.mu.Lock()
-	s.errorPct, s.latencyMS, s.dbStall = 0, 0, false
+	s.errorPct, s.latencyMS, s.dbStall, s.dropResponseOnce = 0, 0, false, false
+	s.errorPctExpiresMS = 0
 	s.mu.Unlock()
 }
 
@@ -257,6 +328,7 @@ func (s *State) ShouldInject(path string) bool {
 	if s == nil || isProbeExempt(path) {
 		return false
 	}
+	s.expireErrorPctIfDue()
 	s.mu.RLock()
 	pct := s.errorPct
 	s.mu.RUnlock()
@@ -310,6 +382,13 @@ func (s *State) Handler(next http.Handler) http.Handler {
 			s.Record(id, 499)
 			return
 		}
+		if s.DBStall() && isExamWrite(r.Method, r.URL.Path) {
+			s.Record(id, http.StatusServiceUnavailable)
+			writeJSONResponse(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{
+				"code": "DATABASE_STALLED", "message": "exam data writes are temporarily unavailable", "retryable": true,
+			}})
+			return
+		}
 		if s.ShouldInject(r.URL.Path) {
 			s.Record(id, http.StatusInternalServerError)
 			writeChaosResponse(w)
@@ -323,6 +402,33 @@ func (s *State) Handler(next http.Handler) http.Handler {
 		}
 		s.Record(id, status)
 	})
+}
+
+func isExamWrite(method, path string) bool {
+	if !strings.HasPrefix(path, "/exam/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/exam/"), "/")
+	switch {
+	case method == http.MethodGet && len(parts) == 1:
+		return true
+	case method == http.MethodGet && len(parts) == 2 && parts[1] == "attempt":
+		return true
+	case method == http.MethodPut && len(parts) == 2 && parts[1] == "attempt":
+		return true
+	case method == http.MethodPost && len(parts) == 2 && parts[1] == "submit":
+		return true
+	case method == http.MethodPost && len(parts) == 3 && parts[1] == "attempt" && parts[2] == "submit":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeJSONResponse(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func writeChaosResponse(w http.ResponseWriter) {

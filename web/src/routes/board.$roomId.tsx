@@ -5,6 +5,7 @@ import {
   CheckIcon,
   CopyIcon,
   DownloadIcon,
+  InfoIcon,
   RefreshCwIcon,
   WifiOffIcon,
 } from "lucide-react"
@@ -17,11 +18,12 @@ import { normaliseRoomCode } from "@/lib/room-code"
 import { rememberRoom } from "@/lib/recent-rooms"
 import { requireAuth } from "@/lib/guard"
 import { useAuth } from "@/lib/auth"
-import { api } from "@/lib/api"
+import { api, hasExternalApiOrigin } from "@/lib/api"
 import type { BoardElement, ClientMessage } from "@/lib/types"
 import { useBoardSync } from "@/hooks/use-board-sync"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -32,7 +34,7 @@ export const Route = createFileRoute("/board/$roomId")({
   ssr: false,
   beforeLoad: ({ location }) => requireAuth(location),
   component: BoardPage,
-  head: () => ({ meta: [{ title: "Live board · Slate" }] }),
+  head: () => ({ meta: [{ title: "Live board · Continuum" }] }),
 })
 
 const PERMISSION_KEY = "slate.board-perms"
@@ -76,6 +78,7 @@ function BoardPage() {
 
   const isTeacher = auth.user?.role === "teacher"
   const canEdit = isTeacher || studentDraw
+  const boardRealtimeEnabled = !hasExternalApiOrigin()
 
   const onRemote = useCallback((elements: BoardElement[]) => {
     canvasHandle.current.mergeRemote?.(elements)
@@ -85,6 +88,7 @@ function BoardPage() {
     roomId,
     name: auth.user?.name || "Guest",
     role: isTeacher ? "teacher" : "student",
+    enabled: boardRealtimeEnabled,
     onInit: onRemote,
     onElements: onRemote,
   })
@@ -134,8 +138,10 @@ function BoardPage() {
       elements,
     }
     try {
-      const persisted = await api.boardExport(roomId)
-      payload = { ...payload, ...persisted, exported_at: new Date().toISOString() }
+      if (boardRealtimeEnabled) {
+        const persisted = await api.boardExport(roomId)
+        payload = { ...payload, ...persisted, exported_at: new Date().toISOString() }
+      }
     } catch {
       // The live canvas remains a useful export when the persistence API is unavailable.
     }
@@ -169,7 +175,9 @@ function BoardPage() {
               ? "Board connected"
               : sync.status === "reconnecting"
                 ? "Connection lost. Reconnecting."
-                : "Connecting to board."}
+                : sync.status === "unavailable"
+                  ? "Live board sync is unavailable in this deployment."
+                  : "Connecting to board."}
           </p>
           {sync.status === "live" ? (
             <Badge variant="default">
@@ -244,6 +252,15 @@ function BoardPage() {
         </>
       }
     >
+      {!boardRealtimeEnabled ? (
+        <Alert className="m-4 mb-0">
+          <InfoIcon />
+          <AlertTitle>Live board sync is unavailable in this deployment</AlertTitle>
+          <AlertDescription>
+            This deployment sends API requests to a separate HTTP origin and has no configured board WebSocket endpoint. Edits stay in this browser; export a snapshot before leaving to keep them.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <Suspense
         fallback={
           <div className="flex h-full items-center justify-center">

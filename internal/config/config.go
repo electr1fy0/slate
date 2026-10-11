@@ -14,6 +14,8 @@ import (
 type Settings struct {
 	Region                string
 	AppRole               string
+	BackendID             string
+	FencingEnabled        bool
 	RoleFile              string
 	TableName             string
 	DDBEndpointMode       string
@@ -46,7 +48,7 @@ type Settings struct {
 // service. A fresh slice is returned so callers can safely modify origins.
 func Defaults() Settings {
 	return Settings{
-		Region:             "ap-south-1",
+		Region:             "ap-southeast-2",
 		AppRole:            "active",
 		RoleFile:           "/etc/continuum/role",
 		TableName:          "continuum",
@@ -87,6 +89,18 @@ func LoadFrom(getenv func(string) string) (Settings, error) {
 	var err error
 	s.Region = get("AWS_REGION", s.Region)
 	s.AppRole = get("APP_ROLE", s.AppRole)
+	s.BackendID = strings.ToUpper(strings.TrimSpace(getenv("BACKEND_ID")))
+	if s.BackendID != "" && s.BackendID != "A" && s.BackendID != "B" {
+		return s, fmt.Errorf("BACKEND_ID must be A or B")
+	}
+	fencing := getenv("FENCING_ENABLED")
+	if fencing != "" && fencing != "0" && fencing != "1" {
+		return s, fmt.Errorf("FENCING_ENABLED must be 0 or 1")
+	}
+	s.FencingEnabled = fencing == "1"
+	if s.FencingEnabled && s.BackendID == "" {
+		return s, fmt.Errorf("BACKEND_ID must be A or B when FENCING_ENABLED=1")
+	}
 	s.RoleFile = get("CONTINUUM_ROLE_FILE", s.RoleFile)
 	s.TableName = get("TABLE_NAME", s.TableName)
 	s.DDBEndpointMode = getenv("DDB_ENDPOINT_MODE")

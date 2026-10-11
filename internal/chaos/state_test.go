@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,6 +53,60 @@ func TestHandlerInjectsAndExemptsHealthAndAdmin(t *testing.T) {
 	statuses := state.Statuses()
 	if len(statuses) != 3 || statuses[0] != http.StatusAccepted || statuses[1] != http.StatusAccepted || statuses[2] != 500 {
 		t.Fatalf("recorded statuses = %#v", statuses)
+	}
+}
+
+func TestDBStallLeavesLivenessHealthyAndFailsExamMutations(t *testing.T) {
+	state := NewState(Config{DBStall: true})
+	handler := state.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	live := httptest.NewRecorder()
+	handler.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	if live.Code != http.StatusOK {
+		t.Fatalf("live probe under DB stall = %d", live.Code)
+	}
+	write := httptest.NewRecorder()
+	handler.ServeHTTP(write, httptest.NewRequest(http.MethodPost, "/exam/e/submit", nil))
+	if write.Code != http.StatusServiceUnavailable || !strings.Contains(write.Body.String(), `"code":"DATABASE_STALLED"`) {
+		t.Fatalf("exam write under DB stall = %d %s", write.Code, write.Body.String())
+	}
+}
+
+func TestDropResponseFaultIsOneShotAndResettable(t *testing.T) {
+	state := NewState(Config{})
+	if state.TakeDropResponseOnce() {
+		t.Fatal("unarmed drop-response fault was consumed")
+	}
+	armed := true
+	state.Configure(Patch{DropResponseOnce: &armed})
+	if !state.TakeDropResponseOnce() || state.TakeDropResponseOnce() {
+		t.Fatal("drop-response fault was not consumed exactly once")
+	}
+	state.Configure(Patch{DropResponseOnce: &armed})
+	state.Reset()
+	if state.Snapshot().DropResponseOnce {
+		t.Fatal("reset did not clear drop-response fault")
+	}
+}
+
+func TestErrorPercentFaultExpiresLazilyOnRequestAccess(t *testing.T) {
+	now := time.UnixMilli(1_800_000_000_000)
+	expires := now.Add(time.Second).UnixMilli()
+	state := NewState(Config{ErrorPct: 100, ErrorPctExpiresMS: expires})
+	state.SetNow(func() time.Time { return now })
+	if snapshot := state.Snapshot(); snapshot.ErrorPct != 100 || snapshot.ErrorPctExpiresMS != expires {
+		t.Fatalf("armed error fault = %#v", snapshot)
+	}
+	if !state.ShouldInject("/exam/e") {
+		t.Fatal("fault did not inject before expiry")
+	}
+	now = time.UnixMilli(expires)
+	if state.ShouldInject("/exam/e") || state.ErrorPct() != 0 {
+		t.Fatal("expired error fault remained active")
+	}
+	if snapshot := state.Snapshot(); snapshot.ErrorPct != 0 || snapshot.ErrorPctExpiresMS != 0 {
+		t.Fatalf("expired fault state was not cleared lazily: %#v", snapshot)
 	}
 }
 
@@ -267,5 +322,6 @@ func (w *testHijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return w.conn, bufio.NewReadWriter(bufio.NewReader(w.conn), bufio.NewWriter(w.conn)), nil
 }
 
-func ptrInt(value int) *int    { return &value }
-func ptrBool(value bool) *bool { return &value }
+func ptrInt(value int) *int       { return &value }
+func ptrInt64(value int64) *int64 { return &value }
+func ptrBool(value bool) *bool    { return &value }

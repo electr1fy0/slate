@@ -7,8 +7,19 @@ import tailwindcss from "@tailwindcss/vite"
 const API_TARGET = process.env.API_ORIGIN ?? "http://localhost:8000"
 
 const config = defineConfig({
+  define: {
+    "import.meta.env.CONTINUUM_DEMO": JSON.stringify(process.env.CONTINUUM_DEMO ?? ""),
+  },
   resolve: { tsconfigPaths: true },
-  plugins: [devtools(), tailwindcss(), tanstackStart(), viteReact()],
+  plugins: [
+    ...(process.env.CONTINUUM_DEMO === "1" ? [] : [devtools()]),
+    tailwindcss(),
+    tanstackStart({
+      spa: { enabled: true },
+      router: { routeFileIgnorePattern: "\\.test\\.(ts|tsx)$" },
+    }),
+    viteReact(),
+  ],
   server: {
     proxy: {
       "/api": {

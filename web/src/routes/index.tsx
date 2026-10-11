@@ -9,6 +9,7 @@ import {
   LogOutIcon,
   PlusIcon,
   PresentationIcon,
+  ShieldCheckIcon,
   SparklesIcon,
   UserIcon,
 } from "lucide-react"
@@ -44,7 +45,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 export const Route = createFileRoute("/")({
   component: HomePage,
-  head: () => ({ meta: [{ title: "Slate — Classroom boards & quizzes" }] }),
+  head: () => ({ meta: [{ title: "Continuum — Assessment continuity for timed exams" }] }),
 })
 
 function HomePage() {
@@ -85,129 +86,54 @@ function HomePage() {
   }
 
   return (
-    <AppShell title="Classroom dashboard" description="Your classes, live boards, and quizzes at a glance">
+    <AppShell title="Continuum" description="Assessment continuity for timed exams">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <section className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
-              {isTeacher ? "Run today's class" : "Join today's class"}
+              {isTeacher ? "Deliver timed assessments" : "Protect your final submission"}
             </h2>
             <Badge variant="secondary">{isTeacher ? "Teacher view" : "Learner view"}</Badge>
           </div>
           <p className="max-w-2xl text-sm text-muted-foreground">
             {isTeacher
-              ? "Organize a roster, open a live board, publish a quiz, and keep the room visible while class is in motion."
-              : "Select a class, join the live board, and keep your published quizzes close at hand."}
+              ? "Give every timed exam a clear deadline and a receipt-backed completion path. Continuum checks whether exam reads and writes are safe, beyond simple process liveness."
+              : auth.user
+                ? "Your final answer snapshot and request ID are saved locally before submission. If a response is lost, a retry can recover the matching server receipt; the exam deadline remains authoritative."
+                : "Sign in before an exam so your final answer snapshot and recovered receipt stay tied to your learner identity."}
           </p>
         </section>
 
-        <ClassroomDashboard onOpenBoard={openClassBoard} />
-
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,0.7fr)]">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <PresentationIcon data-icon="inline-start" />
-                Join a live board
-              </CardTitle>
-              <CardDescription>
-                Rooms are live the moment two people open them. Share the code with your class.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="room-code">Room code</FieldLabel>
-                  <InputGroup>
-                    <InputGroupInput
-                      id="room-code"
-                      placeholder="e.g. k7m2xw9q"
-                      value={joinCode}
-                      onChange={(event) => setJoinCode(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") joinBoard(joinCode)
-                      }}
-                      autoCapitalize="none"
-                      spellCheck={false}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <InputGroupButton onClick={() => joinBoard(joinCode)}>
-                        Join
-                        <ArrowRightIcon data-icon="inline-end" />
-                      </InputGroupButton>
-                    </InputGroupAddon>
-                  </InputGroup>
-                  <FieldDescription>Letters and numbers only.</FieldDescription>
-                </Field>
-              </FieldGroup>
-            </CardContent>
-            <CardFooter className="flex-wrap gap-2">
-              <Button variant="secondary" onClick={() => joinBoard(newRoomCode())}>
-                <PlusIcon data-icon="inline-start" />
-                New room
-              </Button>
-              {isTeacher ? (
-                <Button nativeButton={false} render={<Link to="/teacher" />}>
-                  <ClipboardListIcon data-icon="inline-start" />
-                  Create a quiz
-                </Button>
-              ) : null}
-            </CardFooter>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <UserIcon data-icon="inline-start" />
-                You
-              </CardTitle>
-              <CardDescription>
-                {auth.user ? "Signed in to this browser." : "Sign in to join boards and quizzes."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {auth.user ? (
-                <div className="flex items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
-                    {auth.user.name.trim().slice(0, 2).toUpperCase() || "??"}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{auth.user.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">{auth.user.email}</p>
-                  </div>
-                  <Badge variant={isTeacher ? "default" : "secondary"} className="capitalize">
-                    {auth.user.role}
-                  </Badge>
-                </div>
-              ) : (
-                <FieldDescription>
-                  Your identity keeps quiz submissions and board presence honest.
-                </FieldDescription>
-              )}
-            </CardContent>
-            <CardFooter>
-              {auth.user ? (
-                <Button variant="outline" onClick={signOut}>
-                  <LogOutIcon data-icon="inline-start" />
-                  Sign out
-                </Button>
-              ) : (
-                <Button nativeButton={false} render={<Link to="/login" />}>
-                  <LogInIcon data-icon="inline-start" />
-                  Sign in
-                </Button>
-              )}
-            </CardFooter>
-          </Card>
+        <div className="flex items-start gap-3 rounded-xl border border-primary/15 bg-primary/[0.03] p-4">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <ShieldCheckIcon className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold">Application failure recovery for final submissions</h3>
+              <Badge variant="secondary">Continuum</Badge>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              The app retries the same immutable answer snapshot and request ID. It marks a submission complete only after receiving the matching server receipt.
+            </p>
+          </div>
         </div>
 
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-3">
+        <section id="assessments" className="flex flex-col gap-3" aria-labelledby="assessments-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">Published quizzes</h3>
-              <p className="text-xs text-muted-foreground">Live catalog from the exam API.</p>
+              <h3 id="assessments-heading" className="text-sm font-semibold">Timed assessments</h3>
+              <p className="text-xs text-muted-foreground">Published exams, deadlines, and confirmed submission receipts.</p>
             </div>
-            <Badge variant="secondary">{examsQuery.data?.length ?? "…"}</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">{examsQuery.data?.length ?? "…"}</Badge>
+              {isTeacher ? (
+                <Button size="sm" variant="outline" nativeButton={false} render={<Link to="/teacher" />}>
+                  <ClipboardListIcon data-icon="inline-start" />
+                  Manage assessments
+                </Button>
+              ) : null}
+            </div>
           </div>
           {!mounted || examsQuery.isPending ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -221,9 +147,9 @@ function HomePage() {
                 <EmptyMedia variant="icon">
                   <SparklesIcon />
                 </EmptyMedia>
-                <EmptyTitle>Quiz catalog unavailable</EmptyTitle>
+                <EmptyTitle>Assessment catalog unavailable</EmptyTitle>
                 <EmptyDescription>
-                  The dashboard still works with local classes and boards. Start the API to load published quizzes.
+                  The catalog request failed. Classroom tools remain available; try again when the API responds.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -233,9 +159,17 @@ function HomePage() {
                 <EmptyMedia variant="icon">
                   <ClipboardListIcon />
                 </EmptyMedia>
-                <EmptyTitle>No quizzes yet</EmptyTitle>
-                <EmptyDescription>Teachers can publish one from the Teacher studio.</EmptyDescription>
+                <EmptyTitle>No assessments published yet</EmptyTitle>
+                <EmptyDescription>
+                  Teachers can prepare and publish an assessment from the assessment manager.
+                </EmptyDescription>
               </EmptyHeader>
+              {isTeacher ? (
+                <Button nativeButton={false} render={<Link to="/teacher" />}>
+                  Manage assessments
+                  <ArrowRightIcon data-icon="inline-end" />
+                </Button>
+              ) : null}
             </Empty>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -243,7 +177,7 @@ function HomePage() {
                 const state = examState(exam)
                 const closedForStudent = state === "closed" && auth.user?.role !== "teacher"
                 return (
-                  <Card key={exam.id} className="gap-3 py-4">
+                  <Card key={exam.id} className="gap-3 border-primary/10 py-4">
                     <CardHeader className="px-4">
                       <CardTitle className="text-base">{exam.title}</CardTitle>
                       <CardDescription>
@@ -266,7 +200,7 @@ function HomePage() {
                           nativeButton={false}
                           render={<Link to="/quiz/$examId" params={{ examId: exam.id }} />}
                         >
-                          {!auth.user || auth.user.role === "student" ? "Take quiz" : "Preview"}
+                          {!auth.user || auth.user.role === "student" ? "Start assessment" : "Preview"}
                           <ArrowRightIcon data-icon="inline-end" />
                         </Button>
                       )}
@@ -276,6 +210,112 @@ function HomePage() {
               })}
             </div>
           )}
+        </section>
+
+        <section className="flex flex-col gap-4 border-t pt-5" aria-labelledby="classroom-tools-heading">
+          <div>
+            <h3 id="classroom-tools-heading" className="text-sm font-semibold">Classroom tools</h3>
+            <p className="text-xs text-muted-foreground">Roster coordination and live boards for the rest of the lesson.</p>
+          </div>
+          <ClassroomDashboard onOpenBoard={openClassBoard} />
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(18rem,0.7fr)]">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <PresentationIcon data-icon="inline-start" />
+                  Join a live board
+                </CardTitle>
+                <CardDescription>
+                  Rooms are live the moment two people open them. Share the code with your class.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="room-code">Room code</FieldLabel>
+                    <InputGroup>
+                      <InputGroupInput
+                        id="room-code"
+                        placeholder="e.g. k7m2xw9q"
+                        value={joinCode}
+                        onChange={(event) => setJoinCode(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") joinBoard(joinCode)
+                        }}
+                        autoCapitalize="none"
+                        spellCheck={false}
+                      />
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton onClick={() => joinBoard(joinCode)}>
+                          Join
+                          <ArrowRightIcon data-icon="inline-end" />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                    <FieldDescription>Letters and numbers only.</FieldDescription>
+                  </Field>
+                </FieldGroup>
+              </CardContent>
+              <CardFooter className="flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => joinBoard(newRoomCode())}>
+                  <PlusIcon data-icon="inline-start" />
+                  New room
+                </Button>
+                {isTeacher ? (
+                  <Button nativeButton={false} render={<Link to="/teacher" />}>
+                    <ClipboardListIcon data-icon="inline-start" />
+                    Create an assessment
+                  </Button>
+                ) : null}
+              </CardFooter>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <UserIcon data-icon="inline-start" />
+                  You
+                </CardTitle>
+                <CardDescription>
+                  {auth.user ? "Signed in to this browser." : "Sign in to join boards and assessments."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {auth.user ? (
+                  <div className="flex items-center gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
+                      {auth.user.name.trim().slice(0, 2).toUpperCase() || "??"}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{auth.user.name}</p>
+                      <p className="truncate text-xs text-muted-foreground">{auth.user.email}</p>
+                    </div>
+                    <Badge variant={isTeacher ? "default" : "secondary"} className="capitalize">
+                      {auth.user.role}
+                    </Badge>
+                  </div>
+                ) : (
+                  <FieldDescription>
+                    Your identity keeps assessment submissions and board presence tied to you.
+                  </FieldDescription>
+                )}
+              </CardContent>
+              <CardFooter>
+                {auth.user ? (
+                  <Button variant="outline" onClick={signOut}>
+                    <LogOutIcon data-icon="inline-start" />
+                    Sign out
+                  </Button>
+                ) : (
+                  <Button nativeButton={false} render={<Link to="/login" />}>
+                    <LogInIcon data-icon="inline-start" />
+                    Sign in
+                  </Button>
+                )}
+              </CardFooter>
+            </Card>
+          </div>
         </section>
       </div>
     </AppShell>

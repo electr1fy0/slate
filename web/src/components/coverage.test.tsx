@@ -533,7 +533,7 @@ describe("shell and sidebar components", () => {
     expect(screen.getByText("Shell title")).toBeInTheDocument()
     expect(screen.getByText("Shell description")).toBeInTheDocument()
     expect(screen.getByText("Body")).toBeInTheDocument()
-    expect(screen.getByText("Quizzes")).toBeInTheDocument()
+    expect(screen.getByText("Assessments")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Open quick actions" }))
     expect(screen.getByText("Teacher studio")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "Teacher studio" }))
@@ -546,7 +546,11 @@ describe("shell and sidebar components", () => {
     render(<SidebarProvider><AppSidebar /></SidebarProvider>)
     expect(screen.getByText("Sign in")).toBeInTheDocument()
     render(<QuickActions />)
-    fireEvent.click(screen.getByRole("button", { name: "New board" }))
+    expect(screen.getByText("Timed assessments")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Open quick actions" }))
+    // The sheet presents its create action before the board-directory link.
+    // The router mock renders both as buttons.
+    fireEvent.click(screen.getAllByRole("button", { name: "New board" })[0])
 
     cleanup()
     setAuth({ user: { user_id: "s1", email: "student@example.com", name: "", role: "student" }, accessToken: "a", refreshToken: "r" })

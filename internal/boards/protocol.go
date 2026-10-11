@@ -134,7 +134,7 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 				incoming = append(incoming, element)
 			}
 		}
-		if s.Manager.Absorb(s.RoomID, incoming) > 0 {
+		if s.Manager.AbsorbContext(ctx, s.RoomID, incoming) > 0 {
 			s.Manager.Broadcast(ctx, s.RoomID,
 				map[string]any{"type": "elements", "elements": values}, s.Socket)
 		}

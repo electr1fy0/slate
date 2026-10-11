@@ -1,51 +1,56 @@
-TF := terraform
+TF ?= terraform
 
-.PHONY: core standby control app-deploy fmt validate destroy-all test coverage api-dev web-install web-dev web-build web-check
+.PHONY: demo-local demo-build demo-init demo-plan demo-deploy demo-web demo-pause demo-resume demo-destroy fmt validate test coverage web-check api-dev web-dev web-build core standby control app-deploy destroy-all
 
-core:
-	cd infra/core && $(TF) init && $(TF) apply -auto-approve
+demo-local:
+	bash scripts/demo_local.sh
 
-standby:
-	cd infra/standby && $(TF) init && $(TF) apply -auto-approve
+demo-build:
+	bash scripts/build_demo.sh
 
-control:
-	cd infra/control && $(TF) init && $(TF) apply -auto-approve
+demo-init:
+	$(TF) -chdir=infra/demo init
 
-plan-core:
-	cd infra/core && $(TF) init && $(TF) plan
+demo-plan: demo-build demo-init
+	$(TF) -chdir=infra/demo plan -out=demo.tfplan
 
-app-deploy:
-	bash scripts/deploy_app.sh
+demo-deploy:
+	bash scripts/deploy_demo.sh "$(TF)"
+
+demo-web:
+	bash scripts/deploy_demo_web.sh "$(TF)"
+
+demo-pause:
+	bash scripts/set_demo_state.sh paused "$(TF)"
+
+demo-resume:
+	bash scripts/set_demo_state.sh running "$(TF)"
+
+demo-destroy:
+	$(TF) -chdir=infra/demo destroy
 
 fmt:
-	$(TF) fmt -recursive infra/
+	$(TF) fmt -recursive infra/demo
+	gofmt -w cmd/demo* cmd/router internal/continuum internal/clusterstate
 
 validate:
-	@$(TF) fmt -check -recursive infra/ || true
-	@for d in infra/core infra/standby infra/control; do \
-	  (cd $$d && $(TF) init -backend=false >/dev/null 2>&1 && $(TF) validate); \
-	done
-	@go vet ./... && go build ./... && echo "go OK"
-	@for f in statemachine/*.json; do jq empty "$$f" && echo "$$f OK"; done
-
-destroy-all:
-	cd infra/control && $(TF) destroy -auto-approve || true
-	cd infra/standby && $(TF) destroy -auto-approve || true
-	cd infra/core && $(TF) destroy -auto-approve || true
+	$(TF) -chdir=infra/demo validate
+	go vet ./...
+	go build ./...
 
 test:
-	go test -race ./cmd/... ./internal/...
+	go test -race ./...
 
 coverage:
-	go test -race -covermode=atomic -coverpkg=./cmd/...,./internal/... -coverprofile=/tmp/slate-go.cover ./cmd/... ./internal/...
-	@test "$$(go tool cover -func=/tmp/slate-go.cover | awk '/^total:/ {print $$NF}')" = "100.0%"
+	go test -race -covermode=atomic -coverprofile=.demo-go.cover ./...
+	go tool cover -func=.demo-go.cover
 	cd web && bun run test:coverage
+
+web-check:
+	cd web && bun run typecheck && bun run lint && bun run test && bun run build
 
 api-dev:
 	bash scripts/dev_api.sh
-
-web-install:
-	cd web && bun install
 
 web-dev:
 	cd web && bun run dev
@@ -53,5 +58,7 @@ web-dev:
 web-build:
 	cd web && bun run build
 
-web-check:
-	cd web && bun run typecheck && bun run lint && bun run test:coverage && bun run build
+# Disable shortcuts from the archived cross-Region proposal.
+core standby control app-deploy destroy-all:
+	@echo "Archived cross-Region targets are disabled. Use make demo-local or make demo-deploy."
+	@exit 1

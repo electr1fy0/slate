@@ -1,0 +1,176 @@
+{
+  "checked_at": "2026-10-10T17:17:34.747512+00:00",
+  "region": "ap-southeast-2",
+  "records": {
+    "Items": [
+      {
+        "sk": {
+          "S": "SUMMARY"
+        },
+        "target_sk": {
+          "S": "STUDENT#ffb9a54959e2a13eeede1cbb9609b146"
+        },
+        "request_id": {
+          "S": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        },
+        "target_pk": {
+          "S": "SUBMISSION#cs101-midterm"
+        },
+        "pk": {
+          "S": "AUDIT#cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        }
+      },
+      {
+        "pk": {
+          "S": "JOURNAL#cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        },
+        "target_sk": {
+          "S": "STUDENT#ffb9a54959e2a13eeede1cbb9609b146"
+        },
+        "request_id": {
+          "S": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        },
+        "target_pk": {
+          "S": "SUBMISSION#cs101-midterm"
+        },
+        "processed": {
+          "BOOL": true
+        },
+        "sk": {
+          "S": "OUTBOX"
+        }
+      },
+      {
+        "pk": {
+          "S": "SUBMISSION_REQUEST#197ea8dc054f466f0ad0e36debbaed7d176c8d60a60e163b40b0f54d456b3a4e"
+        },
+        "sk": {
+          "S": "RECEIPT"
+        },
+        "request_id": {
+          "S": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        }
+      },
+      {
+        "sk": {
+          "S": "STUDENT#ffb9a54959e2a13eeede1cbb9609b146"
+        },
+        "pk": {
+          "S": "SUBMISSION#cs101-midterm"
+        },
+        "request_id": {
+          "S": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23"
+        }
+      }
+    ],
+    "Count": 4,
+    "ScannedCount": 33
+  },
+  "executions": [
+    {
+      "name": "auto-A-e1-29860874",
+      "status": "SUCCEEDED",
+      "startDate": "2026-10-10T17:14:31.943000+00:00",
+      "stopDate": "2026-10-10T17:14:38.124000+00:00",
+      "summary": {
+        "processed": 1,
+        "conflict_count": 0,
+        "scanned": 29,
+        "already_processed": 0
+      },
+      "public_smoke": {
+        "body": {
+          "chaos": {
+            "db_stall": false,
+            "error_pct": 0,
+            "latency_ms": 0
+          },
+          "checks": {
+            "ddb": {
+              "latency_ms": 5.8,
+              "ok": true
+            },
+            "disk": {
+              "ok": true,
+              "used_pct": 16.7
+            },
+            "error_rate": {
+              "ok": true,
+              "threshold": 0.5,
+              "value": 0.1
+            },
+            "load": {
+              "loadavg": 0.02,
+              "ok": true
+            }
+          },
+          "healthy": true,
+          "region": "ap-southeast-2",
+          "role": "active"
+        },
+        "duration_ms": 23713,
+        "healthy": true,
+        "http_status": 200
+      }
+    },
+    {
+      "name": "manual-reconcile-e2-934e36653ff46f63a294cb05",
+      "status": "SUCCEEDED",
+      "startDate": "2026-10-10T17:14:44.581000+00:00",
+      "stopDate": "2026-10-10T17:14:45.037000+00:00",
+      "summary": {
+        "processed": 0,
+        "conflict_count": 0,
+        "scanned": 32,
+        "already_processed": 0
+      },
+      "public_smoke": {}
+    }
+  ],
+  "entered_states": [
+    "AcquireLock",
+    "LockAcquired",
+    "VerifyIncident",
+    "IncidentConfirmed",
+    "Promote",
+    "PublicSmoke",
+    "SmokeSucceeded",
+    "InitializeReconciliation",
+    "InitializeReconciliationSummary",
+    "ReconcileFirstPage",
+    "AccumulateReconciliationPage",
+    "MoreReconciliation",
+    "ReconciliationConflictCheck",
+    "RecordReconciliationCompleted",
+    "ReleaseSuccess",
+    "Completed"
+  ],
+  "api_calls": [
+    {
+      "service": "dynamodb",
+      "operation": "Scan",
+      "status": "success",
+      "n_items": {
+        "Items": 4
+      }
+    },
+    {
+      "service": "stepfunctions",
+      "operation": "DescribeExecution",
+      "status": "success"
+    },
+    {
+      "service": "stepfunctions",
+      "operation": "DescribeExecution",
+      "status": "success"
+    },
+    {
+      "service": "stepfunctions",
+      "operation": "GetExecutionHistory",
+      "status": "success",
+      "n_items": {
+        "events": 55
+      }
+    }
+  ]
+}

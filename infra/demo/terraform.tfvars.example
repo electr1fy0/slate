@@ -1,0 +1,6 @@
+# Keep Regional resources in the selected project Region.
+region = "ap-southeast-2"
+project = "continuum-demo"
+# Enable only after both backends are ready; pause before stopping them.
+monitor_enabled = false
+instance_type = "t3.micro"

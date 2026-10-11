@@ -1,7 +1,7 @@
 {
-  "name": "Slate — Classroom Studio",
-  "short_name": "Slate",
-  "description": "Live collaborative classroom boards with quizzes and exams.",
+  "name": "Continuum — Assessment Continuity",
+  "short_name": "Continuum",
+  "description": "Timed assessments with receipt-backed submissions and application failure recovery.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

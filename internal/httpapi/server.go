@@ -23,6 +23,7 @@ import (
 	"github.com/ayush/slate/internal/boards"
 	"github.com/ayush/slate/internal/chaos"
 	"github.com/ayush/slate/internal/classrooms"
+	"github.com/ayush/slate/internal/clusterstate"
 	"github.com/ayush/slate/internal/config"
 	"github.com/ayush/slate/internal/exams"
 	"github.com/ayush/slate/internal/health"
@@ -174,21 +175,61 @@ func (s *Server) Handler() http.Handler {
 		s.Settings.RegisterRateLimit, time.Duration(s.Settings.RateLimitWindowS)*time.Second))
 	var h http.Handler = mux
 	h = s.Chaos.Handler(h)
+	h = s.writerHeaders(h)
 	h = limiter.Handler(h)
 	h = appmw.RequestID(h)
 	h = s.cors(h)
 	return h
 }
 
+func (s *Server) writerHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// These two routes only arm/reset process-local fault injection and
+		// require the admin token in their handlers. They do not write exam,
+		// identity, classroom, or receipt data and are used by the cloud verifier
+		// on both backends before/after a fenced write test.
+		localChaosControl := r.Method == http.MethodPost && (r.URL.Path == "/admin/chaos" || r.URL.Path == "/admin/chaos/reset")
+		if !s.Settings.FencingEnabled || r.Method == http.MethodOptions || r.URL.Path == "/health/live" || r.URL.Path == "/health/deep" || localChaosControl {
+			next.ServeHTTP(w, r)
+			return
+		}
+		backendID := strings.ToUpper(strings.TrimSpace(s.Settings.BackendID))
+		backendHeader := strings.TrimSpace(r.Header.Get(clusterstate.BackendHeader))
+		epochHeader := strings.TrimSpace(r.Header.Get(clusterstate.EpochHeader))
+		epoch, err := strconv.ParseInt(epochHeader, 10, 64)
+		if (backendID != "A" && backendID != "B") || backendHeader != backendID || strings.Contains(backendHeader, ",") || err != nil || epoch <= 0 || strings.Contains(epochHeader, ",") {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{
+				"code": "WRITER_FENCED", "message": "request is missing valid routing writer metadata", "retryable": true,
+			}})
+			return
+		}
+		ctx := clusterstate.WithWriter(r.Context(), clusterstate.Writer{Backend: backendID, Epoch: epoch})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (s *Server) Seed(ctx context.Context) error {
+	ctx = store.WithBootstrap(ctx)
 	questions := []model.Question{
 		{Index: 0, Question: "Which AWS service provides cross-region asynchronous table replication?", Options: []string{"Aurora Global Database", "DynamoDB Global Tables", "S3 CRR", "EBS Snapshots"}, Answer: 1},
 		{Index: 1, Question: "What does RPO measure?", Options: []string{"Maximum tolerable data loss window", "Maximum tolerable downtime", "Replication throughput", "Recovery cost"}, Answer: 0},
 		{Index: 2, Question: "Route 53 failover routing policy requires at least how many record sets?", Options: []string{"1", "2", "3", "4"}, Answer: 1},
 		{Index: 3, Question: "Step Functions rollback branches are modelled using which ASL field?", Options: []string{"Retry", "Catch", "TimeoutSeconds", "HeartbeatSeconds"}, Answer: 1},
-		{Index: 4, Question: "An outbox pattern primarily addresses which failure mode?", Options: []string{"DNS propagation delay", "In-flight write loss during failover", "Certificate expiry", "Clock skew"}, Answer: 1},
+		{Index: 4, Question: "What prevents an old backend from committing after promotion?", Options: []string{"A DNS TTL", "An active-backend and epoch condition in the write transaction", "An outbox retry", "A longer heartbeat TTL"}, Answer: 1},
 	}
-	examErr := s.Store.EnsureExam(ctx, "cs101-midterm", "CS101 Midterm Examination", questions, nil)
+	var examErr error
+	demoWindow := map[string]any{"duration_minutes": 15, "max_attempts": 1}
+	if seeder, ok := s.Store.(interface {
+		EnsureExamIfMissing(context.Context, string, string, []model.Question, map[string]any) error
+	}); ok {
+		examErr = seeder.EnsureExamIfMissing(ctx, "cs101-midterm", "Cloud Architecture CAT", questions, demoWindow)
+	} else {
+		var existing *model.ExamMeta
+		existing, examErr = s.Store.GetExamMeta(ctx, "cs101-midterm")
+		if examErr == nil && existing == nil {
+			examErr = s.Store.EnsureExam(ctx, "cs101-midterm", "Cloud Architecture CAT", questions, demoWindow)
+		}
+	}
 	_, authErr := s.Auth.SeedBootstrapTeacher(ctx)
 	if examErr != nil {
 		return examErr
@@ -240,6 +281,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
 		detail(w, 503, "data layer unavailable")
 		return
 	}
@@ -351,6 +396,10 @@ func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
 		detail(w, 503, "data layer unavailable")
 		return
 	}
@@ -457,6 +506,10 @@ func (s *Server) submitSavedAttempt(w http.ResponseWriter, r *http.Request) {
 	if s.writeExamError(w, err) {
 		return
 	}
+	if result.Status == "committed" && s.Chaos.TakeDropResponseOnce() {
+		s.writeUncertainSubmission(w)
+		return
+	}
 	writeJSON(w, 200, result)
 }
 
@@ -486,7 +539,17 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	if s.writeExamError(w, err) {
 		return
 	}
+	if result.Status == "committed" && s.Chaos.TakeDropResponseOnce() {
+		s.writeUncertainSubmission(w)
+		return
+	}
 	writeJSON(w, 200, result)
+}
+
+func (s *Server) writeUncertainSubmission(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{
+		"code": "SUBMISSION_STATUS_UNKNOWN", "message": "the submission may have committed; retry with the same request_id", "retryable": true,
+	}})
 }
 
 func (s *Server) result(w http.ResponseWriter, r *http.Request) {
@@ -521,7 +584,7 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"status": "submitted", "score": sub.Score, "total": sub.Total,
-		"answers": sub.Answers, "submitted_at": sub.UpdatedAtISO, "request_id": sub.RequestID, "review": review})
+		"answers": sub.Answers, "submitted_at": sub.UpdatedAtISO, "committed_at": sub.UpdatedAt, "request_id": sub.RequestID, "review": review})
 }
 
 func (s *Server) listExams(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +654,8 @@ func (s *Server) boardRestore(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeBoardError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, clusterstate.ErrFenced):
+		writeWriterFenced(w)
 	case errors.Is(err, boards.ErrRoomNotFound), errors.Is(err, boards.ErrSnapshotNotFound):
 		detail(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, boards.ErrPersistenceUnavailable):
@@ -858,7 +923,7 @@ func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
 		window["late_grace_minutes"] = *p.LateGraceMinutes
 	}
 	if err := s.Store.EnsureExam(r.Context(), id, strings.TrimSpace(p.Title), qs, window); err != nil {
-		detail(w, 503, "data layer unavailable")
+		s.writeExamError(w, err)
 		return
 	}
 	body := map[string]any{"id": id, "title": strings.TrimSpace(p.Title), "question_count": len(qs)}
@@ -908,7 +973,7 @@ func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := s.Store.UpdateExamWindow(r.Context(), id, p.Title, window)
 	if err != nil {
-		detail(w, 503, "data layer unavailable")
+		s.writeExamError(w, err)
 		return
 	}
 	body := map[string]any{"id": id, "title": updated.Title}
@@ -938,7 +1003,7 @@ func (s *Server) closeExam(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.Store.UpdateExamWindow(r.Context(), id, nil, map[string]any{"closes_at": now}); err != nil {
-		detail(w, 503, "data layer unavailable")
+		s.writeExamError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "closed_at": now})
@@ -950,7 +1015,7 @@ func (s *Server) deleteExam(w http.ResponseWriter, r *http.Request) {
 	}
 	n, err := s.Store.DeleteExam(r.Context(), r.PathValue("examID"))
 	if err != nil {
-		detail(w, 503, "data layer unavailable")
+		s.writeExamError(w, err)
 		return
 	}
 	if n == 0 {
@@ -1094,6 +1159,9 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 func (s *Server) requireActive(w http.ResponseWriter) bool {
+	if s.Settings.FencingEnabled {
+		return true
+	}
 	if s.Roles.Current() != "active" {
 		detail(w, 503, "standby node is read-only; promote to serve traffic")
 		return false
@@ -1245,6 +1313,8 @@ func (s *Server) writeQuizError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, clusterstate.ErrFenced):
+		writeWriterFenced(w)
 	case errors.Is(err, store.ErrQuizNotFound):
 		detail(w, http.StatusNotFound, "quiz not found")
 	case errors.Is(err, store.ErrQuizForbidden):
@@ -1271,6 +1341,10 @@ func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 		detail(w, 404, "exam not found")
 	case errors.Is(err, store.ErrSubmissionConflict):
 		detail(w, 409, "this student already submitted for this exam")
+	case errors.Is(err, store.ErrSubmissionRequestConflict):
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]any{"code": "REQUEST_ID_CONFLICT", "message": err.Error()}})
+	case errors.Is(err, clusterstate.ErrFenced):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{"code": "WRITER_FENCED", "message": "this backend is no longer the active writer", "retryable": true}})
 	case errors.Is(err, exams.ErrAttemptNotFound):
 		detail(w, 404, "no saved attempt")
 	case errors.Is(err, store.ErrAttemptConflict), errors.Is(err, store.ErrAttemptSubmitted):
@@ -1281,6 +1355,12 @@ func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 		detail(w, 503, "data layer unavailable")
 	}
 	return true
+}
+
+func writeWriterFenced(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]any{
+		"code": "WRITER_FENCED", "message": "this backend is no longer the active writer", "retryable": true,
+	}})
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {

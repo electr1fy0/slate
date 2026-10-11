@@ -4,7 +4,7 @@ import { boardSocketUrl } from "@/lib/api"
 import { getAccessToken } from "@/lib/auth"
 import type { BoardElement, ClientMessage, PeerInfo, Role, ServerMessage } from "@/lib/types"
 
-export type ConnectionStatus = "connecting" | "live" | "reconnecting"
+export type ConnectionStatus = "connecting" | "live" | "reconnecting" | "unavailable"
 
 /** Maximum number of element batches buffered while offline. */
 const OUTBOX_CAP = 200
@@ -15,6 +15,7 @@ interface UseBoardSyncOptions {
   roomId: string
   name: string
   role: Role
+  enabled?: boolean
   onInit: (elements: BoardElement[]) => void
   onElements: (elements: BoardElement[]) => void
 }
@@ -24,7 +25,9 @@ function drainOutbox(outbox: ClientMessage[]): ClientMessage[] {
 }
 
 export function useBoardSync(options: UseBoardSyncOptions) {
-  const [status, setStatus] = useState<ConnectionStatus>("connecting")
+  const [status, setStatus] = useState<ConnectionStatus>(
+    options.enabled === false ? "unavailable" : "connecting"
+  )
   const [peers, setPeers] = useState<PeerInfo[]>([])
   const [selfId, setSelfId] = useState<string | null>(null)
 
@@ -37,6 +40,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
   const reconnectRef = useRef<(() => void) | null>(null)
 
   const send = useCallback((message: ClientMessage) => {
+    if (optionsRef.current.enabled === false) return
     const socket = socketRef.current
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message))
@@ -52,6 +56,14 @@ export function useBoardSync(options: UseBoardSyncOptions) {
   }, [])
 
   useEffect(() => {
+    if (options.enabled === false) {
+      setStatus("unavailable")
+      setPeers([])
+      setSelfId(null)
+      outboxRef.current = []
+      return
+    }
+
     let disposed = false
     let reconnectTimer: number | undefined
 
@@ -175,7 +187,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
       setPeers([])
       setSelfId(null)
     }
-  }, [options.roomId, send])
+  }, [options.enabled, options.roomId, send])
 
   const identity = `${options.name}|${options.role}`
   useEffect(() => {

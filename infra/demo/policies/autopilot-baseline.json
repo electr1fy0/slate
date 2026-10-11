@@ -1,0 +1,100 @@
+{
+  "Policies": [
+    {
+      "Policy": {
+        "Id": "IamPolicyAutopilot",
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:BatchWriteItem",
+              "dynamodb:ConditionCheckItem",
+              "dynamodb:DeleteItem",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:Query",
+              "dynamodb:ReadDataForReplication",
+              "dynamodb:Scan",
+              "dynamodb:UpdateItem",
+              "dynamodb:WriteDataForReplication"
+            ],
+            "Resource": [
+              "arn:aws:dynamodb:ap-southeast-2:927161114608:table/continuum-demo",
+              "arn:aws:dynamodb:ap-southeast-2:927161114608:table/continuum-demo/index/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:DescribeInstances"
+            ],
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:StartInstances",
+              "ec2:StopInstances"
+            ],
+            "Resource": [
+              "arn:aws:ec2:ap-southeast-2:927161114608:instance/*",
+              "arn:aws:license-manager:ap-southeast-2:927161114608:license-configuration:*",
+              "arn:aws:resource-groups:ap-southeast-2:927161114608:group/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "kms:Decrypt"
+            ],
+            "Resource": [
+              "arn:aws:kms:ap-southeast-2:927161114608:key/*"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "kms:ViaService": [
+                  "dynamodb.ap-southeast-2.amazonaws.com"
+                ]
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "lambda:InvokeFunction"
+            ],
+            "Resource": [
+              "arn:aws:lambda:ap-southeast-2:927161114608:function:*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "states:DescribeExecution",
+              "states:StartExecution"
+            ],
+            "Resource": [
+              "arn:aws:states:ap-southeast-2:927161114608:execution:*:*",
+              "arn:aws:states:ap-southeast-2:927161114608:express:*:*:*",
+              "arn:aws:states:ap-southeast-2:927161114608:stateMachine:*"
+            ]
+          }
+        ]
+      },
+      "PolicyType": "Identity"
+    }
+  ],
+  "Warnings": [
+    {
+      "WarningType": "WildcardResource",
+      "Location": {
+        "PolicyIndex": 0,
+        "StatementIndex": 1
+      },
+      "Message": "Statement could not be scoped to specific resources and uses Resource \"*\". Review whether broad resource access is intended."
+    }
+  ]
+}

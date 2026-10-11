@@ -29,7 +29,7 @@ export const Route = createFileRoute("/login")({
       : undefined,
   }),
   component: LoginPage,
-  head: () => ({ meta: [{ title: "Sign in · Slate" }] }),
+  head: () => ({ meta: [{ title: "Sign in · Continuum" }] }),
 })
 
 function safeRedirect(target: string | undefined): string {
@@ -93,7 +93,7 @@ function LoginPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <PenToolIcon data-icon="inline-start" />
-              Slate account
+              Continuum account
             </CardTitle>
             <CardDescription>
               Students sign in to take quizzes; teachers sign in to run the class.

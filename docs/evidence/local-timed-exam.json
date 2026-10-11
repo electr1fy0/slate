@@ -1,0 +1,13 @@
+{
+  "mode": "local",
+  "exam_id": "cs101-midterm",
+  "duration_minutes": 15,
+  "deadline_ms": 1791654756802,
+  "attempt_started_at": 1791653856802,
+  "attempt": {
+    "attempt_number": 1,
+    "started_at": 1791653856802,
+    "started_at_iso": "2026-10-10T17:37:36.80288Z",
+    "version": 0
+  }
+}

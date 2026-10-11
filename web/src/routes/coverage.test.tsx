@@ -1,6 +1,7 @@
 import React from "react"
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { toast } from "sonner"
 
 import { clearAuth, setAuth } from "@/lib/auth"
 import type { Exam, ExamMeta, ExamResultsResponse, QuizDraft, ResultResponse } from "@/lib/types"
@@ -8,6 +9,11 @@ import { ApiError } from "@/lib/api"
 import { forgetRoom, rememberRoom, useRecentRooms } from "@/lib/recent-rooms"
 import { forgetBoardHistory, recordBoardVisit, useBoardHistory } from "@/lib/board-history"
 import { createClassroom, setClassroomActiveRoom } from "@/lib/classrooms"
+import {
+  createOrLoadPendingSubmission,
+  findPendingSubmissionForExam,
+  writeExamDraft,
+} from "@/lib/pending-submission"
 
 import { Route as RootRoute } from "./__root"
 import { Route as LoginRoute, validateLoginInput } from "./login"
@@ -32,6 +38,7 @@ const state = vi.hoisted(() => {
     "updateQuizDraft", "deleteQuizDraft", "publishQuizDraft", "duplicateQuiz", "duplicateQuizDraft",
     "getAttempt", "saveAttempt", "submitSavedAttempt", "submitAnswers", "myResult", "patchExam",
     "closeExam", "deleteExam", "examResults", "submissions", "status", "setChaos", "resetChaos", "promote",
+    "continuumStatus", "continuumAction",
   ] as const
   const api = Object.fromEntries(apiMethods.map((method) => [method, vi.fn()])) as Record<string, ReturnType<typeof vi.fn>>
   return {
@@ -39,6 +46,7 @@ const state = vi.hoisted(() => {
     navigate: vi.fn(() => Promise.resolve()),
     invalidateQueries: vi.fn(() => Promise.resolve()),
     refetchQueries: vi.fn(() => Promise.resolve()),
+    queryRefetch: vi.fn(() => Promise.resolve()),
     queryStates: new Map<string, Record<string, unknown>>(),
     search: {},
     params: { examId: "exam-1", roomId: "room-1" },
@@ -48,7 +56,8 @@ const state = vi.hoisted(() => {
     syncStatus: "live",
     syncSend: vi.fn(),
     syncReconnect: vi.fn(),
-    syncOptions: null as { onInit: (elements: unknown[]) => void; onElements: (elements: unknown[]) => void } | null,
+    syncOptions: null as { enabled?: boolean; onInit: (elements: unknown[]) => void; onElements: (elements: unknown[]) => void } | null,
+    externalApiOrigin: false,
     mutationPending: false,
   }
 })
@@ -96,26 +105,27 @@ vi.mock("@tanstack/react-query", async () => {
       return {
         ...defaultFor(String(options.queryKey?.[0] ?? "")),
         ...override,
-        refetch: vi.fn(() => Promise.resolve()),
+        refetch: state.queryRefetch,
         isFetching: Boolean(override.isFetching),
       }
     },
     useQueryClient: () => ({
       invalidateQueries: state.invalidateQueries,
       refetchQueries: state.refetchQueries,
+      setQueryData: vi.fn(),
     }),
     useMutation: (options: {
       mutationFn?: (value?: unknown) => unknown
-      onSuccess?: (value: unknown) => unknown
-      onError?: (error: unknown) => unknown
+      onSuccess?: (value: unknown, variables?: unknown) => unknown
+      onError?: (error: unknown, variables?: unknown) => unknown
     }) => {
       const invoke = async (value?: unknown) => {
         try {
           const result = await options.mutationFn?.(value)
-          await options.onSuccess?.(result)
+          await options.onSuccess?.(result, value)
           return result
         } catch (error) {
-          await options.onError?.(error)
+          await options.onError?.(error, value)
           return undefined
         }
       }
@@ -161,16 +171,17 @@ vi.mock("@/lib/api", () => {
     api: state.api,
     ApiError: MockApiError,
     boardSocketUrl: (roomId: string, token: string | null) => `ws://test/board/${roomId}${token ? `?token=${token}` : ""}`,
+    hasExternalApiOrigin: () => state.externalApiOrigin,
   }
 })
 
 vi.mock("@/hooks/use-mounted", () => ({ useMounted: () => state.mounted }))
 vi.mock("@/hooks/use-online-status", () => ({ useOnlineStatus: () => state.online }))
 vi.mock("@/hooks/use-board-sync", () => ({
-  useBoardSync: (options: { onInit: (elements: unknown[]) => void; onElements: (elements: unknown[]) => void }) => {
+  useBoardSync: (options: { enabled?: boolean; onInit: (elements: unknown[]) => void; onElements: (elements: unknown[]) => void }) => {
     state.syncOptions = options
     return {
-      status: state.syncStatus,
+      status: options.enabled === false ? "unavailable" : state.syncStatus,
       peers: [],
       selfId: "self",
       send: state.syncSend,
@@ -332,6 +343,7 @@ beforeEach(() => {
   state.pathname = "/"
   state.syncStatus = "live"
   state.syncOptions = null
+  state.externalApiOrigin = false
   state.mutationPending = false
   for (const fn of Object.values(state.api)) fn.mockReset()
 })
@@ -420,18 +432,18 @@ describe("route components", () => {
     setAuth({ user: student, accessToken: "a", refreshToken: "r" })
     setQuery(["exams"], { data: [], isPending: true, isError: false })
     renderRoute(HomeRoute)
-    expect(screen.getByTestId("app-shell")).toHaveTextContent("Join today's class")
+    expect(screen.getByTestId("app-shell")).toHaveTextContent("Protect your final submission")
 
     cleanup()
     state.mounted = true
     setQuery(["exams"], { data: undefined, isPending: false, isError: true })
     renderRoute(HomeRoute)
-    expect(screen.getByText("Quiz catalog unavailable")).toBeInTheDocument()
+    expect(screen.getByText("Assessment catalog unavailable")).toBeInTheDocument()
 
     cleanup()
     setQuery(["exams"], { data: [], isPending: false, isError: false })
     renderRoute(HomeRoute)
-    expect(screen.getByText("No quizzes yet")).toBeInTheDocument()
+    expect(screen.getByText("No assessments published yet")).toBeInTheDocument()
 
     cleanup()
     setAuth({ user: teacher, accessToken: "a", refreshToken: "r" })
@@ -445,7 +457,15 @@ describe("route components", () => {
       isError: false,
     })
     renderRoute(HomeRoute)
-    expect(screen.getByText("Run today's class")).toBeInTheDocument()
+    expect(screen.getByText("Deliver timed assessments")).toBeInTheDocument()
+    const landingText = screen.getByTestId("app-shell").textContent
+    expect(landingText).toContain("same immutable answer snapshot and request ID")
+    expect(landingText.indexOf("Timed assessments")).toBeLessThan(
+      landingText.indexOf("Classroom tools")
+    )
+    expect(landingText.indexOf("Open quiz")).toBeLessThan(
+      landingText.indexOf("Classroom tools")
+    )
     expect(screen.getAllByText("Preview").length).toBeGreaterThan(0)
     fireEvent.change(screen.getByLabelText("Room code"), { target: { value: "??" } })
     fireEvent.click(screen.getByRole("button", { name: "Join" }))
@@ -537,6 +557,23 @@ describe("route components", () => {
     expect(screen.getByText("That room code isn't valid.")).toBeInTheDocument()
   })
 
+  it("explains when an external HTTP API deployment has no board realtime endpoint", async () => {
+    state.externalApiOrigin = true
+    setAuth({ user: teacher, accessToken: "a", refreshToken: "r" })
+
+    renderRoute(BoardRoomRoute)
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This deployment sends API requests to a separate HTTP origin and has no configured board WebSocket endpoint. Edits stay in this browser; export a snapshot before leaving to keep them."
+    )
+    expect(state.syncOptions?.enabled).toBe(false)
+    expect(screen.getByText("unavailable")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Board snapshot exported"))
+    expect(state.api.boardExport).not.toHaveBeenCalled()
+  })
+
   it("covers student board permissions, reconnect controls, and best-effort failures", async () => {
     setAuth({ user: { ...student, name: "" }, accessToken: "a", refreshToken: "r" })
     state.syncStatus = "reconnecting"
@@ -587,26 +624,42 @@ describe("route components", () => {
         { index: 3, question: "Out of range", options: ["A", "B"], chosen: 9, correct_answer: null, was_correct: false },
       ],
     }
-    setQuery(["result", "exam-1"], { data: result, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: result, isPending: false, isError: false })
     renderRoute(QuizRoute)
     expect(screen.getByText("50%")).toBeInTheDocument()
     expect(screen.getByText("skipped")).toBeInTheDocument()
     expect(screen.getAllByText("Your answer:").length).toBeGreaterThan(0)
 
     cleanup()
-    setQuery(["result", "exam-1"], { data: undefined, isPending: true, isError: false })
+    createOrLoadPendingSubmission(
+      { userId: "anonymous", examId: "exam-1", attemptNumber: 1 },
+      { "0": 1 },
+      () => "recovered-request",
+    )
+    setQuery(["result", "anonymous", "exam-1"], {
+      data: { ...result, request_id: "recovered-request" },
+      isPending: false,
+      isError: false,
+    })
+    renderRoute(QuizRoute)
+    expect(screen.getByText("Receipt recovered for this request")).toBeInTheDocument()
+    expect(screen.getByText("recovered-request")).toBeInTheDocument()
+    await waitFor(() => expect(findPendingSubmissionForExam("anonymous", "exam-1")).toBeNull())
+
+    cleanup()
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: true, isError: false })
     renderRoute(QuizRoute)
     cleanup()
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-    setQuery(["exam", "exam-1"], { data: undefined, isPending: true, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: undefined, isPending: true, isError: false })
     renderRoute(QuizRoute)
 
     cleanup()
-    setQuery(["exam", "exam-1"], { data: undefined, isPending: false, isError: true, error: new ApiError("Closed", 403, "EXAM_CLOSED") })
+    setQuery(["exam", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: true, error: new ApiError("Closed", 403, "EXAM_CLOSED") })
     renderRoute(QuizRoute)
     expect(screen.getByText("This quiz has closed")).toBeInTheDocument()
     cleanup()
-    setQuery(["exam", "exam-1"], { data: undefined, isPending: false, isError: true, error: new ApiError("Down", 503) })
+    setQuery(["exam", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: true, error: new ApiError("Down", 503) })
     renderRoute(QuizRoute)
     expect(screen.getByText("Quiz unavailable")).toBeInTheDocument()
   })
@@ -622,11 +675,11 @@ describe("route components", () => {
       ],
       attempt: { answers: {}, version: 1, started_at: Date.now() },
     }
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false, runQuery: true })
-    setQuery(["exam", "exam-1"], { data: exam, isPending: false, isError: false, runQuery: true })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false, runQuery: true })
+    setQuery(["exam", "anonymous", "exam-1"], { data: exam, isPending: false, isError: false, runQuery: true })
     localStorage.setItem("slate.quiz.exam-1", "42")
     state.api.saveAttempt.mockResolvedValue({ version: 2, request_id: "save", answers: { "0": 1 } })
-    state.api.submitSavedAttempt.mockResolvedValue({ status: "committed", request_id: "r", version: 2, score: 2, total: 2 })
+    state.api.submitAnswers.mockResolvedValue({ status: "committed", request_id: "r", version: 2, score: 2, total: 2 })
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[1])
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
@@ -635,12 +688,273 @@ describe("route components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go to question 2" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
     expect(screen.getByText("Submit your answers?")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
-    await waitFor(() => expect(state.api.submitSavedAttempt).toHaveBeenCalledWith("exam-1", expect.any(String)))
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
+    await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.objectContaining({
+      request_id: expect.any(String),
+      answers: expect.any(Object),
+    })))
+  })
+
+  it("reloads and retries the exact locally persisted request snapshot", async () => {
+    const scope = { userId: "anonymous", examId: "exam-1", attemptNumber: 1 }
+    const pending = createOrLoadPendingSubmission(
+      scope,
+      { "0": 1, "1": 0 },
+      () => "same-after-reload",
+    )
+    writeExamDraft(scope, { 0: 0, 1: 1 })
+    const exam: Exam = {
+      id: "exam-1",
+      title: "Saved snapshot",
+      question_count: 2,
+      questions: [
+        { index: 0, question: "One?", options: ["A", "B"] },
+        { index: 1, question: "Two?", options: ["C", "D"] },
+      ],
+      attempt: { answers: { "0": 0, "1": 1 }, version: 3, attempt_number: 1 },
+    }
+    state.api.submitAnswers.mockResolvedValue({
+      status: "duplicate",
+      request_id: pending.requestId,
+      version: 4,
+      score: 1,
+      total: 2,
+    })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: exam, isPending: false, isError: false })
+
+    renderRoute(QuizRoute)
+
+    await waitFor(() =>
+      expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", {
+        request_id: "same-after-reload",
+        answers: { "0": 1, "1": 0 },
+      }),
+    )
+    expect(screen.getAllByRole("radio")[1]).toHaveAttribute("aria-checked", "true")
+    expect(findPendingSubmissionForExam("anonymous", "exam-1")).toMatchObject({
+      requestId: "same-after-reload",
+      answers: { "0": 1, "1": 0 },
+    })
+  })
+
+  it("shows a matching saved receipt after the exam window closes", () => {
+    const pending = createOrLoadPendingSubmission(
+      { userId: "anonymous", examId: "exam-1", attemptNumber: 1 },
+      { "0": 1 },
+      () => "deadline-committed-request",
+    )
+    setQuery(["result", "anonymous", "exam-1"], {
+      data: {
+        status: "committed",
+        score: 1,
+        total: 1,
+        answers: { "0": 1 },
+        request_id: pending.requestId,
+        review: [
+          { index: 0, question: "One?", options: ["A", "B"], chosen: 1, correct_answer: 1, was_correct: true },
+        ],
+      } satisfies ResultResponse,
+      isPending: false,
+      isError: false,
+    })
+    setQuery(["exam", "anonymous", "exam-1"], {
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new ApiError("exam closed", 403, "EXAM_CLOSED"),
+    })
+
+    renderRoute(QuizRoute)
+
+    expect(screen.getByText("Receipt recovered for this request")).toBeInTheDocument()
+    expect(screen.queryByText("This quiz has closed")).not.toBeInTheDocument()
+  })
+
+  it("does not reuse another authenticated user's cached exam result", () => {
+    setAuth({ user: student, accessToken: "student-token", refreshToken: "student-refresh" })
+    setQuery(["result", "anonymous", "exam-1"], {
+      data: {
+        status: "committed",
+        score: 1,
+        total: 2,
+        answers: {},
+        review: [],
+      } satisfies ResultResponse,
+      isPending: false,
+      isError: false,
+    })
+    setQuery(["exam", "student-1", "exam-1"], {
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new ApiError("missing", 404),
+    })
+
+    renderRoute(QuizRoute)
+
+    expect(screen.getByText("Quiz not found")).toBeInTheDocument()
+    expect(screen.queryByText("50%")).not.toBeInTheDocument()
+  })
+
+  it("does not reuse another authenticated user's cached exam attempt", () => {
+    setAuth({ user: student, accessToken: "student-token", refreshToken: "student-refresh" })
+    setQuery(["result", "student-1", "exam-1"], {
+      data: undefined,
+      isPending: false,
+      isError: false,
+    })
+    setQuery(["exam", "exam-1"], {
+      data: {
+        id: "exam-1",
+        title: "Previous student's attempt",
+        question_count: 1,
+        questions: [{ index: 0, question: "Private prior answer", options: ["A", "B"] }],
+        attempt: { answers: { "0": 1 }, version: 4, started_at: 1000 },
+        deadline_ms: 60_000,
+      },
+      isPending: false,
+      isError: false,
+    })
+    setQuery(["exam", "student-1", "exam-1"], {
+      data: undefined,
+      isPending: true,
+      isError: false,
+    })
+
+    renderRoute(QuizRoute)
+
+    expect(screen.queryByText("Previous student's attempt")).not.toBeInTheDocument()
+    expect(screen.queryByText("Private prior answer")).not.toBeInTheDocument()
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0)
+  })
+
+  it("retries a throttled submit with the original request ID and payload", async () => {
+    const exam: Exam = {
+      id: "exam-1",
+      title: "Throttled submission",
+      question_count: 1,
+      questions: [{ index: 0, question: "One?", options: ["A", "B"] }],
+    }
+    const requestId = "00000000-0000-4000-8000-000000000001"
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(requestId)
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: exam, isPending: false, isError: false })
+    state.api.submitAnswers
+      .mockRejectedValueOnce(new ApiError("throttled", 429))
+      .mockImplementationOnce((_examId, payload) => Promise.resolve({
+        status: "duplicate",
+        request_id: payload.request_id,
+        version: 1,
+        score: 1,
+        total: 1,
+      }))
+
+    renderRoute(QuizRoute)
+    fireEvent.click(screen.getByRole("radio", { name: "A" }))
+    fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
+
+    await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledTimes(2), { timeout: 3000 })
+    const first = state.api.submitAnswers.mock.calls[0]
+    const second = state.api.submitAnswers.mock.calls[1]
+    expect(second).toEqual(first)
+    expect(second[1]).toMatchObject({
+      request_id: requestId,
+      answers: { "0": 0 },
+    })
+  })
+
+  it("describes synchronous reconciliation responses as completed, not accepted", async () => {
+    const status = {
+      mode: "aws",
+      region: "ap-southeast-2",
+      active_backend: "A",
+      epoch: 2,
+      paused: false,
+      policy: { version: "v1", confirmation_probes: 3, probe_interval_ms: 5000 },
+      backends: [
+        { id: "A", healthy: true, liveness: true, ready: true, reason: "ready" },
+        { id: "B", healthy: true, liveness: true, ready: true, reason: "ready" },
+      ],
+      events: [],
+      metrics: { failovers: 0, suppressed: 0, recovery_ms: null },
+    }
+    state.api.continuumStatus.mockResolvedValue(status)
+    state.api.continuumAction.mockResolvedValue({ scanned: 2, processed: 2, conflict_count: 0 })
+    setQuery(["continuum-status", "admin"], { data: status, isPending: false, isError: false, runQuery: true })
+
+    renderRoute(OpsRoute)
+    fireEvent.change(screen.getByLabelText("Admin token"), { target: { value: "admin" } })
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile pending work" }))
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalledWith("Reconciliation completed; refreshing observed status"))
+    expect(screen.getByText(/recent 50 control-plane events/)).toBeInTheDocument()
+    expect(screen.getByText("Fenced writes · not reported")).toBeInTheDocument()
+  })
+
+  it("does not automatically resend a terminally blocked request after reload", async () => {
+    const pending = createOrLoadPendingSubmission(
+      { userId: "anonymous", examId: "exam-1", attemptNumber: 1 },
+      { "0": 1 },
+      () => "terminal-request",
+    )
+    state.api.submitAnswers.mockRejectedValueOnce(
+      new ApiError("exam closed", 403, "EXAM_CLOSED"),
+    )
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], {
+      data: { id: "exam-1", title: "Closed", question_count: 1, questions: [{ index: 0, question: "One?", options: ["A", "B"] }] },
+      isPending: false,
+      isError: false,
+    })
+
+    renderRoute(QuizRoute)
+    await waitFor(() => expect(screen.getByText("Submission stopped")).toBeInTheDocument())
+    expect(findPendingSubmissionForExam("anonymous", "exam-1")).toMatchObject({
+      requestId: pending.requestId,
+      status: "blocked",
+    })
+    expect(state.api.submitAnswers).toHaveBeenCalledTimes(1)
+
+    cleanup()
+    renderRoute(QuizRoute)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+
+    expect(state.api.submitAnswers).toHaveBeenCalledTimes(1)
+    expect(findPendingSubmissionForExam("anonymous", "exam-1")).toMatchObject({
+      requestId: pending.requestId,
+      status: "blocked",
+    })
+  })
+
+  it("checks a pending receipt again before presenting an expired exam", async () => {
+    createOrLoadPendingSubmission(
+      { userId: "anonymous", examId: "exam-1", attemptNumber: 1 },
+      { "0": 1 },
+      () => "deadline-receipt",
+    )
+    setQuery(["result", "anonymous", "exam-1"], {
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new ApiError("temporarily unavailable", 503),
+    })
+    setQuery(["exam", "anonymous", "exam-1"], {
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new ApiError("exam closed", 403, "EXAM_CLOSED"),
+    })
+
+    renderRoute(QuizRoute)
+
+    await waitFor(() => expect(state.queryRefetch).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText("This quiz has closed")).toBeInTheDocument())
   })
 
   it("covers quiz error gates and result-review edge cases", () => {
-    setQuery(["result", "exam-1"], {
+    setQuery(["result", "anonymous", "exam-1"], {
       data: {
         status: "committed",
         score: 0,
@@ -665,8 +979,8 @@ describe("route components", () => {
       [new Error("network"), "Quiz unavailable"],
     ] as const) {
       cleanup()
-      setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-      setQuery(["exam", "exam-1"], { data: undefined, isPending: false, isError: true, error })
+      setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+      setQuery(["exam", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: true, error })
       renderRoute(QuizRoute)
       expect(screen.getByText(title)).toBeInTheDocument()
     }
@@ -699,8 +1013,8 @@ describe("route components", () => {
       if (key.endsWith(".request-id")) throw new Error("request id storage blocked")
       return originalGetItem(key)
     })
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-    setQuery(["exam", "exam-1"], { data: exam, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: exam, isPending: false, isError: false })
     state.api.saveAttempt.mockResolvedValue({ status: "saved", request_id: "save-1", answers: { "0": 1 }, version: 2 })
     state.api.getAttempt.mockResolvedValue({ answers: { "0": 0 }, version: 3 })
     renderRoute(QuizRoute)
@@ -736,7 +1050,7 @@ describe("route components", () => {
     localStorage.clear()
     state.online = false
     state.api.submitAnswers.mockResolvedValue({ status: "committed", request_id: "offline", version: 1, score: 1, total: 2 })
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
     const offlineExam = {
       ...exam,
       question_count: 3,
@@ -744,70 +1058,79 @@ describe("route components", () => {
       deadline_ms: undefined,
       attempt: undefined,
     }
-    setQuery(["exam", "exam-1"], { data: offlineExam, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: offlineExam, isPending: false, isError: false })
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[0])
     fireEvent.click(screen.getByRole("button", { name: "Go to question 3" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
     expect(screen.getByText(/unanswered/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
-    await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.objectContaining({ request_id: expect.any(String) })))
+    fireEvent.click(screen.getByRole("button", { name: "Buffer submission" }))
+    expect(screen.getByText("Submission buffered on this device")).toBeInTheDocument()
+    expect(state.api.submitAnswers).not.toHaveBeenCalled()
+    expect(findPendingSubmissionForExam("anonymous", "exam-1")).toMatchObject({ examId: "exam-1" })
 
     cleanup()
+    localStorage.clear()
+    state.online = true
     state.api.submitAnswers.mockRejectedValueOnce(new ApiError("Expired", 400, "ATTEMPT_EXPIRED"))
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-    setQuery(["exam", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[0])
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
     await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.any(Object)))
 
     cleanup()
+    localStorage.clear()
     state.api.submitAnswers.mockRejectedValueOnce(new ApiError("Already submitted", 409))
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[0])
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
-    await waitFor(() => expect(state.refetchQueries).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
+    await waitFor(() => expect(screen.getByText("Submission stopped")).toBeInTheDocument())
+    expect(findPendingSubmissionForExam("anonymous", "exam-1")).toMatchObject({ examId: "exam-1" })
 
     cleanup()
-    state.api.submitAnswers.mockRejectedValueOnce(new Error("offline server"))
+    localStorage.clear()
+    state.api.submitAnswers.mockRejectedValueOnce(new TypeError("offline server"))
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[0])
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
     await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.any(Object)))
 
     cleanup()
+    localStorage.clear()
     state.api.submitAnswers.mockRejectedValueOnce(new ApiError("Server rejected", 500))
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-    setQuery(["exam", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
     renderRoute(QuizRoute)
     fireEvent.click(screen.getAllByRole("radio")[0])
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     fireEvent.click(screen.getByRole("button", { name: "Submit quiz" }))
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }))
+    fireEvent.click(screen.getByRole("button", { name: "Save and submit" }))
     await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.any(Object)))
 
     cleanup()
+    localStorage.clear()
     state.api.submitAnswers.mockResolvedValue({ status: "committed", request_id: "timeout", version: 1, score: 0, total: 2 })
-    setQuery(["exam", "exam-1"], { data: { ...exam, deadline_ms: Date.now() - 1, attempt: undefined }, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: { ...exam, deadline_ms: Date.now() - 1, attempt: undefined }, isPending: false, isError: false })
     renderRoute(QuizRoute)
     await waitFor(() => expect(state.api.submitAnswers).toHaveBeenCalledWith("exam-1", expect.any(Object)))
 
     cleanup()
     state.mutationPending = true
-    setQuery(["result", "exam-1"], { data: undefined, isPending: false, isError: false })
-    setQuery(["exam", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
+    setQuery(["result", "anonymous", "exam-1"], { data: undefined, isPending: false, isError: false })
+    setQuery(["exam", "anonymous", "exam-1"], { data: { ...exam, deadline_ms: undefined, attempt: undefined }, isPending: false, isError: false })
     renderRoute(QuizRoute)
     fireEvent.click(screen.getByRole("button", { name: "Go to question 2" }))
     expect(screen.getAllByRole("button", { name: /Submit/ }).at(-1)).toHaveTextContent("Submitting…")
     state.mutationPending = false
-  })
+  }, 15_000)
 
   it("covers the ops token, loading/error, and active control surfaces", async () => {
     const setSlider = vi.fn()
@@ -819,55 +1142,42 @@ describe("route components", () => {
 
     renderRoute(OpsRoute)
     expect(screen.getByLabelText("Admin token")).toBeInTheDocument()
-    setQuery(["ops-status", "admin"], { data: undefined, isPending: false, isError: true, error: new ApiError("down", 500), runQuery: true })
-    state.api.status.mockResolvedValue({})
+    setQuery(["continuum-status", "admin"], { data: undefined, isPending: false, isError: true, error: new ApiError("down", 500), runQuery: true })
+    state.api.continuumStatus.mockResolvedValue({})
     fireEvent.change(screen.getByLabelText("Admin token"), { target: { value: "admin" } })
-    await waitFor(() => expect(screen.getByText("Status unavailable")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("Control status unavailable")).toBeInTheDocument())
     fireEvent.click(screen.getByRole("button", { name: "Retry status" }))
 
     cleanup()
     state.mounted = true
-    setQuery(["ops-status", "admin"], { data: undefined, isPending: true, isError: false })
+    setQuery(["continuum-status", "admin"], { data: undefined, isPending: true, isError: false })
     renderRoute(OpsRoute)
     expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBe(3)
 
-    const status = { region: "ap-south-1", role: "active" as const, boards: { active_rooms: 1 }, chaos: { error_pct: 0, latency_ms: 0, db_stall: false } }
+    const status = {
+      mode: "local",
+      region: "ap-southeast-2",
+      active_backend: "A",
+      epoch: 2,
+      paused: false,
+      policy: { version: "v1", confirmation_probes: 3, probe_interval_ms: 5000 },
+      backends: [
+        { id: "A", healthy: true, liveness: true, ready: true, reason: "exam write probe passed" },
+        { id: "B", healthy: true, liveness: true, ready: true, reason: "standby ready" },
+      ],
+      events: [],
+      metrics: { failovers: 0, suppressed: 0, recovery_ms: null },
+    }
     cleanup()
-    state.api.status.mockResolvedValue(status)
-    setQuery(["ops-status", "admin"], { data: status, isPending: false, isError: false, runQuery: true })
-    const active = renderRoute(OpsRoute)
-    expect(screen.getByText("Mumbai")).toBeInTheDocument()
-    expect(screen.getByText("stable")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("switch"))
-    setQuery(["ops-status", "admin"], { data: { ...status, region: "eu-west-1", boards: { active_rooms: 2 }, chaos: { ...status.chaos, latency_ms: 100 } }, isPending: false, isError: false, runQuery: false })
-    const OpsComponent = (OpsRoute as unknown as { component: React.ComponentType }).component
-    active.rerender(<OpsComponent />)
-    expect(screen.getAllByText("eu-west-1").length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByRole("button", { name: "Apply chaos" }))
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }))
-    expect(state.api.setChaos).toHaveBeenCalled()
-    expect(state.api.resetChaos).toHaveBeenCalled()
-
-    state.api.setChaos.mockRejectedValueOnce(new Error("apply failed"))
-    fireEvent.click(screen.getByRole("button", { name: "Apply chaos" }))
-    state.api.resetChaos.mockRejectedValueOnce(new Error("reset failed"))
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }))
-    await waitFor(() => expect(state.api.resetChaos).toHaveBeenCalledTimes(2))
-
-    cleanup()
-    const standby = { region: "unknown", role: "standby" as const, boards: { active_rooms: 2 }, chaos: { error_pct: 10, latency_ms: 100, db_stall: true } }
-    state.api.promote.mockResolvedValue({ role: "active" })
-    setQuery(["ops-status", "admin"], { data: standby, isPending: false, isError: false })
+    state.api.continuumStatus.mockResolvedValue(status)
+    state.api.continuumAction.mockResolvedValue(status)
+    setQuery(["continuum-status", "admin"], { data: status, isPending: false, isError: false, runQuery: true })
     renderRoute(OpsRoute)
-    expect(screen.getByText("Standby node")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Promote to active" }))
-    fireEvent.click(screen.getByRole("button", { name: "Promote" }))
-    await waitFor(() => expect(state.api.promote).toHaveBeenCalledWith("admin"))
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
-    state.api.promote.mockRejectedValueOnce(new Error("promotion failed"))
-    fireEvent.click(screen.getByRole("button", { name: "Promote to active" }))
-    fireEvent.click(screen.getByRole("button", { name: "Promote" }))
-    await waitFor(() => expect(state.api.promote).toHaveBeenCalledTimes(2))
+    expect(screen.getByText("Sydney")).toBeInTheDocument()
+    expect(screen.getByText("ACTIVE")).toBeInTheDocument()
+    expect(screen.getByText("epoch 2")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Partial failure · A" }))
+    await waitFor(() => expect(state.api.continuumAction).toHaveBeenCalledWith("admin", "partial", "A"))
   })
 
   it("renders the root document and root error/not-found components", () => {

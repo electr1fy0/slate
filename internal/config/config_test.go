@@ -8,7 +8,7 @@ import (
 
 func TestDefaultsMatchLegacy(t *testing.T) {
 	s := Defaults()
-	if s.Region != "ap-south-1" || s.AppRole != "active" || s.TableName != "continuum" {
+	if s.Region != "ap-southeast-2" || s.AppRole != "active" || s.TableName != "continuum" {
 		t.Fatalf("unexpected defaults: %+v", s)
 	}
 	if s.RefreshTokenTTLS != 14*24*3600 || s.WSMaxMessageBytes != 64*1024 {
@@ -20,16 +20,31 @@ func TestDefaultsMatchLegacy(t *testing.T) {
 }
 
 func TestLoadFromParsesAndOverrides(t *testing.T) {
-	env := map[string]string{"AWS_REGION": "eu-west-1", "ERROR_RATE_THRESHOLD": ".25", "DB_STALL": "1", "CORS_ORIGINS": " https://one.test,https://two.test "}
+	env := map[string]string{"AWS_REGION": "eu-west-1", "ERROR_RATE_THRESHOLD": ".25", "DB_STALL": "1", "BACKEND_ID": " b ", "FENCING_ENABLED": "1", "CORS_ORIGINS": " https://one.test,https://two.test "}
 	s, err := LoadFrom(func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Region != "eu-west-1" || s.ErrorRateThreshold != .25 || !s.DBStall {
+	if s.Region != "eu-west-1" || s.ErrorRateThreshold != .25 || !s.DBStall || s.BackendID != "B" || !s.FencingEnabled {
 		t.Fatalf("overrides not applied: %+v", s)
 	}
 	if len(s.CORSOrigins) != 2 || s.CORSOrigins[0] != "https://one.test" || s.CORSOrigins[1] != "https://two.test" {
 		t.Fatalf("bad origins %#v", s.CORSOrigins)
+	}
+}
+
+func TestFencingConfigurationValidationAndLegacyDefaults(t *testing.T) {
+	if s := Defaults(); s.FencingEnabled || s.BackendID != "" {
+		t.Fatalf("legacy defaults unexpectedly enable fencing: %+v", s)
+	}
+	for _, env := range []map[string]string{
+		{"FENCING_ENABLED": "1"},
+		{"FENCING_ENABLED": "true", "BACKEND_ID": "A"},
+		{"FENCING_ENABLED": "1", "BACKEND_ID": "C"},
+	} {
+		if _, err := LoadFrom(func(key string) string { return env[key] }); err == nil {
+			t.Fatalf("invalid fencing environment accepted: %#v", env)
+		}
 	}
 }
 

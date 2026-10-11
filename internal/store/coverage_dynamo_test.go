@@ -207,6 +207,24 @@ func (f *scriptedDynamo) TransactWriteItems(_ context.Context, in *dynamodb.Tran
 	if err := popScriptedError(&f.transactionErrors); err != nil {
 		return nil, err
 	}
+	// Preserve operation-level failure scripting for transactions too. Validate
+	// every item before applying any of them, matching DynamoDB's atomicity.
+	for _, tx := range in.TransactItems {
+		switch {
+		case tx.Put != nil:
+			if err := popScriptedError(&f.putErrors); err != nil {
+				return nil, err
+			}
+		case tx.Update != nil:
+			if err := popScriptedError(&f.updateErrors); err != nil {
+				return nil, err
+			}
+		case tx.Delete != nil:
+			if err := popScriptedError(&f.deleteErrors); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for _, tx := range in.TransactItems {
 		switch {
 		case tx.Put != nil:

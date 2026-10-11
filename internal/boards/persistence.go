@@ -120,6 +120,7 @@ type BoardVersion struct {
 
 type pendingBoardSave struct {
 	snapshot   BoardSnapshot
+	ctx        context.Context
 	timer      *time.Timer
 	generation uint64
 }
@@ -151,18 +152,29 @@ func (m *Manager) persistenceStore() BoardSnapshotStore {
 	return store
 }
 
-func (m *Manager) scheduleSnapshotSave(snapshot BoardSnapshot) {
+func (m *Manager) scheduleSnapshotSave(snapshot BoardSnapshot, originatingCtx context.Context) {
 	m.persistenceMu.Lock()
 	if m.persistence == nil {
 		m.persistenceMu.Unlock()
 		return
 	}
-	if pending := m.pendingSaves[snapshot.RoomID]; pending != nil && pending.timer != nil {
-		pending.timer.Stop()
+	previous := m.pendingSaves[snapshot.RoomID]
+	if previous != nil && previous.timer != nil {
+		previous.timer.Stop()
 	}
+	if originatingCtx == nil && previous != nil {
+		// Resume may refresh a pending snapshot after loading durable room
+		// state. Keep the writer from the mutation that dirtied it; the join
+		// request's newer epoch must not authorize that older write.
+		originatingCtx = previous.ctx
+	}
+	if originatingCtx == nil {
+		originatingCtx = context.Background()
+	}
+	saveCtx := context.WithoutCancel(originatingCtx)
 	m.nextSaveGeneration++
 	generation := m.nextSaveGeneration
-	pending := &pendingBoardSave{snapshot: snapshot.Clone(), generation: generation}
+	pending := &pendingBoardSave{snapshot: snapshot.Clone(), ctx: saveCtx, generation: generation}
 	delay := m.saveDebounce
 	pending.timer = time.AfterFunc(delay, func() {
 		m.flushScheduledSnapshot(snapshot.RoomID, generation)
@@ -182,8 +194,9 @@ func (m *Manager) flushScheduledSnapshot(roomID string, generation uint64) {
 	snapshot := pending.snapshot.Clone()
 	m.persistenceMu.Unlock()
 
-	if err := m.persistSnapshot(context.Background(), snapshot); err != nil {
+	if err := m.persistSnapshot(pending.ctx, snapshot); err != nil {
 		m.recordPersistenceError(roomID, err)
+		m.retainFailedSnapshot(snapshot, pending.ctx)
 	}
 }
 
@@ -292,7 +305,7 @@ func (m *Manager) Resume(ctx context.Context, roomID string) error {
 		m.mu.Unlock()
 		if shouldRefreshPending && m.hasPendingSave(roomID) {
 			if snapshot, ok := m.exportSnapshotIfPresent(roomID); ok {
-				m.scheduleSnapshotSave(snapshot)
+				m.scheduleSnapshotSave(snapshot, nil)
 			}
 		}
 		return err
@@ -318,6 +331,12 @@ func (m *Manager) Flush(ctx context.Context, roomID string) error {
 		ctx = context.Background()
 	}
 	pending := m.takePendingSave(roomID)
+	saveCtx := ctx
+	if pending != nil && pending.ctx != nil {
+		// The pending snapshot belongs to its originating routed writer. A
+		// later flush request must not refresh its epoch or backend identity.
+		saveCtx = pending.ctx
+	}
 	snapshot, ok := m.exportSnapshotIfPresent(roomID)
 	if !ok {
 		if pending == nil {
@@ -325,8 +344,9 @@ func (m *Manager) Flush(ctx context.Context, roomID string) error {
 		}
 		snapshot = pending.snapshot
 	}
-	if err := m.persistSnapshot(ctx, snapshot); err != nil {
+	if err := m.persistSnapshot(saveCtx, snapshot); err != nil {
 		m.recordPersistenceError(roomID, err)
+		m.retainFailedSnapshot(snapshot, saveCtx)
 		return err
 	}
 	return nil
@@ -434,7 +454,7 @@ func (m *Manager) Restore(ctx context.Context, roomID string, version int64) (Ro
 	// reporting the error to the caller.
 	if err := m.persistSnapshot(ctx, snapshot); err != nil {
 		m.recordPersistenceError(roomID, err)
-		m.scheduleSnapshotSave(snapshot)
+		m.scheduleSnapshotSave(snapshot, ctx)
 		return result, err
 	}
 	m.Broadcast(ctx, roomID, map[string]any{
@@ -527,6 +547,25 @@ func (m *Manager) hasPendingSave(roomID string) bool {
 	defer m.persistenceMu.Unlock()
 	_, ok := m.pendingSaves[roomID]
 	return ok
+}
+
+// retainFailedSnapshot keeps a failed snapshot available for a later explicit
+// flush without inventing a fresh writer or retrying a permanently stale
+// epoch on a timer. A newer mutation's pending snapshot takes precedence.
+func (m *Manager) retainFailedSnapshot(snapshot BoardSnapshot, ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	saveCtx := context.WithoutCancel(ctx)
+	m.persistenceMu.Lock()
+	defer m.persistenceMu.Unlock()
+	if m.persistence == nil || m.pendingSaves[snapshot.RoomID] != nil {
+		return
+	}
+	m.nextSaveGeneration++
+	m.pendingSaves[snapshot.RoomID] = &pendingBoardSave{
+		snapshot: snapshot.Clone(), ctx: saveCtx, generation: m.nextSaveGeneration,
+	}
 }
 
 func (m *Manager) mergeLoadedSnapshotLocked(roomID string, r *room, loaded BoardSnapshot) {

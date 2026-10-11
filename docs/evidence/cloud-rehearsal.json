@@ -1,0 +1,192 @@
+{
+  "mode": "aws",
+  "region": "ap-southeast-2",
+  "api_url": "https://olao3wzh7d.execute-api.ap-southeast-2.amazonaws.com",
+  "initial_epoch": 1,
+  "transient_fault": {
+    "request": {
+      "accepted": true,
+      "fault_expires_in_ms": 7500,
+      "monitor_started": true
+    },
+    "active_backend": "A",
+    "epoch": 1,
+    "events": [
+      {
+        "at": "2026-10-10T17:13:23.817959545Z",
+        "backend": "A",
+        "epoch": 1,
+        "id": "event-9d59537d1df529f1f06b1b32",
+        "message": "active backend recovered before confirmation completed",
+        "type": "suppressed"
+      },
+      {
+        "at": "2026-10-10T17:13:13.615700907Z",
+        "backend": "A",
+        "epoch": 1,
+        "id": "event-2c3e6a35c1800a168de20934",
+        "message": "blip fault injected",
+        "type": "fault"
+      }
+    ]
+  },
+  "unsafe_standby": {
+    "backends": [
+      {
+        "healthy": false,
+        "id": "A",
+        "liveness": true,
+        "ready": false,
+        "reason": "database readiness failed: db_stall chaos flag"
+      },
+      {
+        "healthy": false,
+        "id": "B",
+        "liveness": true,
+        "ready": false,
+        "reason": "database readiness failed: db_stall chaos flag"
+      }
+    ],
+    "epoch": 1,
+    "suppressed": {
+      "at": "2026-10-10T17:13:36.171825038Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-797efff786a0f5e81a1ebaf4",
+      "message": "both backends failed readiness; shared dependency or verifier failure suspected",
+      "type": "suppressed"
+    }
+  },
+  "request_id": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23",
+  "lost_response_status": 503,
+  "committed_at": 1791652428408,
+  "fault_injected_at_ms": 1791652430017,
+  "fault_to_observed_recovery_ms": 50472,
+  "final_epoch": 2,
+  "metrics": {
+    "failovers": 1,
+    "reconciled": true,
+    "recovery_ms": 0,
+    "suppressed": 2
+  },
+  "events": [
+    {
+      "at": "2026-10-10T17:14:37.987185928Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-40ea7099ac8f67319d2e0ac7",
+      "message": "reconciliation scanned=29 processed=1 already_processed=0 conflicts=0",
+      "type": "reconcile"
+    },
+    {
+      "at": "2026-10-10T17:14:35.48695419Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-09bdb36161fc3ba256c2fe50",
+      "message": "public health smoke succeeded in 23713 ms",
+      "type": "recovered"
+    },
+    {
+      "at": "2026-10-10T17:14:35.304140058Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-58acf4c3bde2198dba60da09",
+      "message": "active route updated after conditional epoch check",
+      "type": "failover"
+    },
+    {
+      "at": "2026-10-10T17:14:31.956974285Z",
+      "backend": "B",
+      "epoch": 1,
+      "id": "event-10b964011790147f2bd9a3bd",
+      "message": "route workflow started",
+      "type": "workflow"
+    },
+    {
+      "at": "2026-10-10T17:13:51.671987752Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-96266807c9f7a42d43c58c61",
+      "message": "EC2 instance stop requested",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:46.946006056Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-61fc849470244097a0ccfb81",
+      "message": "lost_response fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:42.337186901Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-140ee272ef4f720799d80f1a",
+      "message": "faults cleared and both backend instances are running",
+      "type": "reset"
+    },
+    {
+      "at": "2026-10-10T17:13:36.171825038Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-797efff786a0f5e81a1ebaf4",
+      "message": "both backends failed readiness; shared dependency or verifier failure suspected",
+      "type": "suppressed"
+    },
+    {
+      "at": "2026-10-10T17:13:33.395964918Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-7e824b800dacc14dbefa7245",
+      "message": "partial fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:31.91363034Z",
+      "backend": "B",
+      "epoch": 1,
+      "id": "event-61108ef6d928f1e1f1718716",
+      "message": "unsafe_standby fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:23.817959545Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-9d59537d1df529f1f06b1b32",
+      "message": "active backend recovered before confirmation completed",
+      "type": "suppressed"
+    },
+    {
+      "at": "2026-10-10T17:13:13.615700907Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-2c3e6a35c1800a168de20934",
+      "message": "blip fault injected",
+      "type": "fault"
+    }
+  ],
+  "replayed_receipt": {
+    "status": "duplicate",
+    "request_id": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23",
+    "version": 1,
+    "committed_at": 1791652428408,
+    "score": 2,
+    "total": 5,
+    "attempt_number": 1
+  },
+  "changed_payload_status": 409,
+  "repeat_reconciliation_request": {
+    "accepted": true,
+    "execution_name": "manual-reconcile-e2-934e36653ff46f63a294cb05"
+  },
+  "repeat_reconciliation_event": {
+    "at": "2026-10-10T17:14:44.891163275Z",
+    "backend": "B",
+    "epoch": 2,
+    "id": "event-f2a4422cc51538ae07328606",
+    "message": "reconciliation scanned=32 processed=0 already_processed=0 conflicts=0",
+    "type": "reconcile"
+  }
+}

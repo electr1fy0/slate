@@ -358,15 +358,41 @@ func TestTimedGetIsStableAndSubmitIsIdempotent(t *testing.T) {
 	if r.Status != "committed" || r.Score != 1 {
 		t.Fatalf("bad result %#v", r)
 	}
-	r, err = s.Submit(ctx, "e", u, map[string]int{"0": 0}, "r1")
+	r, err = s.Submit(ctx, "e", u, map[string]int{"0": 1}, "r1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Status != "duplicate" || r.Score != 1 {
 		t.Fatalf("bad duplicate %#v", r)
 	}
-	_, err = s.Submit(ctx, "e", u, map[string]int{"0": 1}, "r2")
+	_, err = s.Submit(ctx, "e", u, map[string]int{"0": 0}, "r2")
 	if !errors.Is(err, store.ErrSubmissionConflict) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCommittedSubmissionRetrySurvivesExamCloseAndSavedSubmitRoute(t *testing.T) {
+	ctx := context.Background()
+	m := store.NewMemory("test")
+	if err := m.EnsureExam(ctx, "closed", "Closed later", []model.Question{{Index: 0, Question: "q", Options: []string{"a", "b"}, Answer: 1}}, map[string]any{
+		"closes_at": "1970-01-01T00:00:02Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(m)
+	now := time.UnixMilli(1500)
+	s.Now = func() time.Time { return now }
+	u := &model.User{UserID: "u", Name: "U", Role: "student"}
+	first, err := s.Submit(ctx, "closed", u, map[string]int{"0": 1}, "stable-request")
+	if err != nil || first.Status != "committed" || first.CommittedAt == 0 {
+		t.Fatalf("initial commit = %#v, %v", first, err)
+	}
+	now = time.UnixMilli(3000)
+	retry, err := s.SubmitSaved(ctx, "closed", u, "stable-request")
+	if err != nil || retry.Status != "duplicate" || retry.CommittedAt != first.CommittedAt {
+		t.Fatalf("saved exact retry after close = %#v, %v", retry, err)
+	}
+	if _, err := s.Submit(ctx, "closed", u, map[string]int{"0": 0}, "stable-request"); !errors.Is(err, store.ErrSubmissionRequestConflict) {
+		t.Fatalf("changed payload after close = %v", err)
 	}
 }

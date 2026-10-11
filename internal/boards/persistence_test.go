@@ -3,10 +3,13 @@ package boards
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ayush/slate/internal/clusterstate"
 )
 
 type memoryBoardStore struct {
@@ -14,6 +17,40 @@ type memoryBoardStore struct {
 	current  map[string]BoardSnapshot
 	versions map[string]map[int64]BoardSnapshot
 	saved    chan BoardSnapshot
+}
+
+type writerSaveResult struct {
+	writer    clusterstate.Writer
+	hasWriter bool
+	ctxErr    error
+	err       error
+}
+
+type writerCaptureBoardStore struct {
+	active clusterstate.Writer
+	saves  chan writerSaveResult
+}
+
+func (s *writerCaptureBoardStore) Load(context.Context, string) (*BoardSnapshot, error) {
+	return nil, ErrSnapshotNotFound
+}
+
+func (s *writerCaptureBoardStore) Save(ctx context.Context, _ BoardSnapshot) error {
+	writer, hasWriter := clusterstate.WriterFrom(ctx)
+	var err error
+	if !hasWriter || writer != s.active {
+		err = clusterstate.ErrFenced
+	}
+	s.saves <- writerSaveResult{writer: writer, hasWriter: hasWriter, ctxErr: ctx.Err(), err: err}
+	return err
+}
+
+func (s *writerCaptureBoardStore) ListVersions(context.Context, string, int) ([]BoardVersion, error) {
+	return nil, nil
+}
+
+func (s *writerCaptureBoardStore) LoadVersion(context.Context, string, int64) (*BoardSnapshot, error) {
+	return nil, ErrSnapshotNotFound
 }
 
 func newMemoryBoardStore() *memoryBoardStore {
@@ -148,6 +185,77 @@ func TestManagerDebouncedAndExplicitSaveHooks(t *testing.T) {
 	}
 	if current, err := store.Load(context.Background(), "room"); err != nil || current.Version != 2 {
 		t.Fatalf("explicit save did not flush latest snapshot: %#v %v", current, err)
+	}
+}
+
+func TestManagerDebouncedSaveRetainsOriginatingWriterAfterRequestCancellation(t *testing.T) {
+	oldWriter := clusterstate.Writer{Backend: "A", Epoch: 7}
+	activeWriter := clusterstate.Writer{Backend: "B", Epoch: 8}
+	store := &writerCaptureBoardStore{
+		active: activeWriter,
+		saves:  make(chan writerSaveResult, 1),
+	}
+	manager := NewManagerWithPersistence(store, 10*time.Millisecond)
+
+	requestCtx, cancel := context.WithCancel(clusterstate.WithWriter(context.Background(), oldWriter))
+	session := NewSession(manager, "room", &testSocket{}, Identity{Name: "Student", Role: "student"})
+	if _, err := session.HandleFrame(requestCtx, `{"type":"join"}`, 1024); err != nil {
+		t.Fatalf("join frame: %v", err)
+	}
+	if _, err := session.HandleFrame(requestCtx, `{"type":"elements","elements":[{"id":"e1","version":1}]}`, 1024); err != nil {
+		t.Fatalf("elements frame: %v", err)
+	}
+	cancel()
+
+	select {
+	case result := <-store.saves:
+		if !result.hasWriter || result.writer != oldWriter {
+			t.Fatalf("debounced save writer = %+v, present=%v; want original %+v", result.writer, result.hasWriter, oldWriter)
+		}
+		if result.ctxErr != nil {
+			t.Fatalf("background save retained cancelled request context: %v", result.ctxErr)
+		}
+		if !errors.Is(result.err, clusterstate.ErrFenced) {
+			t.Fatalf("store result = %v, want stale writer rejection", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for debounced save")
+	}
+	deadline := time.After(time.Second)
+	for !errors.Is(manager.LastPersistenceError("room"), clusterstate.ErrFenced) {
+		select {
+		case <-deadline:
+			t.Fatalf("manager did not record stale save error: %v", manager.LastPersistenceError("room"))
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := manager.Flush(clusterstate.WithWriter(context.Background(), activeWriter), "room"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("retry flush error = %v, want stale writer rejection", err)
+	}
+	retry := <-store.saves
+	if !retry.hasWriter || retry.writer != oldWriter {
+		t.Fatalf("retry flush writer = %+v, present=%v; want original %+v", retry.writer, retry.hasWriter, oldWriter)
+	}
+}
+
+func TestManagerFlushUsesPendingSnapshotWriterInsteadOfNewerCallerWriter(t *testing.T) {
+	oldWriter := clusterstate.Writer{Backend: "A", Epoch: 7}
+	activeWriter := clusterstate.Writer{Backend: "B", Epoch: 8}
+	store := &writerCaptureBoardStore{
+		active: activeWriter,
+		saves:  make(chan writerSaveResult, 1),
+	}
+	manager := NewManagerWithPersistence(store, time.Hour)
+	requestCtx := clusterstate.WithWriter(context.Background(), oldWriter)
+	manager.AbsorbContext(requestCtx, "room", []map[string]any{{"id": "e1", "version": 1}})
+
+	flushCtx := clusterstate.WithWriter(context.Background(), activeWriter)
+	if err := manager.Flush(flushCtx, "room"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("flush error = %v, want stale snapshot rejection", err)
+	}
+	result := <-store.saves
+	if !result.hasWriter || result.writer != oldWriter {
+		t.Fatalf("flush writer = %+v, present=%v; want original %+v", result.writer, result.hasWriter, oldWriter)
 	}
 }
 

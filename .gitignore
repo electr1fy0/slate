@@ -9,9 +9,18 @@ app-bundle/
 crash.log
 tfplan*
 *.tfvars
+*.tfvars.json
 !*.tfvars.example
 
 .env
+.tools/
+build/
+.demo/
+.env.*
+!*.env.example
 web/coverage/
 web/test-results/
 web/dist/
+.demo-go.cover
+*.tfplan
+__pycache__/

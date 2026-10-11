@@ -1,107 +1,63 @@
 # Continuum
 
-An intent-verified automated failover framework for mission-critical academic platforms on AWS.
+Verified recovery for timed academic assessments. The demo combines a student exam, a recovery cockpit, transactional writer fencing, and replayable submission receipts.
 
-A self-healing, cross-region infrastructure layer that detects degradation of a primary
-deployment, verifies it at the application level (not just ping), fails over to a standby
-region through an orchestrated Step Functions workflow with rollback, and reconciles writes
-that were in flight during the transition.
+## Run the local demo
 
-Demo target application: an online exam-delivery platform.
-
-## Architecture in one paragraph
-
-Two regions (default `ap-south-1` Mumbai primary, `ap-southeast-1` Singapore standby) each
-run the Go exam API on EC2, backed by one DynamoDB Global Table and S3 cross-region
-replication. Route 53 failover records handle hard crashes automatically. A scheduled
-Lambda verifier performs deep health checks (DB roundtrip, error rate, disk) and feeds a
-composite CloudWatch alarm; sustained degradation triggers an Step Functions state machine
-that re-verifies, promotes the standby out of read-only mode, forces the DNS shift,
-verifies the new primary, rolls back if verification fails, and finally replays any
-in-flight writes found in the transactional outbox.
-
-## Repository layout
-
-```
-cmd/api/              Go exam API entrypoint
-cmd/*/                Go Lambda entrypoints (verifier, failover ops, reconciler)
-internal/             Go domain, DynamoDB, auth, HTTP, WebSocket, health, and control-plane packages
-web/                  Slate — TanStack Start frontend (classroom boards, quizzes, ops console)
-statemachine/         Step Functions ASL definition
-infra/
-  modules/            network, compute (reusable)
-  core/               ap-south-1 stack + global data plane (DynamoDB GT, S3 CRR)
-  standby/            ap-southeast-1 stack (network + compute only)
-  control/            Route 53, Step Functions, ops/reconciler Lambdas, dashboards
-scripts/              App bundling/deployment helpers (+ local dev stack)
-deploy/               systemd and instance lifecycle assets
-scripts/              Go build, deployment, and local development helpers
-docs/                 architecture, runbook, demo script
+```sh
+cd web && bun install --frozen-lockfile && cd ..
+make demo-local
 ```
 
-## Prerequisites
+Open **http://localhost:3000**. Read the private `.demo/local.env` file for the faculty login and cockpit token. Register a synthetic student in a separate browser session and select **Cloud Architecture CAT**. The cockpit is at `/ops`.
 
-- AWS account with admin credentials configured (`aws configure` or env vars), MFA on root.
-- Terraform >= 1.6 (`brew install hashicorp/tap/hashicorp`)
-- Go 1.27+
-- A Route 53 domain (optional but strongly recommended — see below)
+Local mode runs separate A/B HTTP servers with shared memory. Cloud mode runs two EC2 instances in separate Sydney Availability Zones with shared regional DynamoDB. The local mode is labeled honestly and is useful for rehearsals without using AWS credits.
 
-## Deploy order
+## What to demonstrate
 
-```bash
-make core        # primary region + DynamoDB Global Table + S3 CRR
-make standby     # standby region compute
-make app-deploy  # bundle app -> S3 -> EC2 both regions
-make control     # Route 53 + Step Functions + orchestrator lambdas
+- Stop the active backend and observe verified promotion, a newer epoch, and successful public routing.
+- Keep liveness healthy while disabling that backend's database capability; recover only when the standby is ready.
+- Lose a response after a submission commits, then recover the same receipt using the original request ID and answer snapshot.
+- Refuse an unsafe standby and suppress a brief failure.
+- Repeat audit reconciliation without duplicate downstream work.
+
+The original server deadline continues across failover. A browser buffer is not a durable acknowledgment. Complete Region or DynamoDB outages are outside the demonstrated recovery boundary. Classroom boards/WebSockets are outside this bounded HTTP assessment demo.
+
+## AWS deployment
+
+Keep the project on its **Free** plan and all regional resources in **ap-southeast-2**. The deployable stack is `infra/demo`; it uses no NAT gateway, always-on load balancer, purchased domain, cross-Region resources, or database replicas.
+
+```sh
+make demo-deploy
+make demo-resume  # enable monitoring for a rehearsal
+make demo-pause   # stop EC2 and disable the schedule afterwards
 ```
 
-Copy each `terraform.tfvars.example` to `terraform.tfvars` first.
+Terraform is required for those commands. This workspace also has a verified local binary at `.tools/terraform`; use `make TF="$PWD/.tools/terraform" demo-deploy` if Terraform is not on your PATH. Cloud resources use credits while active, and retained disks/storage can use credits while paused. The project currently has a small Lambda concurrency quota; the stack is sized for a faculty demonstration rather than production load.
 
-## Validation tests
+Private cloud URLs and credentials are written to `.demo/aws-output.json`. Keep it and Terraform state out of Git and projected screenshots.
 
-Automated suite:
+## Checks
 
-```bash
-go test -race ./cmd/... ./internal/...
-make test          # Go unit and integration suite
-make coverage      # Go + frontend suites, both enforced at 100% coverage
+```sh
+go test -race ./...
+go vet ./...
+make web-check
+bash scripts/build_demo.sh
+terraform -chdir=infra/demo init -backend=false
+terraform -chdir=infra/demo validate
 ```
 
-The Go suite covers the API, WebSocket protocol, DynamoDB persistence, health
-verification, failover operations, reconciliation, and chaos middleware. CI also
-builds the Linux API bundle and all Lambda artifacts.
+The real-HTTP integration test covers an uncertain submission, backend recovery, replay after the exam closes, unchanged request IDs, one canonical submission/audit, and monotonic failback. Additional tests verify transaction conditions, incident leases, unsafe-promotion suppression, rollback decisions, and frontend reload/retry behavior.
 
-See `docs/demo-script.md` for the live T1-T5 demo scenarios.
+## Project materials
 
-## Frontend development (Slate)
+- [Faculty presentation — editable PowerPoint](docs/presentation/continuum-faculty-pitch.pptx)
+- [Faculty presentation — PDF](docs/presentation/continuum-faculty-pitch.pdf)
+- [Faculty questions and concise answers](docs/faculty-qa.md)
+- [Faculty pitch and revised proposal](docs/faculty-pitch.md)
+- [Deployment, cost controls, and demonstration runbook](docs/demo-runbook.md)
+- [Implementation/review evidence](docs/implementation-review.md)
+- [Original free-plan design study](docs/continuum-free-tier-plan.md)
 
-`web/` is a TanStack Start app (React 19, Tailwind v4, shadcn/ui base-nova
-theme) with three surfaces: live Excalidraw classroom boards synced over
-WebSockets (`/board/{room}`), quiz authoring + submissions (`/teacher`), and a
-Continuum ops console with chaos injection (`/ops`). Students take quizzes at
-`/quiz/{examId}`; submissions are graded server-side on submit.
-
-```bash
-make web-install    # bun install
-scripts/dev_go_api.sh # terminal 1: Go API on :8000 (uses an in-memory store by default)
-make web-dev        # terminal 2: Vite dev server on :3000, /api + /ws proxied
-make web-check      # typecheck + eslint + coverage-enforced tests + production build
-```
-
-The local API uses the in-memory store by default so login and classroom flows work
-without AWS credentials. Set `STORE_BACKEND=dynamodb` with valid AWS credentials, or
-set `DDB_ENDPOINT_MODE` for DynamoDB Local/LocalStack, when persistence is needed.
-
-Notes:
-- Boards relay through `internal/boards` (in-memory rooms); snapshots autosave to the
-  browser's localStorage per room. Board state is ephemeral by design — it does
-  not survive a full-cluster restart.
-- Quiz authoring and chaos endpoints require the admin token (default
-  `continuum-demo-token`, override with `ADMIN_TOKEN`).
-- The student "draw" permission on a board is teacher-side and client-enforced;
-  fine for classrooms, not adversarial audiences.
-
-## Cost discipline
-
-Run `make destroy-all` after demo windows. Expected steady cost if left running ~$16/mo;
-with teardown between sessions ~$2-5/mo. Set a $15 billing alarm in the console on day one.
+The previous cross-Region proposal remains under `infra/core`, `infra/standby`, and `infra/control` for historical reference. Its apply/destroy Make targets are disabled because that architecture is unsupported by this AWS project experience. The supported implementation is `infra/demo` and `statemachine/demo-failover.asl.json`.

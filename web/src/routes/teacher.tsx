@@ -61,7 +61,7 @@ export const Route = createFileRoute("/teacher")({
   ssr: false,
   beforeLoad: ({ location }) => requireTeacher(location),
   component: TeacherPage,
-  head: () => ({ meta: [{ title: "Quizzes · Slate" }] }),
+  head: () => ({ meta: [{ title: "Assessments · Continuum" }] }),
 })
 
 interface BuilderQuestion extends QuestionDraft {

@@ -1,0 +1,149 @@
+{
+  "active_backend": "B",
+  "backends": [
+    {
+      "healthy": true,
+      "id": "A",
+      "liveness": true,
+      "ready": true,
+      "reason": "deep health passed"
+    },
+    {
+      "healthy": true,
+      "id": "B",
+      "liveness": true,
+      "ready": true,
+      "reason": "deep health passed"
+    }
+  ],
+  "epoch": 2,
+  "events": [
+    {
+      "at": "2026-10-10T17:14:44.891163275Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-f2a4422cc51538ae07328606",
+      "message": "reconciliation scanned=32 processed=0 already_processed=0 conflicts=0",
+      "type": "reconcile"
+    },
+    {
+      "at": "2026-10-10T17:14:44.594370611Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-bbdea003f93f1642b322a810",
+      "message": "reconcile workflow started",
+      "type": "workflow"
+    },
+    {
+      "at": "2026-10-10T17:14:37.987185928Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-40ea7099ac8f67319d2e0ac7",
+      "message": "reconciliation scanned=29 processed=1 already_processed=0 conflicts=0",
+      "type": "reconcile"
+    },
+    {
+      "at": "2026-10-10T17:14:35.48695419Z",
+      "backend": "B",
+      "duration_ms": 23713,
+      "epoch": 2,
+      "id": "event-09bdb36161fc3ba256c2fe50",
+      "message": "public health smoke succeeded in 23713 ms",
+      "type": "recovered"
+    },
+    {
+      "at": "2026-10-10T17:14:35.304140058Z",
+      "backend": "B",
+      "epoch": 2,
+      "id": "event-58acf4c3bde2198dba60da09",
+      "message": "active route updated after conditional epoch check",
+      "type": "failover"
+    },
+    {
+      "at": "2026-10-10T17:14:31.956974285Z",
+      "backend": "B",
+      "epoch": 1,
+      "id": "event-10b964011790147f2bd9a3bd",
+      "message": "route workflow started",
+      "type": "workflow"
+    },
+    {
+      "at": "2026-10-10T17:13:51.671987752Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-96266807c9f7a42d43c58c61",
+      "message": "EC2 instance stop requested",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:46.946006056Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-61fc849470244097a0ccfb81",
+      "message": "lost_response fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:42.337186901Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-140ee272ef4f720799d80f1a",
+      "message": "faults cleared and both backend instances are running",
+      "type": "reset"
+    },
+    {
+      "at": "2026-10-10T17:13:36.171825038Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-797efff786a0f5e81a1ebaf4",
+      "message": "both backends failed readiness; shared dependency or verifier failure suspected",
+      "type": "suppressed"
+    },
+    {
+      "at": "2026-10-10T17:13:33.395964918Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-7e824b800dacc14dbefa7245",
+      "message": "partial fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:31.91363034Z",
+      "backend": "B",
+      "epoch": 1,
+      "id": "event-61108ef6d928f1e1f1718716",
+      "message": "unsafe_standby fault injected",
+      "type": "fault"
+    },
+    {
+      "at": "2026-10-10T17:13:23.817959545Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-9d59537d1df529f1f06b1b32",
+      "message": "active backend recovered before confirmation completed",
+      "type": "suppressed"
+    },
+    {
+      "at": "2026-10-10T17:13:13.615700907Z",
+      "backend": "A",
+      "epoch": 1,
+      "id": "event-2c3e6a35c1800a168de20934",
+      "message": "blip fault injected",
+      "type": "fault"
+    }
+  ],
+  "metrics": {
+    "failovers": 1,
+    "reconciled": true,
+    "recovery_ms": 23713,
+    "suppressed": 2
+  },
+  "mode": "aws",
+  "paused": false,
+  "policy": {
+    "confirmation_probes": 3,
+    "probe_interval_ms": 5000,
+    "version": "intent-v1"
+  },
+  "region": "ap-southeast-2"
+}

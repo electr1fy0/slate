@@ -114,13 +114,10 @@ func (s *BoardStore) Save(ctx context.Context, snapshot boards.BoardSnapshot) er
 	if err != nil {
 		return fmt.Errorf("encode board snapshot history: %w", err)
 	}
-	_, err = s.backend.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{TableName: aws.String(s.backend.TableName), Item: currentItem}},
-			{Put: &types.Put{TableName: aws.String(s.backend.TableName), Item: historyItem}},
-		},
+	return s.backend.transactWrite(ctx, []types.TransactWriteItem{
+		{Put: &types.Put{TableName: aws.String(s.backend.TableName), Item: currentItem}},
+		{Put: &types.Put{TableName: aws.String(s.backend.TableName), Item: historyItem}},
 	})
-	return err
 }
 
 // Load returns the latest current pointer for a room.

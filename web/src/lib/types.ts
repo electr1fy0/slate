@@ -96,6 +96,7 @@ export interface SubmitResult {
   score: number
   total: number
   attempt_number?: number
+  committed_at?: number
 }
 
 export interface Submission {
@@ -160,6 +161,57 @@ export interface AdminStatus {
   role: "active" | "standby"
   boards: { active_rooms: number }
   chaos: { error_pct: number; latency_ms: number; db_stall: boolean }
+}
+
+export type ContinuumAction =
+  | "crash"
+  | "partial"
+  | "blip"
+  | "unsafe_standby"
+  | "lost_response"
+  | "reset"
+  | "verify"
+  | "failback"
+  | "reconcile"
+
+export interface ContinuumBackendStatus {
+  id: "A" | "B" | string
+  healthy: boolean
+  liveness: boolean
+  ready: boolean
+  reason: string
+  url?: string
+}
+
+export interface ContinuumEvent {
+  id: string
+  at: string
+  type: string
+  message: string
+  backend?: string
+  epoch?: number
+}
+
+export interface ContinuumStatus {
+  mode: "local" | "aws" | string
+  region: string
+  active_backend: string
+  epoch: number
+  paused: boolean
+  policy: {
+    version: string
+    confirmation_probes: number
+    probe_interval_ms: number
+  }
+  backends: ContinuumBackendStatus[]
+  events: ContinuumEvent[]
+  metrics: {
+    failovers: number
+    suppressed: number
+    recovery_ms: number | null
+    reconciled?: number | boolean | null
+    fenced_writes?: number | null
+  }
 }
 
 export interface BoardElement {

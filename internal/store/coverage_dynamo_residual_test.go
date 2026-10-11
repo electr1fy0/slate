@@ -95,9 +95,9 @@ func TestDynamoResidualValidationAndDecoding(t *testing.T) {
 		t.Fatal("update read errors should be returned")
 	}
 	seedItem(fake, model.QuizDraft{PK: "QUIZ#delete-update", SK: "META", OwnerID: "owner", Title: "Draft", Status: "draft"})
-	fake.queryErrors = []error{nil, errors.New("update delete query failed")}
+	fake.transactionErrors = []error{errors.New("draft update transaction failed")}
 	if _, err := s.UpdateQuizDraft(ctx, "owner", &model.QuizDraft{ID: "delete-update", Title: "x"}); err == nil {
-		t.Fatal("update delete errors should be returned")
+		t.Fatal("draft update transaction errors should be returned")
 	}
 	seedItem(fake, model.QuizDraft{PK: "QUIZ#put-update", SK: "META", OwnerID: "owner", Title: "Draft", Status: "draft"})
 	fake.putErrors = []error{nil, errors.New("update question put failed")}

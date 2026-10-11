@@ -5,7 +5,6 @@ import {
   HouseIcon,
   LogInIcon,
   LogOutIcon,
-  PenToolIcon,
   PresentationIcon,
 } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
@@ -30,9 +29,9 @@ import {
 
 const NAV_ITEMS = [
   { label: "Home", to: "/", icon: HouseIcon },
+  { label: "Assessments", to: "/teacher", icon: ClipboardListIcon },
   { label: "Live board", to: "/board", icon: PresentationIcon },
-  { label: "Quizzes", to: "/teacher", icon: ClipboardListIcon },
-  { label: "Ops console", to: "/ops", icon: ActivityIcon },
+  { label: "Continuum", to: "/ops", icon: ActivityIcon },
 ]
 
 function initials(name: string): string {
@@ -59,11 +58,11 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link to="/" />}>
               <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <PenToolIcon />
+                <ActivityIcon />
               </span>
               <span className="flex flex-col gap-0.5 leading-tight">
-                <span className="font-semibold">Slate</span>
-                <span className="text-xs text-muted-foreground">classroom studio</span>
+                <span className="font-semibold">Continuum</span>
+                <span className="text-xs text-muted-foreground">assessment continuity</span>
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -71,7 +70,7 @@ export function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Studio</SidebarGroupLabel>
+          <SidebarGroupLabel>Assessment continuity</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {NAV_ITEMS.map((item) => {

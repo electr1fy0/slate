@@ -18,18 +18,18 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Slate — Classroom boards & quizzes",
+        title: "Continuum — Assessment continuity for timed exams",
       },
       {
         name: "description",
         content:
-          "Live collaborative classroom boards with quizzes and exams, powered by Continuum.",
+          "Timed assessments with receipt-backed submissions and application failure recovery, powered by Continuum.",
       },
       { name: "theme-color", content: "#0f172a" },
-      { property: "og:title", content: "Slate — Classroom boards & quizzes" },
+      { property: "og:title", content: "Continuum — Assessment continuity for timed exams" },
       {
         property: "og:description",
-        content: "Live collaborative classroom boards with quizzes and exams.",
+        content: "Timed assessments with receipt-backed submissions and application failure recovery.",
       },
       { property: "og:type", content: "website" },
     ],
@@ -90,7 +90,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body className="antialiased">
         <Providers>{children}</Providers>
         <Toaster position="bottom-right" />
-        {import.meta.env.DEV ? (
+        {import.meta.env.DEV && import.meta.env.CONTINUUM_DEMO !== "1" ? (
           <TanStackDevtools
             config={{ position: "bottom-right" }}
             plugins={[{ name: "Tanstack Router", render: <TanStackRouterDevtoolsPanel /> }]}

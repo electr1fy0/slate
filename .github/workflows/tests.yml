@@ -18,4 +18,13 @@ jobs:
       - name: Vet Go backend
         run: go vet ./...
       - name: Build deployment artifacts
-        run: scripts/build_go.sh
+        run: scripts/build_demo.sh
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - run: bun run typecheck && bun run lint && bun run test && bun run build
+        working-directory: web

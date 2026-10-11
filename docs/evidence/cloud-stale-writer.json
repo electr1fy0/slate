@@ -1,0 +1,53 @@
+{
+  "checked_at": "2026-10-10T17:30:26.227729+00:00",
+  "instance": "i-0ad374f295072440b",
+  "claimed_backend": "A",
+  "claimed_epoch": 1,
+  "command": {
+    "CommandId": "cfa099b0-8e8a-44ae-96d6-9a12d8067d85",
+    "InstanceId": "i-0ad374f295072440b",
+    "Comment": "Continuum synthetic stale-writer regression after A restart; expect rejection",
+    "DocumentName": "AWS-RunShellScript",
+    "DocumentVersion": "$DEFAULT",
+    "PluginName": "aws:runShellScript",
+    "ResponseCode": 0,
+    "ExecutionStartDateTime": "2026-10-10T17:30:01.503Z",
+    "ExecutionElapsedTime": "PT1.654S",
+    "ExecutionEndDateTime": "2026-10-10T17:30:02.503Z",
+    "Status": "Success",
+    "StatusDetails": "Success",
+    "StandardOutputContent": "{\"detail\":{\"code\":\"WRITER_FENCED\",\"message\":\"this backend is no longer the active writer\",\"retryable\":true}}\n\nHTTP_STATUS=503\n",
+    "StandardOutputUrl": "",
+    "StandardErrorContent": "",
+    "StandardErrorUrl": "",
+    "CloudWatchOutputConfig": {
+      "CloudWatchLogGroupName": "",
+      "CloudWatchOutputEnabled": false
+    }
+  },
+  "email_index": {
+    "checked_at": "2026-10-10T17:30:58.039572+00:00",
+    "key": {
+      "pk": "USEREMAIL#stale-writer-proof@continuum.test",
+      "sk": "LOGIN"
+    },
+    "record": {}
+  },
+  "api_calls": [
+    {
+      "service": "ssm",
+      "operation": "GetCommandInvocation",
+      "status": "success"
+    },
+    {
+      "service": "dynamodb",
+      "operation": "GetItem",
+      "status": "success"
+    },
+    {
+      "service": "dynamodb",
+      "operation": "GetItem",
+      "status": "success"
+    }
+  ]
+}

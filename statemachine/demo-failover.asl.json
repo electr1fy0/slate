@@ -1,0 +1,662 @@
+{
+  "Comment": "Single-region Continuum failover with epoch fencing, public smoke verification, rollback, and bounded cursor reconciliation.",
+  "StartAt": "AcquireLock",
+  "TimeoutSeconds": 840,
+  "States": {
+    "AcquireLock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "acquire_lock",
+          "incident_id.$": "$.incident_id",
+          "lease_seconds": 900
+        }
+      },
+      "ResultSelector": {
+        "lock_acquired.$": "$.Payload.lock_acquired"
+      },
+      "ResultPath": "$.lock",
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "LockAcquired"
+    },
+    "LockAcquired": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.lock.lock_acquired",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.operation",
+              "StringEquals": "reconcile"
+            }
+          ],
+          "Next": "InitializeReconciliation"
+        },
+        {
+          "Variable": "$.lock.lock_acquired",
+          "BooleanEquals": true,
+          "Next": "VerifyIncident"
+        }
+      ],
+      "Default": "DuplicateIncident"
+    },
+    "VerifyIncident": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "verify",
+          "operation.$": "$.operation",
+          "incident_id.$": "$.incident_id",
+          "expected_backend.$": "$.expected_backend",
+          "expected_epoch.$": "$.expected_epoch",
+          "target_backend.$": "$.target_backend",
+          "verifier_function": "__VERIFIER_ARN__"
+        }
+      },
+      "ResultPath": "$.verification",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "IncidentConfirmed"
+    },
+    "IncidentConfirmed": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.verification.Payload.confirmed",
+          "BooleanEquals": true,
+          "Next": "Promote"
+        }
+      ],
+      "Default": "ReleaseSuppressed"
+    },
+    "Promote": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action.$": "$.operation",
+          "incident_id.$": "$.incident_id",
+          "expected_backend.$": "$.expected_backend",
+          "expected_epoch.$": "$.expected_epoch",
+          "target_backend.$": "$.target_backend"
+        }
+      },
+      "ResultPath": "$.promotion",
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "PublicSmoke"
+    },
+    "PublicSmoke": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "public_smoke",
+          "public_api_url": "__PUBLIC_API_URL__",
+          "incident_started_at_ms.$": "$.incident_started_at_ms"
+        }
+      },
+      "ResultPath": "$.smoke",
+      "TimeoutSeconds": 20,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.smoke_error",
+          "Next": "VerifyFormerBackend"
+        }
+      ],
+      "Next": "SmokeSucceeded"
+    },
+    "SmokeSucceeded": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.smoke.Payload.healthy",
+          "BooleanEquals": true,
+          "Next": "InitializeReconciliation"
+        }
+      ],
+      "Default": "VerifyFormerBackend"
+    },
+    "VerifyFormerBackend": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "verify",
+          "operation": "rollback",
+          "incident_id.$": "$.incident_id",
+          "expected_backend.$": "$.promotion.Payload.active_backend",
+          "expected_epoch.$": "$.promotion.Payload.epoch",
+          "target_backend.$": "$.expected_backend",
+          "verifier_function": "__VERIFIER_ARN__"
+        }
+      },
+      "ResultPath": "$.former_verification",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.rollback_verification_error",
+          "Next": "ReleaseKeepPromoted"
+        }
+      ],
+      "Next": "FormerBackendHealthy"
+    },
+    "FormerBackendHealthy": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.former_verification.Payload.confirmed",
+          "BooleanEquals": true,
+          "Next": "Rollback"
+        }
+      ],
+      "Default": "ReleaseKeepPromoted"
+    },
+    "Rollback": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "rollback",
+          "incident_id.$": "$.incident_id",
+          "expected_backend.$": "$.promotion.Payload.active_backend",
+          "expected_epoch.$": "$.promotion.Payload.epoch",
+          "target_backend.$": "$.expected_backend"
+        }
+      },
+      "ResultPath": "$.rollback",
+      "TimeoutSeconds": 30,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "ReleaseRolledBack"
+    },
+    "InitializeReconciliation": {
+      "Type": "Pass",
+      "Result": {
+        "count": 0
+      },
+      "ResultPath": "$.page",
+      "Next": "InitializeReconciliationSummary"
+    },
+    "InitializeReconciliationSummary": {
+      "Type": "Pass",
+      "Result": {
+        "scanned": 0,
+        "processed": 0,
+        "already_processed": 0,
+        "conflict_count": 0
+      },
+      "ResultPath": "$.summary",
+      "Next": "ReconcileFirstPage"
+    },
+    "ReconcileFirstPage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__RECONCILER_ARN__",
+        "Payload": {
+          "action": "reconcile",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": "$.reconciliation",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "AccumulateReconciliationPage"
+    },
+    "AccumulateReconciliationPage": {
+      "Type": "Pass",
+      "Parameters": {
+        "scanned.$": "States.MathAdd($.summary.scanned, $.reconciliation.Payload.scanned)",
+        "processed.$": "States.MathAdd($.summary.processed, $.reconciliation.Payload.processed)",
+        "already_processed.$": "States.MathAdd($.summary.already_processed, $.reconciliation.Payload.already_processed)",
+        "conflict_count.$": "States.MathAdd($.summary.conflict_count, States.ArrayLength($.reconciliation.Payload.conflicts))"
+      },
+      "ResultPath": "$.summary",
+      "Next": "MoreReconciliation"
+    },
+    "MoreReconciliation": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.reconciliation.Payload.more",
+          "BooleanEquals": true,
+          "Next": "IncrementPage"
+        }
+      ],
+      "Default": "ReconciliationConflictCheck"
+    },
+    "IncrementPage": {
+      "Type": "Pass",
+      "Parameters": {
+        "count.$": "States.MathAdd($.page.count, 1)"
+      },
+      "ResultPath": "$.page",
+      "Next": "PageLimit"
+    },
+    "PageLimit": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.page.count",
+          "NumericGreaterThanEquals": 100,
+          "Next": "RecordReconciliationFailed"
+        }
+      ],
+      "Default": "ReconcileNextPage"
+    },
+    "ReconcileNextPage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__RECONCILER_ARN__",
+        "Payload": {
+          "action": "reconcile",
+          "incident_id.$": "$.incident_id",
+          "cursor.$": "$.reconciliation.Payload.cursor"
+        }
+      },
+      "ResultPath": "$.reconciliation",
+      "TimeoutSeconds": 120,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "AccumulateReconciliationPage"
+    },
+    "ReconciliationConflictCheck": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.summary.conflict_count",
+          "NumericGreaterThan": 0,
+          "Next": "RecordReconciliationFailed"
+        }
+      ],
+      "Default": "RecordReconciliationCompleted"
+    },
+    "RecordReconciliationCompleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "reconcile_completed",
+          "incident_id.$": "$.incident_id",
+          "summary.$": "$.summary"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "ReleaseSuccess"
+    },
+    "RecordReconciliationFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "reconcile_failed",
+          "incident_id.$": "$.incident_id",
+          "summary.$": "$.summary"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.workflow_error",
+          "Next": "ReleaseOnError"
+        }
+      ],
+      "Next": "ReleaseIncomplete"
+    },
+    "ReleaseSuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "Completed"
+    },
+    "ReleaseSuppressed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "Suppressed"
+    },
+    "ReleaseKeepPromoted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "KeptPromotedRoute"
+    },
+    "ReleaseRolledBack": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "RolledBack"
+    },
+    "ReleaseIncomplete": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "ReconciliationFailureKind"
+    },
+    "ReconciliationFailureKind": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.summary.conflict_count",
+          "NumericGreaterThan": 0,
+          "Next": "FailConflicts"
+        }
+      ],
+      "Default": "FailIncomplete"
+    },
+    "ReleaseOnError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__CONTROL_ARN__",
+        "Payload": {
+          "action": "release_lock",
+          "incident_id.$": "$.incident_id"
+        }
+      },
+      "ResultPath": null,
+      "TimeoutSeconds": 30,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "FailRelease"
+        }
+      ],
+      "Next": "FailWorkflow"
+    },
+    "DuplicateIncident": {
+      "Type": "Succeed"
+    },
+    "Completed": {
+      "Type": "Succeed"
+    },
+    "Suppressed": {
+      "Type": "Succeed"
+    },
+    "KeptPromotedRoute": {
+      "Type": "Fail",
+      "Error": "Continuum.PublicRouteUnverified",
+      "Cause": "Public smoke failed and the former backend is unhealthy. The promoted route was retained; operator attention is required."
+    },
+    "RolledBack": {
+      "Type": "Succeed"
+    },
+    "FailWorkflow": {
+      "Type": "Fail",
+      "Error": "Continuum.WorkflowFailed",
+      "Cause": "Continuum control workflow encountered an error; incident lock release was attempted."
+    },
+    "FailIncomplete": {
+      "Type": "Fail",
+      "Error": "Continuum.ReconciliationIncomplete",
+      "Cause": "Reconciliation reached the bounded page limit; resume with an operator reconciliation action."
+    },
+    "FailConflicts": {
+      "Type": "Fail",
+      "Error": "Continuum.ReconciliationConflict",
+      "Cause": "Reconciliation completed with conflicts; no success metric was recorded."
+    },
+    "FailRelease": {
+      "Type": "Fail",
+      "Error": "Continuum.LockReleaseFailed",
+      "Cause": "Incident lock release failed; it will expire through its explicit lease."
+    }
+  }
+}

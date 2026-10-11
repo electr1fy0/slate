@@ -129,12 +129,35 @@ type Attempt struct {
 	SubmittedAt   int64          `json:"submitted_at,omitempty" dynamodbav:"submitted_at,omitempty"`
 }
 
+// SubmissionRequest is the durable idempotency record for one final-submit
+// request ID. Its receipt fields make a retry independent of the application's
+// local state and of DynamoDB's temporary transaction client-token window.
+type SubmissionRequest struct {
+	PK            string `json:"-" dynamodbav:"pk"`
+	SK            string `json:"-" dynamodbav:"sk"`
+	RequestID     string `json:"request_id" dynamodbav:"request_id"`
+	PayloadHash   string `json:"-" dynamodbav:"payload_hash"`
+	ExamID        string `json:"-" dynamodbav:"exam_id"`
+	StudentID     string `json:"-" dynamodbav:"student_id"`
+	Version       int    `json:"version" dynamodbav:"version"`
+	CommittedAt   int64  `json:"committed_at" dynamodbav:"committed_at"`
+	Score         int    `json:"score" dynamodbav:"score"`
+	Total         int    `json:"total" dynamodbav:"total"`
+	AttemptNumber int    `json:"attempt_number,omitempty" dynamodbav:"attempt_number,omitempty"`
+}
+
+func (r SubmissionRequest) Result(status string) SubmissionResult {
+	return SubmissionResult{Status: status, RequestID: r.RequestID, Version: r.Version,
+		CommittedAt: r.CommittedAt, Score: r.Score, Total: r.Total, AttemptNumber: r.AttemptNumber}
+}
+
 type Submission struct {
 	PK              string         `json:"-" dynamodbav:"pk"`
 	SK              string         `json:"-" dynamodbav:"sk"`
 	Answers         map[string]int `json:"answers" dynamodbav:"answers"`
 	Version         int            `json:"version" dynamodbav:"version"`
 	RequestID       string         `json:"request_id" dynamodbav:"request_id"`
+	PayloadHash     string         `json:"-" dynamodbav:"payload_hash,omitempty"`
 	UpdatedAt       int64          `json:"updated_at" dynamodbav:"updated_at"`
 	UpdatedAtISO    string         `json:"updated_at_iso" dynamodbav:"updated_at_iso"`
 	WrittenByRegion string         `json:"written_by_region" dynamodbav:"written_by_region"`
@@ -158,6 +181,18 @@ type OutboxEntry struct {
 	Score         int            `json:"score" dynamodbav:"score"`
 	Total         int            `json:"total" dynamodbav:"total"`
 	TTL           int64          `json:"ttl" dynamodbav:"ttl"`
+	Processed     bool           `json:"processed" dynamodbav:"processed"`
+}
+
+// AuditSummary is the answer-free, request-ID keyed local equivalent of the
+// summary item written by the demo outbox reconciler.
+type AuditSummary struct {
+	RequestID   string `json:"request_id"`
+	TargetPK    string `json:"target_pk"`
+	TargetSK    string `json:"target_sk"`
+	ProcessedAt string `json:"processed_at"`
+	Score       int    `json:"score"`
+	Total       int    `json:"total"`
 }
 
 type SubmissionResult struct {

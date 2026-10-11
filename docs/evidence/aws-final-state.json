@@ -1,0 +1,47 @@
+{
+  "checked_at": "2026-10-10T17:47:33.010403+00:00",
+  "region": "ap-southeast-2",
+  "plan": {
+    "accountId": "927161114608",
+    "accountPlanType": "FREE",
+    "accountPlanStatus": "ACTIVE",
+    "accountPlanRemainingCredits": {
+      "amount": 140,
+      "unit": "USD"
+    },
+    "accountPlanExpirationDate": "2027-03-07T10:54:52.356000+00:00"
+  },
+  "instances": [
+    {
+      "id": "i-0da60fc97e6ed3b0e",
+      "state": "stopped",
+      "availability_zone": "ap-southeast-2b"
+    },
+    {
+      "id": "i-0ad374f295072440b",
+      "state": "stopped",
+      "availability_zone": "ap-southeast-2a"
+    }
+  ],
+  "monitor_state": "DISABLED",
+  "api_calls": [
+    {
+      "service": "freetier",
+      "operation": "GetAccountPlanState",
+      "status": "success"
+    },
+    {
+      "service": "ec2",
+      "operation": "DescribeInstances",
+      "status": "success",
+      "n_items": {
+        "Reservations": 2
+      }
+    },
+    {
+      "service": "events",
+      "operation": "DescribeRule",
+      "status": "success"
+    }
+  ]
+}

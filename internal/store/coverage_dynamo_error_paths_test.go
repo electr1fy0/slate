@@ -94,7 +94,7 @@ func TestDynamoExamAttemptAndSubmissionErrorPaths(t *testing.T) {
 	marshal = realMarshal
 	seedItem(fake, model.Attempt{PK: "ATTEMPT#save-conditional-error", SK: "STUDENT#student", Version: 0})
 	fake.getErrors = []error{nil, nil, errors.New("save conditional read failed")}
-	fake.putErrors = []error{&types.ConditionalCheckFailedException{}}
+	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if _, err := s.SaveAttempt(ctx, "save-conditional-error", "student", nil, 0, "req"); err == nil {
 		t.Fatal("conditional save read errors should be returned")
 	}
@@ -105,7 +105,8 @@ func TestDynamoExamAttemptAndSubmissionErrorPaths(t *testing.T) {
 	if _, err := s.SubmitAttempt(ctx, "winner-read-error", "student", "Ada", nil, "winner"); err == nil {
 		t.Fatal("submission winner read errors should be returned")
 	}
-	fake.getResponses = []map[string]types.AttributeValue{nil, map[string]types.AttributeValue{"pk": &types.AttributeValueMemberS{Value: "SUBMISSION#bad-winner"}, "sk": &types.AttributeValueMemberS{Value: "STUDENT#student"}, "request_id": &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}}}}
+	winningSubmission, _ := marshal(model.Submission{PK: "SUBMISSION#bad-winner", SK: "STUDENT#student", RequestID: "another-request", Answers: map[string]int{}})
+	fake.getResponses = []map[string]types.AttributeValue{nil, nil, nil, nil, winningSubmission}
 	fake.getErrors = nil
 	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if _, err := s.SubmitAttempt(ctx, "bad-winner", "student", "Ada", nil, "winner"); !errors.Is(err, ErrSubmissionConflict) {
@@ -124,7 +125,7 @@ func TestDynamoExamAttemptAndSubmissionErrorPaths(t *testing.T) {
 		t.Fatal("bad listed submission should fail to decode")
 	}
 
-	// The marker write is best-effort; exercise its marshal-failure branch.
+	// Receipt serialization must fail before the canonical submit transaction.
 	seedItem(fake, model.ExamMeta{PK: "EXAM#marker", SK: "META", Title: "Marker"})
 	markerQuestion, _ := quizQuestionItem("EXAM#marker", 0, model.Question{Question: "q"})
 	fake.items[itemKey(markerQuestion)] = markerQuestion
@@ -137,8 +138,12 @@ func TestDynamoExamAttemptAndSubmissionErrorPaths(t *testing.T) {
 		}
 		return realMarshal(value)
 	}
-	if result, err := s.SubmitAttempt(ctx, "marker", "student", "Ada", nil, "marker-req"); err != nil || result.Status != "committed" {
-		t.Fatalf("marker submission = %#v, %v", result, err)
+	transactionCount := len(fake.transactions)
+	if result, err := s.SubmitAttempt(ctx, "marker", "student", "Ada", nil, "marker-req"); err == nil || err.Error() != "marker marshal failed" {
+		t.Fatalf("submission receipt marshal result = %#v, %v", result, err)
+	}
+	if len(fake.transactions) != transactionCount {
+		t.Fatal("submission transaction ran after receipt serialization failed")
 	}
 	marshal = realMarshal
 }

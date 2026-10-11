@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { clearAuth, setAuth } from "./auth"
-import { ApiError, api, boardSocketUrl } from "./api"
+import { ApiError, api, boardSocketUrl, hasExternalApiOrigin } from "./api"
 
 const SESSION = {
   user: { user_id: "u1", email: "a@b.com", name: "Ada", role: "teacher" as const },
@@ -79,6 +79,40 @@ describe("api client", () => {
     expect(apiError.message).toBe("window shut")
   })
 
+  it("protects Continuum status and actions with the admin token", async () => {
+    const status = {
+      mode: "local",
+      region: "ap-southeast-2",
+      active_backend: "A",
+      epoch: 1,
+      paused: false,
+      policy: { version: "v1", confirmation_probes: 3, probe_interval_ms: 5000 },
+      backends: [],
+      events: [],
+      metrics: { failovers: 0, suppressed: 0, recovery_ms: null },
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, status))
+      .mockResolvedValueOnce(jsonResponse(200, status))
+    globalThis.fetch = fetchMock
+
+    await api.continuumStatus("ops-secret")
+    await api.continuumAction("ops-secret", "partial", "A")
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/continuum/status")
+    expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({
+      "x-admin-token": "ops-secret",
+    })
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/continuum/action")
+    expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({
+      action: "partial",
+      backend: "A",
+    })
+    expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toMatchObject({
+      "x-admin-token": "ops-secret",
+    })
+  })
+
   it("falls back to a generic message for non-JSON failures", async () => {
     localStorage.clear()
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("offline"))
@@ -97,6 +131,14 @@ describe("api client", () => {
     expect(boardSocketUrl("abc", null)).toBe(
       "wss://slate.example/ws/board/abc",
     )
+  })
+
+  it("detects a separately hosted API while keeping relative and same-origin APIs local", () => {
+    expect(hasExternalApiOrigin("https://api.example.test", "https://slate.example.test")).toBe(true)
+    expect(hasExternalApiOrigin("/api", "https://slate.example.test")).toBe(false)
+    expect(
+      hasExternalApiOrigin("https://slate.example.test/api", "https://slate.example.test")
+    ).toBe(false)
   })
 
   it("clearAuth removes the session used by the client", async () => {

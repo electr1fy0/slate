@@ -775,7 +775,7 @@ func TestPersistenceCoverageAndErrors(t *testing.T) {
 		t.Fatal("missing pending save unexpectedly returned a value")
 	}
 	manualManager.cancelPendingSave("manual")
-	manualManager.scheduleSnapshotSave(snapshot)
+	manualManager.scheduleSnapshotSave(snapshot, nil)
 	manualManager.cancelPendingSave("room")
 	if manualManager.hasPendingSave("room") {
 		t.Fatal("pending save was not cancelled")

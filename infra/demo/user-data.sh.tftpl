@@ -1,0 +1,22 @@
+#!/bin/bash
+# Application bundle version: ${bundle_version}
+set -euo pipefail
+umask 077
+dnf install -y awscli-2 python3
+mkdir -p /etc/continuum /opt/continuum/app
+chmod 0755 /opt/continuum /opt/continuum/app
+aws s3 cp 's3://${bundle_bucket}/app/app.tar.gz' /tmp/continuum-app.tar.gz --region '${region}'
+tar -xzf /tmp/continuum-app.tar.gz -C /opt/continuum/app
+aws ssm get-parameter --name '${runtime_parameter}' --with-decryption --region '${region}' --query Parameter.Value --output text > /tmp/continuum-runtime.json
+python3 - <<'PY'
+import json, pathlib
+secrets = json.loads(pathlib.Path('/tmp/continuum-runtime.json').read_text())
+settings = {'AWS_REGION': '${region}', 'TABLE_NAME': '${table}', 'BACKEND_ID': '${backend}', 'FENCING_ENABLED': '1', 'APP_ROLE': 'active', 'LISTEN_ADDR': ':8000', 'BOOTSTRAP_TEACHER_EMAIL': '${teacher_email}', 'STORE_BACKEND': 'dynamodb'}
+settings.update(secrets)
+pathlib.Path('/etc/continuum/continuum.env').write_text(''.join(k+'='+v+'\n' for k,v in settings.items()))
+PY
+rm -f /tmp/continuum-runtime.json
+cp /opt/continuum/app/continuum.service /etc/systemd/system/continuum.service
+chmod 755 /opt/continuum/app/continuum-api
+systemctl daemon-reload
+systemctl enable --now continuum

@@ -85,6 +85,13 @@ func (b *coverageBackend) EnsureExam(ctx context.Context, id, title string, ques
 	return b.MemoryStore.EnsureExam(ctx, id, title, questions, window)
 }
 
+func (b *coverageBackend) EnsureExamIfMissing(ctx context.Context, id, title string, questions []model.Question, window map[string]any) error {
+	if b.ensureExamErr != nil {
+		return b.ensureExamErr
+	}
+	return b.MemoryStore.EnsureExamIfMissing(ctx, id, title, questions, window)
+}
+
 func (b *coverageBackend) GetExam(ctx context.Context, id string, include bool) (*model.Exam, error) {
 	if b.getExamErr != nil {
 		return nil, b.getExamErr
@@ -246,7 +253,9 @@ func newCoverageServer(t *testing.T) (*Server, *coverageBackend, http.Handler) {
 	backend := &coverageBackend{MemoryStore: store.NewMemory(settings.Region)}
 	server := New(settings, backend)
 	server.Now = func() time.Time { return time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC) }
-	server.Auth.Now = server.Now
+	// JWT validation uses wall-clock time; keep issuance close to it while
+	// business-rule tests use the deterministic server clock below.
+	server.Auth.Now = time.Now
 	server.Exams.Now = server.Now
 	server.Classrooms.Now = server.Now
 	if err := server.Seed(context.Background()); err != nil {
@@ -762,7 +771,7 @@ func TestHTTPAPICoverageSeedAndAdminEndpoints(t *testing.T) {
 	backend := &coverageBackend{MemoryStore: store.NewMemory(settings.Region)}
 	server := New(settings, backend)
 	server.Now = func() time.Time { return time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC) }
-	server.Auth.Now = server.Now
+	server.Auth.Now = time.Now
 	server.Exams.Now = server.Now
 	server.Classrooms.Now = server.Now
 	backend.ensureExamErr = errors.New("seed exam unavailable")
@@ -802,6 +811,15 @@ func TestHTTPAPICoverageSeedAndAdminEndpoints(t *testing.T) {
 	}
 	if response := call(t, handler, http.MethodPost, "/admin/chaos/reset", nil, admin); response.Code != http.StatusOK {
 		t.Fatalf("reset chaos: %d", response.Code)
+	}
+	expiresAt := time.Now().Add(time.Minute).UnixMilli()
+	if response := call(t, handler, http.MethodPost, "/admin/chaos", map[string]any{"error_pct": 100, "error_pct_expires_ms": expiresAt}, admin); response.Code != http.StatusOK {
+		t.Fatalf("set expiring chaos: %d %s", response.Code, response.Body.String())
+	} else if got := decodeBody(t, response)["chaos"].(map[string]any)["error_pct_expires_ms"]; got != float64(expiresAt) {
+		t.Fatalf("chaos expiry was not reported: got=%v want=%d", got, expiresAt)
+	}
+	if response := call(t, handler, http.MethodPost, "/admin/chaos/reset", nil, admin); response.Code != http.StatusOK {
+		t.Fatalf("reset expiring chaos: %d", response.Code)
 	}
 	if response := call(t, handler, http.MethodPost, "/admin/promote", nil, admin); response.Code != http.StatusOK {
 		t.Fatalf("promote: %d", response.Code)

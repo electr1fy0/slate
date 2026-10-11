@@ -266,6 +266,13 @@ func (m *Manager) Disconnect(roomID string, socket any) *Peer {
 // Absorb applies incoming elements with last-writer-wins semantics. Invalid or
 // unidentifiable elements are ignored. The return value counts applied items.
 func (m *Manager) Absorb(roomID string, elements []map[string]any) int {
+	return m.AbsorbContext(context.Background(), roomID, elements)
+}
+
+// AbsorbContext applies incoming elements and attaches the originating routed
+// writer to the debounced persistence snapshot. Context values are retained
+// after request cancellation so store fencing still sees that writer.
+func (m *Manager) AbsorbContext(ctx context.Context, roomID string, elements []map[string]any) int {
 	m.mu.Lock()
 	r := m.roomLocked(roomID)
 	applied := 0
@@ -283,7 +290,7 @@ func (m *Manager) Absorb(roomID string, elements []map[string]any) int {
 	}
 	m.mu.Unlock()
 	if snapshot != nil {
-		m.scheduleSnapshotSave(*snapshot)
+		m.scheduleSnapshotSave(*snapshot, ctx)
 	}
 	return applied
 }

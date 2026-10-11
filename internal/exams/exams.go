@@ -34,6 +34,13 @@ type Store interface {
 	SubmitAttempt(context.Context, string, string, string, map[string]int, string) (model.SubmissionResult, error)
 }
 
+// SubmissionRequestLookup lets supported stores resolve an exact retry before
+// exam-window and attempt-deadline validation. This preserves the committed
+// receipt after a response is lost, even if the exam closes before retry.
+type SubmissionRequestLookup interface {
+	FindSubmissionRequest(context.Context, string, string, map[string]int, string) (model.SubmissionResult, bool, error)
+}
+
 // QuizStore is the persistence surface for teacher-owned quiz authoring. It
 // is deliberately separate from Store so the student delivery service stays
 // small while both DynamoDB and MemoryStore expose the same behavior.
@@ -133,6 +140,20 @@ func userRole(user *model.User) string {
 func (s *Service) Submit(ctx context.Context, examID string, user *model.User, answers map[string]int, requestID string) (model.SubmissionResult, error) {
 	if user == nil {
 		return model.SubmissionResult{}, fmt.Errorf("user is required")
+	}
+	if answers == nil {
+		return model.SubmissionResult{}, fmt.Errorf("answers are required")
+	}
+	if strings.TrimSpace(requestID) != "" {
+		if lookup, ok := s.Store.(SubmissionRequestLookup); ok {
+			result, found, err := lookup.FindSubmissionRequest(ctx, examID, user.UserID, answers, requestID)
+			if err != nil {
+				return model.SubmissionResult{}, err
+			}
+			if found {
+				return result, nil
+			}
+		}
 	}
 	meta, err := s.Store.GetExamMeta(ctx, examID)
 	if err != nil {

@@ -49,7 +49,7 @@ export const Route = createFileRoute("/board/")({
   ssr: false,
   beforeLoad: ({ location }) => requireAuth(location),
   component: BoardIndexPage,
-  head: () => ({ meta: [{ title: "Live board · Slate" }] }),
+  head: () => ({ meta: [{ title: "Live board · Continuum" }] }),
 })
 
 export function exportBoardHistory(entries: ReturnType<typeof mergeBoardHistory>): void {

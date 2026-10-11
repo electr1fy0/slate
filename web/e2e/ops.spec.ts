@@ -5,7 +5,7 @@ import { register } from "./helpers"
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "continuum-demo-token"
 
 test.describe("ops console", () => {
-  test("requires sign-in, then drives chaos injection with hydrated state", async ({ page }) => {
+  test("requires sign-in, then drives a Continuum fault and observes recovery", async ({ page }) => {
     await register(page)
 
     await page.goto("/ops")
@@ -13,26 +13,20 @@ test.describe("ops console", () => {
     // Admin token gate comes first.
     await page.getByLabel("Admin token").fill(ADMIN_TOKEN)
 
-    // Status cards hydrate.
-    await expect(page.getByText("Mumbai")).toBeVisible({ timeout: 20_000 })
-    await expect(page.getByText(/ACTIVE/).first()).toBeVisible()
+    // Backend health and the selected Region come from the control service.
+    await expect(page.getByText("Sydney")).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByText("ACTIVE").first()).toBeVisible()
+    await expect(page.getByText("Write epoch")).toBeVisible()
 
-    // Inject error chaos via the keyboard (slider step = 5% -> four presses).
-    const slider = page.getByRole("slider").first()
-    await slider.click()
-    for (let i = 0; i < 4; i += 1) {
-      await page.keyboard.press("ArrowRight")
-    }
-    await page.getByRole("button", { name: "Apply chaos" }).click()
-    await expect(page.getByText("Chaos applied")).toBeVisible()
+    await page.getByRole("button", { name: /Partial failure/ }).click()
+    await expect(page.getByText(/partial/i).last()).toBeVisible({ timeout: 15_000 })
 
-    // Server state now reads degraded after the refetch.
-    await expect(page.getByText("degraded")).toBeVisible({ timeout: 15_000 })
+    // The recovered service snapshot reports a healthy active backend and a decision event.
+    await expect(page.getByText("Healthy").first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText("Event timeline")).toBeVisible()
 
-    // Reset clears it.
-    await page.getByRole("button", { name: "Reset" }).click()
-    await expect(page.getByText("Chaos cleared")).toBeVisible()
-    await expect(page.getByText("stable")).toBeVisible({ timeout: 15_000 })
+    await page.getByRole("button", { name: "Reset injected faults" }).click()
+    await expect(page.getByText("Healthy").first()).toBeVisible({ timeout: 15_000 })
   })
 
   test("ops is unreachable without a session", async ({ page }) => {

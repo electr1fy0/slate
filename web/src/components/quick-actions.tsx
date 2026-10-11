@@ -34,7 +34,7 @@ export function QuickActions() {
     ? [
         ...baseActions,
         { label: "Teacher studio", to: "/teacher", icon: ClipboardListIcon },
-        { label: "Ops console", to: "/ops", icon: ActivityIcon },
+        { label: "Continuum", to: "/ops", icon: ActivityIcon },
       ]
     : baseActions
 
@@ -46,9 +46,14 @@ export function QuickActions() {
   return (
     <>
       <div className="hidden items-center gap-1 sm:flex">
-        <Button variant="outline" size="sm" onClick={newBoard}>
-          <PlusIcon data-icon="inline-start" />
-          New board
+        <Button
+          variant="outline"
+          size="sm"
+          nativeButton={false}
+          render={<Link to="/" hash="assessments" />}
+        >
+          <ClipboardListIcon data-icon="inline-start" />
+          Timed assessments
         </Button>
       </div>
       <Sheet open={open} onOpenChange={setOpen}>

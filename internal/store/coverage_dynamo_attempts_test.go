@@ -107,18 +107,18 @@ func TestDynamoAttemptAndSubmissionPaths(t *testing.T) {
 	initial := scriptedAttributeMap(model.Attempt{PK: "ATTEMPT#retry", SK: "STUDENT#student", Version: 0})
 	current := scriptedAttributeMap(model.Attempt{PK: "ATTEMPT#retry", SK: "STUDENT#student", Version: 1, LastRequestID: "retry"})
 	fake.getResponses = []map[string]types.AttributeValue{initial, nil, current}
-	fake.putErrors = []error{&types.ConditionalCheckFailedException{}}
+	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if attempt, err := s.SaveAttempt(ctx, "retry", "student", map[string]int{"0": 1}, 0, "retry"); err != nil || attempt == nil || attempt.LastRequestID != "retry" {
 		t.Fatalf("conditional idempotent save = %#v, %v", attempt, err)
 	}
 	other := scriptedAttributeMap(model.Attempt{PK: "ATTEMPT#retry-other", SK: "STUDENT#student", Version: 1, LastRequestID: "other"})
 	fake.getResponses = []map[string]types.AttributeValue{initial, nil, other}
-	fake.putErrors = []error{&types.ConditionalCheckFailedException{}}
+	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if _, err := s.SaveAttempt(ctx, "retry-other", "student", nil, 0, "retry"); !errors.Is(err, ErrAttemptConflict) {
 		t.Fatalf("conditional save conflict = %v", err)
 	}
 	seedItem(fake, model.Attempt{PK: "ATTEMPT#save-error", SK: "STUDENT#student", Version: 0})
-	fake.putErrors = []error{errors.New("attempt save failed")}
+	fake.transactionErrors = []error{errors.New("attempt save failed")}
 	if _, err := s.SaveAttempt(ctx, "save-error", "student", nil, 0, "save"); err == nil {
 		t.Fatal("generic save error should be returned")
 	}
@@ -130,8 +130,11 @@ func TestDynamoAttemptAndSubmissionPaths(t *testing.T) {
 	if err != nil || committed.Status != "committed" || committed.Score != 2 || committed.Total != 2 {
 		t.Fatalf("committed submission = %#v, %v", committed, err)
 	}
-	if duplicate, err := s.SubmitAttempt(ctx, "submit", "student", "Ada", nil, "req-1"); err != nil || duplicate.Status != "duplicate" || duplicate.Score != 2 {
+	if duplicate, err := s.SubmitAttempt(ctx, "submit", "student", "Ada", map[string]int{"0": 1}, "req-1"); err != nil || duplicate.Status != "duplicate" || duplicate.Score != 2 {
 		t.Fatalf("duplicate submission = %#v, %v", duplicate, err)
+	}
+	if _, err := s.SubmitAttempt(ctx, "submit", "student", "Ada", nil, "req-1"); !errors.Is(err, ErrSubmissionRequestConflict) {
+		t.Fatalf("request ID payload mismatch = %v", err)
 	}
 	if _, err := s.SubmitAttempt(ctx, "submit", "student", "Ada", nil, "req-2"); !errors.Is(err, ErrSubmissionConflict) {
 		t.Fatalf("submission conflict = %v", err)
@@ -147,14 +150,15 @@ func TestDynamoAttemptAndSubmissionPaths(t *testing.T) {
 
 	// A conditional transaction can resolve either to the same idempotent
 	// winner or to a genuine conflict.
-	winnerSub := scriptedAttributeMap(model.Submission{PK: "SUBMISSION#race", SK: "STUDENT#student", RequestID: "race", Version: 1, Score: 2, Total: 2})
-	fake.getResponses = []map[string]types.AttributeValue{nil, winnerSub}
+	winnerReceipt := scriptedAttributeMap(model.SubmissionRequest{PK: "SUBMISSION_REQUEST#", SK: "RECEIPT", RequestID: "race", PayloadHash: submissionPayloadHash("race", "student", nil), Version: 1, Score: 2, Total: 2})
+	winnerReceipt["pk"] = &types.AttributeValueMemberS{Value: submissionRequestKey("race")["pk"].(*types.AttributeValueMemberS).Value}
+	fake.getResponses = []map[string]types.AttributeValue{nil, nil, nil, winnerReceipt}
 	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if result, err := s.SubmitAttempt(ctx, "race", "student", "Ada", nil, "race"); err != nil || result.Status != "duplicate" {
 		t.Fatalf("conditional duplicate winner = %#v, %v", result, err)
 	}
 	otherSub := scriptedAttributeMap(model.Submission{PK: "SUBMISSION#race-other", SK: "STUDENT#student", RequestID: "other", Version: 1})
-	fake.getResponses = []map[string]types.AttributeValue{nil, otherSub}
+	fake.getResponses = []map[string]types.AttributeValue{nil, nil, nil, nil, otherSub}
 	fake.transactionErrors = []error{&types.TransactionCanceledException{CancellationReasons: []types.CancellationReason{{Code: aws.String("ConditionalCheckFailed")}}}}
 	if _, err := s.SubmitAttempt(ctx, "race-other", "student", "Ada", nil, "race"); !errors.Is(err, ErrSubmissionConflict) {
 		t.Fatalf("conditional submission conflict = %v", err)
@@ -171,9 +175,8 @@ func TestDynamoAttemptAndSubmissionPaths(t *testing.T) {
 
 	seedItem(fake, model.ExamMeta{PK: "EXAM#attempt-submit", SK: "META", Title: "Attempt submit"})
 	seedItem(fake, model.Attempt{PK: "ATTEMPT#attempt-submit", SK: "STUDENT#student", AttemptNumber: 3})
-	fake.putErrors = []error{errors.New("attempt marker write failed")}
 	result, err := s.SubmitAttempt(ctx, "attempt-submit", "student", "Ada", nil, "attempt-submit-req")
-	if err != nil || result.Status != "committed" || result.AttemptNumber != 0 {
+	if err != nil || result.Status != "committed" || result.AttemptNumber != 3 {
 		t.Fatalf("submission with attempt = %#v, %v", result, err)
 	}
 

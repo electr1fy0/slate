@@ -14,7 +14,7 @@ async function gotoQuiz(page: Page): Promise<void> {
   await page.goto("/")
   const card = page
     .locator("div[data-slot='card']")
-    .filter({ hasText: "CS101 Midterm Examination" })
+    .filter({ hasText: "Cloud Architecture CAT" })
     .first()
   await clickUntil(
     page,

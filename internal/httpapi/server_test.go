@@ -9,10 +9,15 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/ayush/slate/internal/auth"
 	"github.com/ayush/slate/internal/boards"
+	"github.com/ayush/slate/internal/chaos"
+	"github.com/ayush/slate/internal/clusterstate"
 	"github.com/ayush/slate/internal/config"
+	"github.com/ayush/slate/internal/model"
 	"github.com/ayush/slate/internal/store"
 	"github.com/gorilla/websocket"
 )
@@ -125,6 +130,236 @@ func TestAuthExamSubmissionAndAdminJourney(t *testing.T) {
 	status := call(t, handler, http.MethodGet, "/admin/status", nil, admin)
 	if status.Code != http.StatusOK || decodeBody(t, status)["role"] != "active" {
 		t.Fatalf("status: %d %s", status.Code, status.Body.String())
+	}
+}
+
+func TestSeedDoesNotOverwriteExistingExamOnRestart(t *testing.T) {
+	settings := config.Defaults()
+	settings.RoleFile = filepath.Join(t.TempDir(), "role")
+	backend := store.NewMemory(settings.Region)
+	server := New(settings, backend)
+	ctx := context.Background()
+	if err := server.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := backend.GetExamMeta(ctx, "cs101-midterm")
+	if err != nil || initial == nil || initial.DurationMinutes != 15 || initial.MaxAttempts != 1 {
+		t.Fatalf("fresh demo should have a server-enforced 15-minute attempt: %#v, %v", initial, err)
+	}
+	const facultyClose = "2026-11-01T12:00:00Z"
+	if err := backend.EnsureExam(ctx, "cs101-midterm", "Faculty-edited Cloud CAT", []model.Question{{Question: "Updated by faculty", Options: []string{"A", "B"}, Answer: 0}}, map[string]any{"closes_at": facultyClose, "duration_minutes": 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := backend.GetExamMeta(ctx, "cs101-midterm")
+	if err != nil || meta == nil || meta.Title != "Faculty-edited Cloud CAT" || meta.ClosesAt != facultyClose || meta.DurationMinutes != 10 {
+		t.Fatalf("restart reset exam metadata: %#v, %v", meta, err)
+	}
+	exam, err := backend.GetExam(ctx, "cs101-midterm", true)
+	if err != nil || exam == nil || len(exam.Questions) != 1 || exam.Questions[0].Question != "Updated by faculty" || exam.Questions[0].Answer != 0 {
+		t.Fatalf("restart reset exam questions: %#v, %v", exam, err)
+	}
+}
+
+func TestLostSubmissionResponseReturnsDurableReceiptOnExactRetry(t *testing.T) {
+	server, handler := newTestServer(t, "active")
+	student, _ := registerStudent(t, handler, "uncertain@example.com")
+	admin := map[string]string{"x-admin-token": server.Settings.AdminToken}
+	armed := call(t, handler, http.MethodPost, "/admin/chaos", map[string]any{"drop_response_once": true}, admin)
+	if armed.Code != http.StatusOK || decodeBody(t, armed)["chaos"].(map[string]any)["drop_response_once"] != true {
+		t.Fatalf("drop-response fault was not armed: %d %s", armed.Code, armed.Body.String())
+	}
+	payload := map[string]any{"answers": map[string]int{"0": 1}, "request_id": "lost-response-1"}
+	lost := call(t, handler, http.MethodPost, "/exam/cs101-midterm/submit", payload, student)
+	if lost.Code != http.StatusServiceUnavailable || decodeBody(t, lost)["detail"].(map[string]any)["code"] != "SUBMISSION_STATUS_UNKNOWN" {
+		t.Fatalf("post-commit response fault = %d %s", lost.Code, lost.Body.String())
+	}
+	retry := call(t, handler, http.MethodPost, "/exam/cs101-midterm/submit", payload, student)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("exact retry: %d %s", retry.Code, retry.Body.String())
+	}
+	receipt := decodeBody(t, retry)
+	if receipt["status"] != "duplicate" || receipt["committed_at"] == nil || receipt["request_id"] != "lost-response-1" {
+		t.Fatalf("retry did not return the durable receipt: %#v", receipt)
+	}
+	result := call(t, handler, http.MethodGet, "/exam/cs101-midterm/result", nil, student)
+	resultBody := decodeBody(t, result)
+	if result.Code != http.StatusOK || resultBody["committed_at"] != receipt["committed_at"] {
+		t.Fatalf("GET result receipt timestamp = %d %#v, replay receipt = %#v", result.Code, resultBody, receipt)
+	}
+	if submissions, err := server.Store.ListSubmissions(context.Background(), "cs101-midterm", 10); err != nil || len(submissions) != 1 {
+		t.Fatalf("logical submissions = %d, %v", len(submissions), err)
+	}
+	if outbox, err := server.Store.ListOutbox(context.Background(), 10); err != nil || len(outbox) != 1 {
+		t.Fatalf("outbox entries = %d, %v", len(outbox), err)
+	}
+	changed := call(t, handler, http.MethodPost, "/exam/cs101-midterm/submit", map[string]any{"answers": map[string]int{"0": 0}, "request_id": "lost-response-1"}, student)
+	if changed.Code != http.StatusConflict || decodeBody(t, changed)["detail"].(map[string]any)["code"] != "REQUEST_ID_CONFLICT" {
+		t.Fatalf("same ID with changed payload = %d %s", changed.Code, changed.Body.String())
+	}
+}
+
+type apiFence struct {
+	mu     sync.RWMutex
+	writer clusterstate.Writer
+	paused bool
+}
+
+func (f *apiFence) WithFence(_ context.Context, writer clusterstate.Writer, fn func() error) error {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.paused || writer != f.writer {
+		return clusterstate.ErrFenced
+	}
+	return fn()
+}
+
+func TestFencingHeadersAreValidatedAndPassedToMemoryStore(t *testing.T) {
+	settings := config.Defaults()
+	settings.FencingEnabled = true
+	settings.BackendID = "A"
+	settings.RoleFile = filepath.Join(t.TempDir(), "role")
+	settings.DiskThresholdPct = 101
+	settings.LoadThreshold = 1000
+	backend := store.NewMemory(settings.Region)
+	guard := &apiFence{writer: clusterstate.Writer{Backend: "A", Epoch: 7}}
+	backend.SetFenceGuard(guard)
+	server := New(settings, backend)
+	if err := server.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	writerContext := clusterstate.WithWriter(context.Background(), clusterstate.Writer{Backend: "A", Epoch: 7})
+	user, err := server.Auth.CreateUser(writerContext, "fenced@example.com", "hunter2hunter2", "Ada", "student")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := server.Auth.IssueTokens(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	student := map[string]string{"Authorization": "Bearer " + tokens["access_token"].(string)}
+	handler := server.Handler()
+	for _, headers := range []map[string]string{
+		student,
+		{"Authorization": student["Authorization"], clusterstate.BackendHeader: "B", clusterstate.EpochHeader: "7"},
+		{"Authorization": student["Authorization"], clusterstate.BackendHeader: "A", clusterstate.EpochHeader: "0"},
+	} {
+		response := call(t, handler, http.MethodGet, "/exam/cs101-midterm", nil, headers)
+		if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "WRITER_FENCED" {
+			t.Fatalf("invalid writer headers %v: %d %s", headers, response.Code, response.Body.String())
+		}
+	}
+	if live := call(t, handler, http.MethodGet, "/health/live", nil, nil); live.Code != http.StatusOK {
+		t.Fatalf("liveness must not require writer headers: %d", live.Code)
+	}
+	writerHeaders := map[string]string{"Authorization": student["Authorization"], clusterstate.BackendHeader: "A", clusterstate.EpochHeader: "7"}
+	if response := call(t, handler, http.MethodGet, "/exam/cs101-midterm", nil, writerHeaders); response.Code != http.StatusOK {
+		t.Fatalf("valid writer metadata: %d %s", response.Code, response.Body.String())
+	}
+	guard.mu.Lock()
+	guard.writer = clusterstate.Writer{Backend: "B", Epoch: 8}
+	guard.mu.Unlock()
+	response := call(t, handler, http.MethodPost, "/exam/cs101-midterm/submit", map[string]any{"answers": map[string]int{"0": 1}, "request_id": "stale-writer"}, writerHeaders)
+	if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "WRITER_FENCED" {
+		t.Fatalf("stale transactional writer = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFencingCoversRegistrationAdminAndTeacherExamMetadata(t *testing.T) {
+	settings := config.Defaults()
+	settings.FencingEnabled = true
+	settings.BackendID = "A"
+	settings.RoleFile = filepath.Join(t.TempDir(), "role")
+	settings.DiskThresholdPct = 101
+	settings.LoadThreshold = 1000
+	backend := store.NewMemory(settings.Region)
+	guard := &apiFence{writer: clusterstate.Writer{Backend: "A", Epoch: 7}}
+	backend.SetFenceGuard(guard)
+	server := New(settings, backend)
+	if err := server.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	activeCtx := clusterstate.WithWriter(context.Background(), clusterstate.Writer{Backend: "A", Epoch: 7})
+	teacher, err := server.Auth.CreateUser(activeCtx, "fenced-teacher@example.com", "hunter2hunter2", "Teacher", auth.RoleTeacher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := server.Auth.IssueTokens(teacher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	teacherHeaders := map[string]string{
+		"Authorization":            "Bearer " + tokens["access_token"].(string),
+		clusterstate.BackendHeader: "A", clusterstate.EpochHeader: "7",
+	}
+	handler := server.Handler()
+	activeTitle := "Current teacher edit"
+	if response := call(t, handler, http.MethodPatch, "/exam/cs101-midterm", map[string]any{"title": activeTitle}, teacherHeaders); response.Code != http.StatusOK {
+		t.Fatalf("active teacher metadata update = %d %s", response.Code, response.Body.String())
+	}
+
+	guard.mu.Lock()
+	guard.writer = clusterstate.Writer{Backend: "B", Epoch: 8}
+	guard.mu.Unlock()
+	staleHeaders := map[string]string{
+		"Authorization":            "Bearer " + tokens["access_token"].(string),
+		clusterstate.BackendHeader: "A", clusterstate.EpochHeader: "7",
+	}
+	response := call(t, handler, http.MethodPatch, "/exam/cs101-midterm", map[string]any{"title": "Stale teacher edit"}, staleHeaders)
+	if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "WRITER_FENCED" {
+		t.Fatalf("stale teacher update = %d %s", response.Code, response.Body.String())
+	}
+	meta, err := backend.GetExamMeta(context.Background(), "cs101-midterm")
+	if err != nil || meta == nil || meta.Title != activeTitle {
+		t.Fatalf("stale teacher update persisted: %#v, %v", meta, err)
+	}
+	response = call(t, handler, http.MethodPost, "/auth/register", map[string]any{
+		"email": "stale-register@example.com", "password": "hunter2hunter2", "name": "Stale",
+	}, staleHeaders)
+	if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "WRITER_FENCED" {
+		t.Fatalf("stale registration = %d %s", response.Code, response.Body.String())
+	}
+	if id, err := backend.FindUserIDByEmail(context.Background(), "stale-register@example.com"); err != nil || id != "" {
+		t.Fatalf("stale registration persisted user ID %q, %v", id, err)
+	}
+	response = call(t, handler, http.MethodPost, "/admin/users", map[string]any{
+		"email": "headerless-admin@example.com", "password": "hunter2hunter2", "name": "Admin",
+	}, map[string]string{"X-Admin-Token": settings.AdminToken})
+	if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "WRITER_FENCED" {
+		t.Fatalf("headerless admin mutation = %d %s", response.Code, response.Body.String())
+	}
+	adminHeaders := map[string]string{"X-Admin-Token": settings.AdminToken}
+	if response := call(t, handler, http.MethodPost, "/admin/chaos", map[string]any{"latency_ms": 0}, adminHeaders); response.Code != http.StatusOK {
+		t.Fatalf("admin ephemeral chaos control should not require writer headers: %d %s", response.Code, response.Body.String())
+	}
+	if response := call(t, handler, http.MethodPost, "/admin/chaos/reset", nil, adminHeaders); response.Code != http.StatusOK {
+		t.Fatalf("admin ephemeral chaos reset should not require writer headers: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDBStallFailsExamWritesWhileLivenessStaysHealthy(t *testing.T) {
+	server, handler := newTestServer(t, "active")
+	_, _ = registerStudent(t, handler, "db-stall@example.com")
+	stalled := true
+	server.Chaos.Configure(chaos.Patch{DBStall: &stalled})
+	live := call(t, handler, http.MethodGet, "/health/live", nil, nil)
+	if live.Code != http.StatusOK {
+		t.Fatalf("liveness changed under db stall: %d", live.Code)
+	}
+	writes := []struct{ method, path string }{
+		{http.MethodGet, "/exam/cs101-midterm"},
+		{http.MethodGet, "/exam/cs101-midterm/attempt"},
+		{http.MethodPut, "/exam/cs101-midterm/attempt"},
+		{http.MethodPost, "/exam/cs101-midterm/submit"},
+		{http.MethodPost, "/exam/cs101-midterm/attempt/submit"},
+	}
+	for _, route := range writes {
+		response := call(t, handler, route.method, route.path, map[string]any{"answers": map[string]int{}, "request_id": "stalled"}, nil)
+		if response.Code != http.StatusServiceUnavailable || decodeBody(t, response)["detail"].(map[string]any)["code"] != "DATABASE_STALLED" {
+			t.Fatalf("database stall %s %s = %d %s", route.method, route.path, response.Code, response.Body.String())
+		}
 	}
 }
 

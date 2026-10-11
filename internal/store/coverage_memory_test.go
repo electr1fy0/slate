@@ -7,8 +7,124 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ayush/slate/internal/clusterstate"
 	"github.com/ayush/slate/internal/model"
 )
+
+type memoryFenceStub struct {
+	active clusterstate.Writer
+	paused bool
+}
+
+func (f *memoryFenceStub) WithFence(_ context.Context, writer clusterstate.Writer, fn func() error) error {
+	if f.paused || writer != f.active {
+		return clusterstate.ErrFenced
+	}
+	return fn()
+}
+
+func TestMemoryExamMutationsUseFenceGuard(t *testing.T) {
+	ctx := context.Background()
+	m := fixedMemory()
+	if err := m.EnsureExam(ctx, "fenced", "Fenced", []model.Question{{Index: 0, Question: "q", Options: []string{"a", "b"}, Answer: 1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	guard := &memoryFenceStub{active: clusterstate.Writer{Backend: "A", Epoch: 7}}
+	m.SetFenceGuard(guard)
+	if _, err := m.RecordAttemptStart(ctx, "fenced", "missing-writer"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("missing writer was accepted: %v", err)
+	}
+	oldWriter := clusterstate.WithWriter(ctx, clusterstate.Writer{Backend: "A", Epoch: 7})
+	if attempt, err := m.RecordAttemptStart(oldWriter, "fenced", "student"); err != nil || attempt == nil {
+		t.Fatalf("active attempt start = %#v, %v", attempt, err)
+	}
+	activeSave, err := m.SaveAttempt(oldWriter, "fenced", "student", map[string]int{"0": 0}, 0, "active-save")
+	if err != nil || activeSave == nil || activeSave.Version != 1 || activeSave.Answers["0"] != 0 {
+		t.Fatalf("active A save = %#v, %v", activeSave, err)
+	}
+	beforePromotion, err := m.GetStudentAttempt(ctx, "fenced", "student")
+	if err != nil || beforePromotion == nil || beforePromotion.Version != 1 || beforePromotion.Answers["0"] != 0 {
+		t.Fatalf("attempt before promotion = %#v, %v", beforePromotion, err)
+	}
+	staleAnswers := map[string]int{"0": 1}
+	guard.active = clusterstate.Writer{Backend: "B", Epoch: 8}
+	if _, err := m.SaveAttempt(oldWriter, "fenced", "student", staleAnswers, beforePromotion.Version, "stale-save"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("stale attempt save was accepted: %v", err)
+	}
+	if _, err := m.SubmitAttempt(oldWriter, "fenced", "student", "Ada", staleAnswers, "stale-submit"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("stale final submission was accepted: %v", err)
+	}
+	afterStaleWrites, err := m.GetStudentAttempt(ctx, "fenced", "student")
+	if err != nil || afterStaleWrites == nil || afterStaleWrites.Version != beforePromotion.Version || afterStaleWrites.LastRequestID != beforePromotion.LastRequestID || afterStaleWrites.Submitted || afterStaleWrites.Answers["0"] != beforePromotion.Answers["0"] {
+		t.Fatalf("stale writer changed canonical attempt: before=%#v after=%#v err=%v", beforePromotion, afterStaleWrites, err)
+	}
+	if submission, _ := m.GetSubmission(ctx, "fenced", "student"); submission != nil {
+		t.Fatalf("stale writer created submission: %#v", submission)
+	}
+	if _, found, err := m.FindSubmissionRequest(ctx, "fenced", "student", staleAnswers, "stale-submit"); err != nil || found {
+		t.Fatalf("stale writer created receipt: found=%v err=%v", found, err)
+	}
+	if outbox, err := m.ListOutbox(ctx, 10); err != nil || len(outbox) != 0 {
+		t.Fatalf("stale writer created outbox entries: %#v err=%v", outbox, err)
+	}
+	newWriter := clusterstate.WithWriter(ctx, clusterstate.Writer{Backend: "B", Epoch: 8})
+	activeBSave, err := m.SaveAttempt(newWriter, "fenced", "student", staleAnswers, afterStaleWrites.Version, "active-b-save")
+	if err != nil || activeBSave == nil || activeBSave.Version != afterStaleWrites.Version+1 || activeBSave.Answers["0"] != staleAnswers["0"] {
+		t.Fatalf("active B save = %#v, %v", activeBSave, err)
+	}
+	result, err := m.SubmitAttempt(newWriter, "fenced", "student", "Ada", staleAnswers, "active-submit")
+	if err != nil || result.Status != "committed" {
+		t.Fatalf("active final submission = %#v, %v", result, err)
+	}
+	if submission, err := m.GetSubmission(ctx, "fenced", "student"); err != nil || submission == nil || submission.RequestID != "active-submit" || submission.Answers["0"] != staleAnswers["0"] {
+		t.Fatalf("active B submission = %#v, %v", submission, err)
+	}
+	if attempt, err := m.GetStudentAttempt(ctx, "fenced", "student"); err != nil || attempt == nil || !attempt.Submitted || attempt.Version != activeBSave.Version+1 || attempt.Answers["0"] != staleAnswers["0"] {
+		t.Fatalf("attempt after active B submit = %#v, %v", attempt, err)
+	}
+	if _, found, err := m.FindSubmissionRequest(ctx, "fenced", "student", staleAnswers, "active-submit"); err != nil || !found {
+		t.Fatalf("active B submission receipt found=%v err=%v", found, err)
+	}
+	if outbox, err := m.ListOutbox(ctx, 10); err != nil || len(outbox) != 1 || outbox[0].RequestID != "active-submit" {
+		t.Fatalf("outbox after active B submit = %#v err=%v", outbox, err)
+	}
+}
+
+func TestMemoryFencesRegistrationAndTeacherMetadataUpdates(t *testing.T) {
+	ctx := context.Background()
+	m := fixedMemory()
+	if err := m.EnsureExamIfMissing(ctx, "fenced-teacher", "Original title", []model.Question{{Question: "q", Options: []string{"a", "b"}, Answer: 1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	guard := &memoryFenceStub{active: clusterstate.Writer{Backend: "A", Epoch: 11}}
+	m.SetFenceGuard(guard)
+	oldWriter := clusterstate.WithWriter(ctx, clusterstate.Writer{Backend: "A", Epoch: 11})
+	if err := m.CreateUser(oldWriter, &model.User{UserID: "active-user", Email: "active@example.com"}, "hash"); err != nil {
+		t.Fatalf("active registration = %v", err)
+	}
+
+	guard.active = clusterstate.Writer{Backend: "B", Epoch: 12}
+	if err := m.CreateUser(oldWriter, &model.User{UserID: "stale-user", Email: "stale@example.com"}, "hash"); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("stale registration = %v, want ErrFenced", err)
+	}
+	if user, err := m.GetUser(ctx, "stale-user"); err != nil || user != nil {
+		t.Fatalf("stale registration persisted user %#v, %v", user, err)
+	}
+
+	staleTitle := "Must not commit"
+	if _, err := m.UpdateExamWindow(oldWriter, "fenced-teacher", &staleTitle, nil); !errors.Is(err, clusterstate.ErrFenced) {
+		t.Fatalf("stale teacher update = %v, want ErrFenced", err)
+	}
+	meta, err := m.GetExamMeta(ctx, "fenced-teacher")
+	if err != nil || meta == nil || meta.Title != "Original title" {
+		t.Fatalf("stale teacher update changed exam metadata: %#v, %v", meta, err)
+	}
+	newWriter := clusterstate.WithWriter(ctx, clusterstate.Writer{Backend: "B", Epoch: 12})
+	newTitle := "Current writer edit"
+	if meta, err := m.UpdateExamWindow(newWriter, "fenced-teacher", &newTitle, nil); err != nil || meta == nil || meta.Title != newTitle {
+		t.Fatalf("active teacher update = %#v, %v", meta, err)
+	}
+}
 
 func fixedMemory() *MemoryStore {
 	m := NewMemory("memory-region")
@@ -436,8 +552,11 @@ func TestMemoryExamsQuizzesAndAttempts(t *testing.T) {
 	if err != nil || first.Status != "committed" || first.Score != 3 || first.AttemptNumber != 1 {
 		t.Fatalf("submit = %#v, %v", first, err)
 	}
-	if again, err := m.SubmitAttempt(ctx, "exam-1", "student", "Ada", nil, "submit-1"); err != nil || again.Status != "duplicate" {
+	if again, err := m.SubmitAttempt(ctx, "exam-1", "student", "Ada", map[string]int{"0": 1, "1": 0}, "submit-1"); err != nil || again.Status != "duplicate" {
 		t.Fatalf("duplicate submit = %#v, %v", again, err)
+	}
+	if _, err := m.SubmitAttempt(ctx, "exam-1", "student", "Ada", nil, "submit-1"); !errors.Is(err, ErrSubmissionRequestConflict) {
+		t.Fatalf("request ID payload mismatch = %v", err)
 	}
 	if _, err := m.SubmitAttempt(ctx, "exam-1", "student", "Ada", nil, "submit-2"); !errors.Is(err, ErrSubmissionConflict) {
 		t.Fatalf("submission conflict = %v", err)
@@ -461,9 +580,25 @@ func TestMemoryExamsQuizzesAndAttempts(t *testing.T) {
 	if rows, err := m.ListSubmissions(ctx, "", 0); err != nil || len(rows) != 2 {
 		t.Fatalf("all submissions = %#v, %v", rows, err)
 	}
-	m.outbox = append(m.outbox, model.OutboxEntry{RequestID: "older", CreatedAt: m.now().Add(-time.Hour).UnixMilli()})
+	duplicate := m.outbox[0]
+	m.outbox = append(m.outbox,
+		duplicate,
+		model.OutboxEntry{RequestID: "older", TargetPK: "SUBMISSION#missing", TargetSK: "STUDENT#student", CreatedAt: m.now().Add(-time.Hour).UnixMilli()},
+	)
 	if rows, err := m.ListOutbox(ctx, 1); err != nil || len(rows) != 1 {
 		t.Fatalf("outbox = %#v, %v", rows, err)
+	}
+	if count, err := m.ReconcileOutbox(ctx); err != nil || count != 1 {
+		t.Fatalf("first outbox reconciliation = %d, %v", count, err)
+	}
+	if rows, err := m.ListAuditSummaries(ctx, 0); err != nil || len(rows) != 1 || rows[0].RequestID != "submit-1" || rows[0].Score != 3 || rows[0].Total != 3 {
+		t.Fatalf("audit summaries = %#v, %v", rows, err)
+	}
+	if rows, err := m.ListOutbox(ctx, 0); err != nil || len(rows) != 3 || rows[0].Processed || !rows[1].Processed || !rows[2].Processed {
+		t.Fatalf("outbox processed state = %#v, %v", rows, err)
+	}
+	if count, err := m.ReconcileOutbox(ctx); err != nil || count != 0 {
+		t.Fatalf("repeated outbox reconciliation = %d, %v", count, err)
 	}
 	if _, err := fixedMemory().SubmitAttempt(ctx, "no-exam", "student", "", nil, ""); err != nil {
 		t.Fatalf("generated submission request id = %v", err)

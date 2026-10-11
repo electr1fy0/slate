@@ -4,6 +4,9 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -18,25 +21,27 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/ayush/slate/internal/clusterstate"
 	"github.com/ayush/slate/internal/config"
 	"github.com/ayush/slate/internal/model"
 )
 
 var (
-	ErrNotFound                = errors.New("not found")
-	ErrSubmissionConflict      = errors.New("submission conflict")
-	ErrEmailRegistered         = errors.New("email already registered")
-	ErrClassroomCodeTaken      = errors.New("classroom join code already in use")
-	ErrClassroomForbidden      = errors.New("classroom ownership required")
-	ErrClassroomMember         = errors.New("classroom member already exists")
-	ErrClassroomMemberNotFound = errors.New("classroom member not found")
-	ErrQuizNotFound            = errors.New("quiz not found")
-	ErrQuizConflict            = errors.New("quiz conflict")
-	ErrQuizForbidden           = errors.New("quiz ownership violation")
-	ErrAttemptConflict         = errors.New("attempt version conflict")
-	ErrAttemptSubmitted        = errors.New("attempt already submitted")
-	ErrAttemptsExhausted       = errors.New("attempt limit reached")
-	ErrInvalidAnswer           = errors.New("invalid answer")
+	ErrNotFound                  = errors.New("not found")
+	ErrSubmissionConflict        = errors.New("submission conflict")
+	ErrEmailRegistered           = errors.New("email already registered")
+	ErrClassroomCodeTaken        = errors.New("classroom join code already in use")
+	ErrClassroomForbidden        = errors.New("classroom ownership required")
+	ErrClassroomMember           = errors.New("classroom member already exists")
+	ErrClassroomMemberNotFound   = errors.New("classroom member not found")
+	ErrQuizNotFound              = errors.New("quiz not found")
+	ErrQuizConflict              = errors.New("quiz conflict")
+	ErrQuizForbidden             = errors.New("quiz ownership violation")
+	ErrAttemptConflict           = errors.New("attempt version conflict")
+	ErrAttemptSubmitted          = errors.New("attempt already submitted")
+	ErrSubmissionRequestConflict = errors.New("submission request ID was reused with a different payload")
+	ErrAttemptsExhausted         = errors.New("attempt limit reached")
+	ErrInvalidAnswer             = errors.New("invalid answer")
 )
 
 // DynamoAPI is the subset of the AWS client used by Store. Keeping this
@@ -56,11 +61,12 @@ type DynamoAPI interface {
 // Store owns the DynamoDB table name and clock. Now is injectable to make
 // timestamps and expiry behavior testable.
 type Store struct {
-	Client       DynamoAPI
-	TableName    string
-	Region       string
-	HeartbeatTTL int
-	Now          func() time.Time
+	Client         DynamoAPI
+	TableName      string
+	Region         string
+	HeartbeatTTL   int
+	FencingEnabled bool
+	Now            func() time.Time
 }
 
 var loadAWSConfig = awsconfig.LoadDefaultConfig
@@ -86,7 +92,7 @@ func New(ctx context.Context, settings config.Settings) (*Store, error) {
 
 func NewWithClient(client DynamoAPI, settings config.Settings) *Store {
 	return &Store{Client: client, TableName: settings.TableName, Region: settings.Region,
-		HeartbeatTTL: settings.HeartbeatTTLS, Now: time.Now}
+		HeartbeatTTL: settings.HeartbeatTTLS, FencingEnabled: settings.FencingEnabled, Now: time.Now}
 }
 
 func (s *Store) now() time.Time {
@@ -134,6 +140,153 @@ func (s *Store) get(ctx context.Context, k map[string]types.AttributeValue) (map
 	return out.Item, nil
 }
 
+func (s *Store) getConsistent(ctx context.Context, k map[string]types.AttributeValue) (map[string]types.AttributeValue, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(s.TableName), Key: k, ConsistentRead: aws.Bool(true)})
+	if err != nil {
+		return nil, err
+	}
+	if len(out.Item) == 0 {
+		return nil, nil
+	}
+	return out.Item, nil
+}
+
+func writerFromContext(ctx context.Context) (clusterstate.Writer, bool, error) {
+	writer, ok := clusterstate.WriterFrom(ctx)
+	if !ok {
+		return clusterstate.Writer{}, false, nil
+	}
+	if (writer.Backend != "A" && writer.Backend != "B") || writer.Epoch <= 0 {
+		return clusterstate.Writer{}, false, clusterstate.ErrFenced
+	}
+	return writer, true, nil
+}
+
+func appendFenceCheck(ctx context.Context, table string, items []types.TransactWriteItem) ([]types.TransactWriteItem, bool, error) {
+	writer, present, err := writerFromContext(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !present {
+		return items, false, nil
+	}
+	return append(items, clusterstate.FenceConditionCheck(table, writer)), true, nil
+}
+
+// transactWrite keeps the writer condition in the same DynamoDB transaction
+// as the application writes. A missing writer is allowed only for explicitly
+// marked bootstrap calls and legacy/local configurations where fencing is
+// disabled.
+func (s *Store) transactWrite(ctx context.Context, items []types.TransactWriteItem) error {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return err
+	}
+	transaction, fenced, err := appendFenceCheck(ctx, s.TableName, items)
+	if err != nil {
+		return err
+	}
+	if len(transaction) > 100 {
+		return fmt.Errorf("DynamoDB transaction exceeds 100 items")
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: transaction})
+	if err != nil && fenced && isFenceTransactionFailure(err, len(transaction)-1) {
+		return clusterstate.ErrFenced
+	}
+	return err
+}
+
+func (s *Store) writerPresent(ctx context.Context) (bool, error) {
+	_, present, err := writerFromContext(ctx)
+	return present, err
+}
+
+// requireMutationWriter rejects headerless durable writes when API fencing is
+// enabled. Bootstrap seeding is the sole intentional headerless exception;
+// it uses create-only operations and a private context marker.
+func (s *Store) requireMutationWriter(ctx context.Context) (bool, error) {
+	present, err := s.writerPresent(ctx)
+	if err != nil {
+		return false, err
+	}
+	if s.FencingEnabled && !present && !isBootstrapWrite(ctx) {
+		return false, clusterstate.ErrFenced
+	}
+	return present, nil
+}
+
+func (s *Store) fencedUpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput) (*dynamodb.UpdateItemOutput, error) {
+	present, err := s.requireMutationWriter(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return s.Client.UpdateItem(ctx, input)
+	}
+	update := &types.Update{
+		TableName: aws.String(s.TableName), Key: input.Key,
+		UpdateExpression: input.UpdateExpression, ConditionExpression: input.ConditionExpression,
+		ExpressionAttributeNames:            input.ExpressionAttributeNames,
+		ExpressionAttributeValues:           input.ExpressionAttributeValues,
+		ReturnValuesOnConditionCheckFailure: input.ReturnValuesOnConditionCheckFailure,
+	}
+	if err := s.transactWrite(ctx, []types.TransactWriteItem{{Update: update}}); err != nil {
+		return nil, err
+	}
+	item, err := s.getConsistent(ctx, input.Key)
+	if err != nil {
+		return nil, err
+	}
+	return &dynamodb.UpdateItemOutput{Attributes: item}, nil
+}
+
+func (s *Store) fencedPutItem(ctx context.Context, input *dynamodb.PutItemInput) error {
+	present, err := s.requireMutationWriter(ctx)
+	if err != nil {
+		return err
+	}
+	if !present {
+		_, err := s.Client.PutItem(ctx, input)
+		return err
+	}
+	put := &types.Put{
+		TableName: aws.String(s.TableName), Item: input.Item,
+		ConditionExpression:                 input.ConditionExpression,
+		ExpressionAttributeNames:            input.ExpressionAttributeNames,
+		ExpressionAttributeValues:           input.ExpressionAttributeValues,
+		ReturnValuesOnConditionCheckFailure: input.ReturnValuesOnConditionCheckFailure,
+	}
+	return s.transactWrite(ctx, []types.TransactWriteItem{{Put: put}})
+}
+
+func isFenceTransactionFailure(err error, index int) bool {
+	var canceled *types.TransactionCanceledException
+	if !errors.As(err, &canceled) || index < 0 || len(canceled.CancellationReasons) <= index {
+		return false
+	}
+	reason := canceled.CancellationReasons[index]
+	return reason.Code != nil && *reason.Code == "ConditionalCheckFailed"
+}
+
+func submissionPayloadHash(examID, studentID string, answers map[string]int) string {
+	payload, _ := json.Marshal(struct {
+		ExamID    string         `json:"exam_id"`
+		StudentID string         `json:"student_id"`
+		Answers   map[string]int `json:"answers"`
+	}{ExamID: examID, StudentID: studentID, Answers: answers})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func submissionRequestKey(requestID string) map[string]types.AttributeValue {
+	sum := sha256.Sum256([]byte(requestID))
+	return key("SUBMISSION_REQUEST#"+hex.EncodeToString(sum[:]), "RECEIPT")
+}
+
+func hasTransactionCancellationReasons(err error) bool {
+	var canceled *types.TransactionCanceledException
+	return errors.As(err, &canceled) && len(canceled.CancellationReasons) > 0
+}
+
 // GetUser retrieves USER#id / PROFILE.
 func (s *Store) GetUser(ctx context.Context, userID string) (*model.User, error) {
 	item, err := s.get(ctx, key("USER#"+userID, "PROFILE"))
@@ -166,7 +319,9 @@ func (s *Store) FindUserIDByEmail(ctx context.Context, email string) (string, er
 	return idx.UserID, nil
 }
 
-// CreateUser atomically creates the profile and unique email index.
+// CreateUser atomically creates the profile and unique email index. The only
+// unfenced production call is startup seeding, which is explicitly marked by
+// WithBootstrap and remains idempotent through the unique email index.
 func (s *Store) CreateUser(ctx context.Context, user *model.User, passwordHash string) error {
 	profile := *user
 	profile.PasswordHash = passwordHash
@@ -184,10 +339,10 @@ func (s *Store) CreateUser(ctx context.Context, user *model.User, passwordHash s
 	if err != nil {
 		return err
 	}
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: profileItem}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: idx, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
-	}})
+	})
 	if err != nil && isTransactionConditional(err) {
 		return ErrEmailRegistered
 	}
@@ -212,7 +367,8 @@ func isTransactionConditional(err error) bool {
 	return false
 }
 
-// EnsureExam writes EXAM#id/META and QUESTION#NNN items.
+// EnsureExam writes an exam definition as one fenced transaction when invoked
+// by an API writer. Startup must use EnsureExamIfMissing instead.
 func (s *Store) EnsureExam(ctx context.Context, examID, title string, questions []model.Question, window map[string]any) error {
 	meta := model.ExamMeta{PK: "EXAM#" + examID, SK: "META", Title: title, CreatedAt: iso(s.now()), QuestionCount: len(questions)}
 	item, err := marshal(meta)
@@ -226,29 +382,65 @@ func (s *Store) EnsureExam(ctx context.Context, examID, title string, questions 
 		}
 		item[field] = av
 	}
-	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: item}); err != nil {
-		return err
-	}
+	items := []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(s.TableName), Item: item}}}
 	for i, question := range questions {
-		qItem, err := marshal(struct {
-			PK       string   `dynamodbav:"pk"`
-			SK       string   `dynamodbav:"sk"`
-			Question string   `dynamodbav:"question"`
-			Options  []string `dynamodbav:"options"`
-			Answer   int      `dynamodbav:"answer"`
-			Points   int      `dynamodbav:"points,omitempty"`
-			Feedback string   `dynamodbav:"feedback,omitempty"`
-		}{
-			PK: "EXAM#" + examID, SK: fmt.Sprintf("QUESTION#%03d", i), Question: question.Question, Options: question.Options, Answer: question.Answer, Points: question.Points, Feedback: question.Feedback,
-		})
+		qItem, err := quizQuestionItem("EXAM#"+examID, i, question)
 		if err != nil {
 			return err
 		}
-		if _, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: qItem}); err != nil {
-			return err
-		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(s.TableName), Item: qItem}})
 	}
-	return nil
+	return s.transactWrite(ctx, items)
+}
+
+// EnsureExamIfMissing is a bootstrap-only, idempotent seed operation. It is
+// deliberately independent of router headers: the metadata condition and
+// one transaction for metadata+questions make concurrent A/B startup safe,
+// and an existing exam (including faculty edits) is never overwritten.
+func (s *Store) EnsureExamIfMissing(ctx context.Context, examID, title string, questions []model.Question, window map[string]any) error {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return err
+	}
+	metaKey := key("EXAM#"+examID, "META")
+	if existing, err := s.getConsistent(ctx, metaKey); err != nil {
+		return err
+	} else if existing != nil {
+		return nil
+	}
+	meta := model.ExamMeta{PK: "EXAM#" + examID, SK: "META", Title: title, CreatedAt: iso(s.now()), QuestionCount: len(questions)}
+	item, err := marshal(meta)
+	if err != nil {
+		return err
+	}
+	for field, value := range window {
+		av, marshalErr := attributevalue.Marshal(value)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal window %s: %w", field, marshalErr)
+		}
+		item[field] = av
+	}
+	items := []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(s.TableName), Item: item, ConditionExpression: aws.String("attribute_not_exists(pk)")}}}
+	for index, question := range questions {
+		questionItem, marshalErr := quizQuestionItem("EXAM#"+examID, index, question)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(s.TableName), Item: questionItem}})
+	}
+	items, fenced, err := appendFenceCheck(ctx, s.TableName, items)
+	if err != nil {
+		return err
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if fenced && isFenceTransactionFailure(err, len(items)-1) {
+		return clusterstate.ErrFenced
+	}
+	if isTransactionConditional(err) {
+		// A concurrent backend seeded this exam first. Its transaction wrote the
+		// complete definition because metadata and questions commit together.
+		return nil
+	}
+	return err
 }
 
 func quizQuestionItem(pk string, index int, question model.Question) (map[string]types.AttributeValue, error) {
@@ -315,26 +507,23 @@ func (s *Store) writeExamDefinition(ctx context.Context, examID string, meta mod
 	if err != nil {
 		return err
 	}
-	put := &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: item}
+	put := &types.Put{TableName: aws.String(s.TableName), Item: item}
 	if conditional {
 		put.ConditionExpression = aws.String("attribute_not_exists(pk)")
 	}
-	if _, err := s.Client.PutItem(ctx, put); err != nil {
-		if conditional && isConditional(err) {
-			return ErrQuizConflict
-		}
-		return err
-	}
+	items := []types.TransactWriteItem{{Put: put}}
 	for i, question := range questions {
 		qItem, err := quizQuestionItem("EXAM#"+examID, i, question)
 		if err != nil {
 			return err
 		}
-		if _, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: qItem}); err != nil {
-			return err
-		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(s.TableName), Item: qItem}})
 	}
-	return nil
+	err = s.transactWrite(ctx, items)
+	if conditional && err != nil && isTransactionConditional(err) {
+		return ErrQuizConflict
+	}
+	return err
 }
 
 // CreateQuizDraft stores teacher-owned metadata and question items. The
@@ -346,7 +535,7 @@ func (s *Store) CreateQuizDraft(ctx context.Context, draft *model.QuizDraft) (*m
 	if strings.TrimSpace(draft.Title) == "" {
 		return nil, fmt.Errorf("quiz draft title is required")
 	}
-	if len(draft.Questions) > 100 {
+	if len(draft.Questions) > 98 {
 		return nil, fmt.Errorf("quiz draft has too many questions")
 	}
 	now := iso(s.now())
@@ -376,7 +565,8 @@ func (s *Store) CreateQuizDraft(ctx context.Context, draft *model.QuizDraft) (*m
 	if len(items) > 100 {
 		return nil, fmt.Errorf("quiz draft is too large")
 	}
-	if _, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items}); err != nil {
+	err = s.transactWrite(ctx, items)
+	if err != nil {
 		if isTransactionConditional(err) || isConditional(err) {
 			return nil, ErrQuizConflict
 		}
@@ -490,13 +680,35 @@ func (s *Store) ListQuizDrafts(ctx context.Context, ownerID string, limit int) (
 }
 
 func (s *Store) deleteByPK(ctx context.Context, pk string) (int, error) {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return 0, err
+	}
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{TableName: aws.String(s.TableName), KeyConditionExpression: aws.String("pk = :pk"), ExpressionAttributeValues: map[string]types.AttributeValue{":pk": &types.AttributeValueMemberS{Value: pk}}})
 	if err != nil {
 		return 0, err
 	}
 	count := 0
-	for start := 0; start < len(items); start += 25 {
-		end := min(start+25, len(items))
+	fenced, err := s.writerPresent(ctx)
+	if err != nil {
+		return 0, err
+	}
+	chunkSize := 25
+	if fenced {
+		chunkSize = 99
+	}
+	for start := 0; start < len(items); start += chunkSize {
+		end := min(start+chunkSize, len(items))
+		if fenced {
+			transaction := make([]types.TransactWriteItem, 0, end-start)
+			for _, item := range items[start:end] {
+				transaction = append(transaction, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: map[string]types.AttributeValue{"pk": item["pk"], "sk": item["sk"]}}})
+			}
+			if err := s.transactWrite(ctx, transaction); err != nil {
+				return count, err
+			}
+			count += len(transaction)
+			continue
+		}
 		writes := make([]types.WriteRequest, 0, end-start)
 		for _, item := range items[start:end] {
 			writes = append(writes, types.WriteRequest{DeleteRequest: &types.DeleteRequest{Key: map[string]types.AttributeValue{"pk": item["pk"], "sk": item["sk"]}}})
@@ -556,27 +768,39 @@ func (s *Store) UpdateQuizDraft(ctx context.Context, ownerID string, draft *mode
 	if value.Title == "" {
 		return nil, fmt.Errorf("quiz draft title is required")
 	}
-	if len(value.Questions) > 100 {
+	if len(value.Questions) > 98 {
 		return nil, fmt.Errorf("quiz draft has too many questions")
-	}
-	if _, err := s.deleteByPK(ctx, value.PK); err != nil {
-		return nil, err
 	}
 	metaItem, err := marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: metaItem}); err != nil {
-		return nil, err
+	metaPut := &types.Put{
+		TableName: aws.String(s.TableName), Item: metaItem,
+		ConditionExpression:      aws.String("owner_id = :owner AND #status = :draft"),
+		ExpressionAttributeNames: map[string]string{"#status": "status"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":owner": &types.AttributeValueMemberS{Value: current.OwnerID},
+			":draft": &types.AttributeValueMemberS{Value: "draft"},
+		},
 	}
+	items := []types.TransactWriteItem{{Put: metaPut}}
 	for i, question := range value.Questions {
 		item, err := quizQuestionItem(value.PK, i, question)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: item}); err != nil {
-			return nil, err
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(s.TableName), Item: item}})
+	}
+	oldQuestionCount := max(len(current.Questions), current.QuestionCount)
+	for i := len(value.Questions); i < oldQuestionCount; i++ {
+		items = append(items, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: key(value.PK, fmt.Sprintf("QUESTION#%03d", i))}})
+	}
+	if err := s.transactWrite(ctx, items); err != nil {
+		if isTransactionConditional(err) {
+			return nil, ErrQuizConflict
 		}
+		return nil, err
 	}
 	return cloneDraft(&value), nil
 }
@@ -621,24 +845,36 @@ func (s *Store) PublishQuizDraft(ctx context.Context, id, ownerID string) (*mode
 	} else if existing != nil {
 		return nil, ErrQuizConflict
 	}
-	meta := model.ExamMeta{Title: draft.Title, CreatedAt: iso(s.now()), OwnerID: draft.OwnerID, Status: "published", OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
-	if err := s.writeExamDefinition(ctx, id, meta, draft.Questions, true); err != nil {
+	if len(draft.Questions) > 97 {
+		return nil, fmt.Errorf("quiz draft has too many questions to publish atomically")
+	}
+	meta := model.ExamMeta{PK: "EXAM#" + id, SK: "META", Title: draft.Title, CreatedAt: iso(s.now()), OwnerID: draft.OwnerID, Status: "published", QuestionCount: len(draft.Questions), OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
+	metaItem, err := marshal(meta)
+	if err != nil {
 		return nil, err
 	}
+	items := []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(s.TableName), Item: metaItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}}}
+	for i, question := range draft.Questions {
+		item, err := quizQuestionItem("EXAM#"+id, i, question)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, types.TransactWriteItem{Put: &types.Put{TableName: aws.String(s.TableName), Item: item}})
+	}
 	publishedAt := iso(s.now())
-	now := publishedAt
-	_, err = s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	items = append(items, types.TransactWriteItem{Update: &types.Update{
 		TableName: aws.String(s.TableName), Key: key(draft.PK, draft.SK),
 		UpdateExpression:         aws.String("SET #status = :status, published_at = :published_at, updated_at = :updated_at"),
 		ConditionExpression:      aws.String("owner_id = :owner AND #status = :draft"),
 		ExpressionAttributeNames: map[string]string{"#status": "status"},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":status": &types.AttributeValueMemberS{Value: "published"}, ":draft": &types.AttributeValueMemberS{Value: "draft"},
-			":owner": &types.AttributeValueMemberS{Value: draft.OwnerID}, ":published_at": &types.AttributeValueMemberS{Value: publishedAt}, ":updated_at": &types.AttributeValueMemberS{Value: now},
-		}, ReturnValues: types.ReturnValueNone,
-	})
+			":owner": &types.AttributeValueMemberS{Value: draft.OwnerID}, ":published_at": &types.AttributeValueMemberS{Value: publishedAt}, ":updated_at": &types.AttributeValueMemberS{Value: publishedAt},
+		},
+	}})
+	err = s.transactWrite(ctx, items)
 	if err != nil {
-		if isConditional(err) {
+		if isTransactionConditional(err) || isConditional(err) {
 			return nil, ErrQuizConflict
 		}
 		return nil, err
@@ -718,7 +954,7 @@ func (s *Store) UpdateExamWindow(ctx context.Context, examID string, title *stri
 	if len(parts) == 0 {
 		return s.GetExamMeta(ctx, examID)
 	}
-	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(s.TableName), Key: key("EXAM#"+examID, "META"), UpdateExpression: aws.String("SET " + strings.Join(parts, ", ")), ExpressionAttributeNames: names, ExpressionAttributeValues: values, ReturnValues: types.ReturnValueAllNew})
+	out, err := s.fencedUpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(s.TableName), Key: key("EXAM#"+examID, "META"), UpdateExpression: aws.String("SET " + strings.Join(parts, ", ")), ExpressionAttributeNames: names, ExpressionAttributeValues: values, ReturnValues: types.ReturnValueAllNew})
 	if err != nil {
 		return nil, err
 	}
@@ -895,8 +1131,11 @@ func (s *Store) GradeAttempt(ctx context.Context, examID string, answers map[str
 }
 
 func (s *Store) RecordAttemptStart(ctx context.Context, examID, studentID string) (*model.Attempt, error) {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return nil, err
+	}
 	k := key("ATTEMPT#"+examID, "STUDENT#"+studentID)
-	item, err := s.get(ctx, k)
+	item, err := s.getConsistent(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -913,14 +1152,39 @@ func (s *Store) RecordAttemptStart(ctx context.Context, examID, studentID string
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: av, ConditionExpression: aws.String("attribute_not_exists(pk)")})
+	if fenceWriter, fenced, fenceErr := appendFenceCheck(ctx, s.TableName, []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(s.TableName), Item: av, ConditionExpression: aws.String("attribute_not_exists(pk)")}}}); fenceErr != nil {
+		return nil, fenceErr
+	} else if fenced {
+		_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: fenceWriter})
+		if err != nil {
+			if isFenceTransactionFailure(err, len(fenceWriter)-1) {
+				return nil, clusterstate.ErrFenced
+			}
+			if isTransactionConditional(err) {
+				item, readErr := s.getConsistent(ctx, k)
+				if readErr != nil {
+					return nil, readErr
+				}
+				if item != nil {
+					if decodeErr := unmarshal(item, &a); decodeErr != nil {
+						return nil, decodeErr
+					}
+					return &a, nil
+				}
+			}
+			return nil, err
+		}
+		return &a, nil
+	} else {
+		_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: av, ConditionExpression: aws.String("attribute_not_exists(pk)")})
+	}
 	if err == nil {
 		return &a, nil
 	}
 	if !isConditional(err) {
 		return nil, err
 	}
-	item, err = s.get(ctx, k)
+	item, err = s.getConsistent(ctx, k)
 	if err != nil {
 		return nil, err
 	}
@@ -941,7 +1205,7 @@ func (s *Store) AttemptDeadline(ctx context.Context, examID, studentID string) (
 	if meta == nil || meta.DurationMinutes <= 0 {
 		return nil, nil, nil
 	}
-	item, err := s.get(ctx, key("ATTEMPT#"+examID, "STUDENT#"+studentID))
+	item, err := s.getConsistent(ctx, key("ATTEMPT#"+examID, "STUDENT#"+studentID))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -958,7 +1222,7 @@ func (s *Store) AttemptDeadline(ctx context.Context, examID, studentID string) (
 
 // GetStudentAttempt returns the durable answer snapshot for one student.
 func (s *Store) GetStudentAttempt(ctx context.Context, examID, studentID string) (*model.Attempt, error) {
-	item, err := s.get(ctx, key("ATTEMPT#"+examID, "STUDENT#"+studentID))
+	item, err := s.getConsistent(ctx, key("ATTEMPT#"+examID, "STUDENT#"+studentID))
 	if err != nil {
 		return nil, err
 	}
@@ -977,6 +1241,9 @@ func (s *Store) GetStudentAttempt(ctx context.Context, examID, studentID string)
 // intentionally optimistic: concurrent browser tabs cannot overwrite a newer
 // version, and a repeated request ID is returned as an idempotent duplicate.
 func (s *Store) SaveAttempt(ctx context.Context, examID, studentID string, answers map[string]int, expectedVersion int, requestID string) (*model.Attempt, error) {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return nil, err
+	}
 	if requestID == "" {
 		return nil, fmt.Errorf("request_id is required")
 	}
@@ -1020,20 +1287,31 @@ func (s *Store) SaveAttempt(ctx context.Context, examID, studentID string, answe
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+	transaction := []types.TransactWriteItem{{Put: &types.Put{
 		TableName:                 aws.String(s.TableName),
 		Item:                      item,
 		ConditionExpression:       aws.String("version = :expected AND (attribute_not_exists(submitted) OR submitted = :false)"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{":expected": &types.AttributeValueMemberN{Value: strconv.Itoa(attempt.Version)}, ":false": &types.AttributeValueMemberBOOL{Value: false}},
-	})
+	}}}
+	transaction, fenced, fenceErr := appendFenceCheck(ctx, s.TableName, transaction)
+	if fenceErr != nil {
+		return nil, fenceErr
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: transaction})
 	if err != nil {
-		if isConditional(err) {
+		if fenced && isFenceTransactionFailure(err, len(transaction)-1) {
+			return nil, clusterstate.ErrFenced
+		}
+		if isTransactionConditional(err) {
 			current, readErr := s.GetStudentAttempt(ctx, examID, studentID)
 			if readErr != nil {
 				return nil, readErr
 			}
 			if current != nil && current.LastRequestID == requestID {
 				return current, nil
+			}
+			if fenced && len(transaction) > 1 && isFenceTransactionFailure(err, len(transaction)-1) {
+				return nil, clusterstate.ErrFenced
 			}
 			return nil, ErrAttemptConflict
 		}
@@ -1042,15 +1320,43 @@ func (s *Store) SaveAttempt(ctx context.Context, examID, studentID string, answe
 	return &value, nil
 }
 
-// SubmitAttempt performs grading and atomically writes both submission and
-// journal. A condition on submission prevents concurrent requests from
-// overwriting one another, while same request IDs remain idempotent.
+// FindSubmissionRequest returns the durable receipt only when this request ID
+// is bound to the same student, exam and answer payload.
+func (s *Store) FindSubmissionRequest(ctx context.Context, examID, studentID string, answers map[string]int, requestID string) (model.SubmissionResult, bool, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return model.SubmissionResult{}, false, nil
+	}
+	item, err := s.getConsistent(ctx, submissionRequestKey(requestID))
+	if err != nil || item == nil {
+		return model.SubmissionResult{}, false, err
+	}
+	var receipt model.SubmissionRequest
+	if err := unmarshal(item, &receipt); err != nil {
+		return model.SubmissionResult{}, false, fmt.Errorf("decode submission receipt: %w", err)
+	}
+	if receipt.PayloadHash != submissionPayloadHash(examID, studentID, answers) {
+		return model.SubmissionResult{}, false, ErrSubmissionRequestConflict
+	}
+	return receipt.Result("duplicate"), true, nil
+}
+
+// SubmitAttempt grades and atomically writes the canonical submission, its
+// durable request-ID receipt, the downstream outbox record, and the submitted
+// attempt state. The attempt write is conditional on the version read above so
+// a concurrent save cannot be overwritten by this transaction.
 func (s *Store) SubmitAttempt(ctx context.Context, examID, studentID, studentName string, answers map[string]int, requestID string) (model.SubmissionResult, error) {
+	if _, err := s.requireMutationWriter(ctx); err != nil {
+		return model.SubmissionResult{}, err
+	}
 	if requestID == "" {
 		requestID = newID()
 	}
+	payloadHash := submissionPayloadHash(examID, studentID, answers)
+	if duplicate, found, err := s.FindSubmissionRequest(ctx, examID, studentID, answers, requestID); err != nil || found {
+		return duplicate, err
+	}
 	submissionKey := key("SUBMISSION#"+examID, "STUDENT#"+studentID)
-	existing, err := s.get(ctx, submissionKey)
+	existing, err := s.getConsistent(ctx, submissionKey)
 	if err != nil {
 		return model.SubmissionResult{}, err
 	}
@@ -1060,7 +1366,14 @@ func (s *Store) SubmitAttempt(ctx context.Context, examID, studentID, studentNam
 			return model.SubmissionResult{}, e
 		}
 		if old.RequestID == requestID {
-			return model.SubmissionResult{Status: "duplicate", RequestID: requestID, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total}, nil
+			oldHash := old.PayloadHash
+			if oldHash == "" {
+				oldHash = submissionPayloadHash(examID, studentID, old.Answers)
+			}
+			if oldHash == payloadHash {
+				return model.SubmissionResult{Status: "duplicate", RequestID: requestID, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total}, nil
+			}
+			return model.SubmissionResult{}, ErrSubmissionRequestConflict
 		}
 		return model.SubmissionResult{}, ErrSubmissionConflict
 	}
@@ -1068,46 +1381,126 @@ func (s *Store) SubmitAttempt(ctx context.Context, examID, studentID, studentNam
 	if err != nil {
 		return model.SubmissionResult{}, err
 	}
+	attempt, err := s.GetStudentAttempt(ctx, examID, studentID)
+	if err != nil {
+		return model.SubmissionResult{}, err
+	}
+	if attempt != nil && attempt.Submitted {
+		return model.SubmissionResult{}, ErrAttemptSubmitted
+	}
+	attemptExisted := attempt != nil
 	now := s.now()
-	sub := model.Submission{PK: "SUBMISSION#" + examID, SK: "STUDENT#" + studentID, Answers: answers, Version: 1, RequestID: requestID, UpdatedAt: now.UnixMilli(), UpdatedAtISO: iso(now), WrittenByRegion: s.Region, StudentName: studentName, Score: score, Total: total}
+	committedAt := now.UnixMilli()
+	attemptNumber := 1
+	if attempt == nil {
+		attempt = &model.Attempt{PK: "ATTEMPT#" + examID, SK: "STUDENT#" + studentID, AttemptNumber: 1, StartedAt: committedAt, StartedAtISO: iso(now)}
+	} else {
+		attempt = cloneAttempt(attempt)
+		if attempt.AttemptNumber > 0 {
+			attemptNumber = attempt.AttemptNumber
+		}
+	}
+	if attempt.AttemptNumber <= 0 {
+		attempt.AttemptNumber = 1
+	}
+	attempt.Answers = cloneAnswers(answers)
+	attempt.Version++
+	attempt.Submitted = true
+	attempt.SubmittedAt = committedAt
+	attempt.UpdatedAt = committedAt
+	attempt.UpdatedAtISO = iso(now)
+	attemptItem, err := marshal(attempt)
+	if err != nil {
+		return model.SubmissionResult{}, err
+	}
+
+	sub := model.Submission{PK: "SUBMISSION#" + examID, SK: "STUDENT#" + studentID, Answers: cloneAnswers(answers), Version: 1, RequestID: requestID, PayloadHash: payloadHash, UpdatedAt: committedAt, UpdatedAtISO: iso(now), WrittenByRegion: s.Region, StudentName: studentName, AttemptNumber: attemptNumber, Score: score, Total: total}
 	subItem, err := marshal(sub)
 	if err != nil {
 		return model.SubmissionResult{}, err
 	}
-	journal := model.OutboxEntry{PK: "JOURNAL#" + requestID, SK: "OUTBOX", TargetPK: sub.PK, TargetSK: sub.SK, Version: 1, RequestID: requestID, CreatedAt: now.UnixMilli(), Answers: answers, StudentName: studentName, Score: score, Total: total, TTL: now.Unix() + 7*24*3600}
+	requestKey := submissionRequestKey(requestID)
+	requestPK := requestKey["pk"].(*types.AttributeValueMemberS).Value
+	receipt := model.SubmissionRequest{PK: requestPK, SK: "RECEIPT", RequestID: requestID, PayloadHash: payloadHash, ExamID: examID, StudentID: studentID, Version: 1, CommittedAt: committedAt, Score: score, Total: total, AttemptNumber: attemptNumber}
+	receiptItem, err := marshal(receipt)
+	if err != nil {
+		return model.SubmissionResult{}, err
+	}
+	journal := model.OutboxEntry{PK: "JOURNAL#" + requestID, SK: "OUTBOX", TargetPK: sub.PK, TargetSK: sub.SK, Version: 1, RequestID: requestID, CreatedAt: committedAt, Answers: cloneAnswers(answers), StudentName: studentName, AttemptNumber: attemptNumber, Score: score, Total: total, TTL: now.Unix() + 7*24*3600, Processed: false}
 	journalItem, err := marshal(journal)
 	if err != nil {
 		return model.SubmissionResult{}, err
 	}
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{{Put: &types.Put{TableName: aws.String(s.TableName), Item: subItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}}, {Put: &types.Put{TableName: aws.String(s.TableName), Item: journalItem}}}})
+	attemptPut := &types.Put{TableName: aws.String(s.TableName), Item: attemptItem}
+	if !attemptExisted {
+		attemptPut.ConditionExpression = aws.String("attribute_not_exists(pk)")
+	} else {
+		previousVersion := attempt.Version - 1
+		attemptPut.ConditionExpression = aws.String("version = :version AND (attribute_not_exists(submitted) OR submitted = :false)")
+		attemptPut.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":version": &types.AttributeValueMemberN{Value: strconv.Itoa(previousVersion)},
+			":false":   &types.AttributeValueMemberBOOL{Value: false},
+		}
+	}
+	transaction := []types.TransactWriteItem{
+		{Put: &types.Put{TableName: aws.String(s.TableName), Item: subItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
+		{Put: &types.Put{TableName: aws.String(s.TableName), Item: receiptItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
+		{Put: &types.Put{TableName: aws.String(s.TableName), Item: journalItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
+		{Put: attemptPut},
+	}
+	transaction, fenced, fenceErr := appendFenceCheck(ctx, s.TableName, transaction)
+	if fenceErr != nil {
+		return model.SubmissionResult{}, fenceErr
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: transaction})
 	if err != nil {
+		if fenced && isFenceTransactionFailure(err, len(transaction)-1) {
+			return model.SubmissionResult{}, clusterstate.ErrFenced
+		}
 		if isTransactionConditional(err) {
-			winner, e := s.get(ctx, submissionKey)
-			if e != nil {
-				return model.SubmissionResult{}, e
+			if duplicate, found, readErr := s.FindSubmissionRequest(ctx, examID, studentID, answers, requestID); readErr != nil || found {
+				return duplicate, readErr
+			}
+			winner, readErr := s.getConsistent(ctx, submissionKey)
+			if readErr != nil {
+				return model.SubmissionResult{}, readErr
 			}
 			if winner != nil {
 				var old model.Submission
-				if e := unmarshal(winner, &old); e == nil && old.RequestID == requestID {
-					return model.SubmissionResult{Status: "duplicate", RequestID: requestID, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total}, nil
+				if decodeErr := unmarshal(winner, &old); decodeErr != nil {
+					return model.SubmissionResult{}, decodeErr
 				}
+				if old.RequestID == requestID {
+					oldHash := old.PayloadHash
+					if oldHash == "" {
+						oldHash = submissionPayloadHash(examID, studentID, old.Answers)
+					}
+					if oldHash == payloadHash {
+						return model.SubmissionResult{Status: "duplicate", RequestID: requestID, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total, AttemptNumber: old.AttemptNumber}, nil
+					}
+					return model.SubmissionResult{}, ErrSubmissionRequestConflict
+				}
+				return model.SubmissionResult{}, ErrSubmissionConflict
 			}
-			return model.SubmissionResult{}, ErrSubmissionConflict
+			if fenced && !hasTransactionCancellationReasons(err) {
+				return model.SubmissionResult{}, clusterstate.ErrFenced
+			}
+			current, readErr := s.GetStudentAttempt(ctx, examID, studentID)
+			if readErr != nil {
+				return model.SubmissionResult{}, readErr
+			}
+			if current != nil && current.Submitted {
+				return model.SubmissionResult{}, ErrAttemptSubmitted
+			}
+			return model.SubmissionResult{}, ErrAttemptConflict
 		}
 		return model.SubmissionResult{}, err
 	}
-	if attempt, attemptErr := s.GetStudentAttempt(ctx, examID, studentID); attemptErr == nil && attempt != nil {
-		attempt.Submitted = true
-		attempt.SubmittedAt = now.UnixMilli()
-		if item, marshalErr := marshal(attempt); marshalErr == nil {
-			_, _ = s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.TableName), Item: item})
-		}
-	}
-	return model.SubmissionResult{Status: "committed", RequestID: requestID, Version: 1, Score: score, Total: total}, nil
+	return model.SubmissionResult{Status: "committed", RequestID: requestID, Version: 1, CommittedAt: committedAt, Score: score, Total: total, AttemptNumber: attemptNumber}, nil
 }
 
 func (s *Store) GetSubmission(ctx context.Context, examID, studentID string) (*model.Submission, error) {
-	item, err := s.get(ctx, key("SUBMISSION#"+examID, "STUDENT#"+studentID))
+	item, err := s.getConsistent(ctx, key("SUBMISSION#"+examID, "STUDENT#"+studentID))
 	if err != nil {
 		return nil, err
 	}
@@ -1141,6 +1534,9 @@ func (s *Store) ListOutbox(ctx context.Context, limit int) ([]model.OutboxEntry,
 	return result, nil
 }
 
+// HeartbeatProbe writes a disposable health canary so standby nodes can verify
+// DynamoDB reachability. It is operational telemetry, not user-facing exam
+// state, and intentionally remains available without an active writer epoch.
 func (s *Store) HeartbeatProbe(ctx context.Context, region string) (ok bool, latencyMS float64, err error) {
 	id := newID()
 	t := s.now()
@@ -1222,15 +1618,31 @@ func (s *Store) ListSubmissions(ctx context.Context, examID string, limit int) (
 }
 
 func (s *Store) DeleteExam(ctx context.Context, examID string) (int, error) {
+	fencedWriter, err := s.requireMutationWriter(ctx)
+	if err != nil {
+		return 0, err
+	}
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{TableName: aws.String(s.TableName), KeyConditionExpression: aws.String("pk = :pk"), ExpressionAttributeValues: map[string]types.AttributeValue{":pk": &types.AttributeValueMemberS{Value: "EXAM#" + examID}}})
 	if err != nil {
 		return 0, err
 	}
 	count := 0
-	for start := 0; start < len(items); start += 25 {
-		end := start + 25
-		if end > len(items) {
-			end = len(items)
+	chunkSize := 25
+	if fencedWriter {
+		chunkSize = 99
+	}
+	for start := 0; start < len(items); start += chunkSize {
+		end := min(start+chunkSize, len(items))
+		if fencedWriter {
+			transaction := make([]types.TransactWriteItem, 0, end-start)
+			for _, item := range items[start:end] {
+				transaction = append(transaction, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: map[string]types.AttributeValue{"pk": item["pk"], "sk": item["sk"]}}})
+			}
+			if err := s.transactWrite(ctx, transaction); err != nil {
+				return count, err
+			}
+			count += len(transaction)
+			continue
 		}
 		writes := make([]types.WriteRequest, 0, end-start)
 		for _, item := range items[start:end] {
@@ -1339,11 +1751,11 @@ func (s *Store) CreateClassroom(ctx context.Context, classroom *model.Classroom)
 	if err != nil {
 		return err
 	}
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: meta, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: codeRef, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: ownerRef, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
-	}})
+	})
 	if err != nil && isTransactionConditional(err) {
 		// A generated ID collision and a join-code collision are both safe to
 		// retry at the service layer. The latter is the useful public error.
@@ -1489,7 +1901,7 @@ func (s *Store) UpdateClassroom(ctx context.Context, classroomID, ownerID string
 		return classroom, nil
 	}
 	parts = append(parts, "#updated_at = :updated_at")
-	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	out, err := s.fencedUpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.TableName),
 		Key:                       classroomMetaKey(classroom.ID),
 		UpdateExpression:          aws.String("SET " + strings.Join(parts, ", ")),
@@ -1562,10 +1974,25 @@ func (s *Store) DeleteClassroom(ctx context.Context, classroomID, ownerID string
 }
 
 func (s *Store) batchDeleteKeys(ctx context.Context, keys []map[string]types.AttributeValue) error {
-	for start := 0; start < len(keys); start += 25 {
-		end := start + 25
-		if end > len(keys) {
-			end = len(keys)
+	fenced, err := s.requireMutationWriter(ctx)
+	if err != nil {
+		return err
+	}
+	chunkSize := 25
+	if fenced {
+		chunkSize = 99
+	}
+	for start := 0; start < len(keys); start += chunkSize {
+		end := min(start+chunkSize, len(keys))
+		if fenced {
+			transaction := make([]types.TransactWriteItem, 0, end-start)
+			for _, itemKey := range keys[start:end] {
+				transaction = append(transaction, types.TransactWriteItem{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: itemKey}})
+			}
+			if err := s.transactWrite(ctx, transaction); err != nil {
+				return err
+			}
+			continue
 		}
 		pending := make([]types.WriteRequest, 0, end-start)
 		for _, itemKey := range keys[start:end] {
@@ -1635,11 +2062,11 @@ func (s *Store) AddClassroomMember(ctx context.Context, member *model.ClassroomM
 		return err
 	}
 	updatedAt := iso(s.now())
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: memberItem, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Put: &types.Put{TableName: aws.String(s.TableName), Item: memberRef, ConditionExpression: aws.String("attribute_not_exists(pk)")}},
 		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) + :one, #updated_at = :updated_at"), ConditionExpression: aws.String("attribute_exists(pk)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":updated_at": &types.AttributeValueMemberS{Value: updatedAt}}}},
-	}})
+	})
 	if err != nil && isTransactionConditional(err) {
 		return ErrClassroomMember
 	}
@@ -1706,11 +2133,11 @@ func (s *Store) RemoveClassroomMember(ctx context.Context, classroomID, ownerID,
 	if memberItem == nil {
 		return ErrClassroomMemberNotFound
 	}
-	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+	err = s.transactWrite(ctx, []types.TransactWriteItem{
 		{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: classroomMemberKey(classroom.ID, userID), ConditionExpression: aws.String("attribute_exists(pk)")}},
 		{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: classroomMemberIndexKey(userID, classroom.ID)}},
 		{Update: &types.Update{TableName: aws.String(s.TableName), Key: classroomMetaKey(classroom.ID), UpdateExpression: aws.String("SET #member_count = if_not_exists(#member_count, :zero) - :one, #updated_at = :updated_at"), ConditionExpression: aws.String("attribute_exists(pk)"), ExpressionAttributeNames: map[string]string{"#member_count": "member_count", "#updated_at": "updated_at"}, ExpressionAttributeValues: map[string]types.AttributeValue{":zero": &types.AttributeValueMemberN{Value: "0"}, ":one": &types.AttributeValueMemberN{Value: "1"}, ":updated_at": &types.AttributeValueMemberS{Value: iso(s.now())}}}},
-	}})
+	})
 	if err != nil && isTransactionConditional(err) {
 		return ErrClassroomMemberNotFound
 	}
@@ -1721,36 +2148,120 @@ func (s *Store) RemoveClassroomMember(ctx context.Context, classroomID, ownerID,
 // contract useful for local development and service tests. It deliberately
 // uses the same logical keys and result semantics as DynamoDBStore.
 type MemoryStore struct {
-	mu               sync.RWMutex
-	users            map[string]*model.User
-	emails           map[string]string
-	exams            map[string]*model.Exam
-	classrooms       map[string]*model.Classroom
-	classroomCodes   map[string]string
-	classroomMembers map[string]map[string]*model.ClassroomMember
-	drafts           map[string]*model.QuizDraft
-	attempts         map[string]*model.Attempt
-	submissions      map[string]*model.Submission
-	outbox           []model.OutboxEntry
-	now              func() time.Time
-	region           string
+	mu                 sync.RWMutex
+	guardMu            sync.RWMutex
+	fenceGuard         clusterstate.FenceGuard
+	users              map[string]*model.User
+	emails             map[string]string
+	exams              map[string]*model.Exam
+	classrooms         map[string]*model.Classroom
+	classroomCodes     map[string]string
+	classroomMembers   map[string]map[string]*model.ClassroomMember
+	drafts             map[string]*model.QuizDraft
+	attempts           map[string]*model.Attempt
+	submissions        map[string]*model.Submission
+	submissionRequests map[string]memorySubmissionReceipt
+	outbox             []model.OutboxEntry
+	auditSummaries     map[string]model.AuditSummary
+	now                func() time.Time
+	region             string
+}
+
+type memorySubmissionReceipt struct {
+	payloadHash string
+	examID      string
+	studentID   string
+	result      model.SubmissionResult
+}
+
+type bootstrapWriteKey struct{}
+
+// WithBootstrap marks the small set of startup writes that are safe to run
+// before a routing writer exists. Callers must keep these writes conditional
+// and idempotent; ordinary API writes never receive this marker.
+func WithBootstrap(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, bootstrapWriteKey{}, true)
+}
+
+func isBootstrapWrite(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(bootstrapWriteKey{}).(bool)
+	return value
 }
 
 func NewMemory(region string) *MemoryStore {
 	return &MemoryStore{
-		users:            map[string]*model.User{},
-		emails:           map[string]string{},
-		exams:            map[string]*model.Exam{},
-		classrooms:       map[string]*model.Classroom{},
-		classroomCodes:   map[string]string{},
-		classroomMembers: map[string]map[string]*model.ClassroomMember{},
-		drafts:           map[string]*model.QuizDraft{},
-		attempts:         map[string]*model.Attempt{},
-		submissions:      map[string]*model.Submission{},
-		now:              time.Now,
-		region:           region,
+		users:              map[string]*model.User{},
+		emails:             map[string]string{},
+		exams:              map[string]*model.Exam{},
+		classrooms:         map[string]*model.Classroom{},
+		classroomCodes:     map[string]string{},
+		classroomMembers:   map[string]map[string]*model.ClassroomMember{},
+		drafts:             map[string]*model.QuizDraft{},
+		attempts:           map[string]*model.Attempt{},
+		submissions:        map[string]*model.Submission{},
+		submissionRequests: map[string]memorySubmissionReceipt{},
+		auditSummaries:     map[string]model.AuditSummary{},
+		now:                time.Now,
+		region:             region,
 	}
 }
+
+// SetFenceGuard installs the control-plane guard used to serialize in-memory
+// exam mutations with promotion. A configured guard requires every writer to
+// carry a validated backend and epoch in its context.
+func (m *MemoryStore) SetFenceGuard(guard clusterstate.FenceGuard) {
+	m.guardMu.Lock()
+	m.fenceGuard = guard
+	m.guardMu.Unlock()
+}
+
+func (m *MemoryStore) withFence(ctx context.Context, fn func() error) error {
+	m.guardMu.RLock()
+	guard := m.fenceGuard
+	m.guardMu.RUnlock()
+	writer, hasWriter, writerErr := writerFromContext(ctx)
+	if writerErr != nil {
+		return writerErr
+	}
+	if guard == nil {
+		if hasWriter {
+			return clusterstate.ErrFenced
+		}
+		return fn()
+	}
+	if !hasWriter {
+		if isBootstrapWrite(ctx) {
+			return fn()
+		}
+		return clusterstate.ErrFenced
+	}
+	return guard.WithFence(ctx, writer, fn)
+}
+
+func withMemoryFence[T any](m *MemoryStore, ctx context.Context, fn func() (T, error)) (T, error) {
+	var result T
+	err := m.withFence(ctx, func() error {
+		var err error
+		result, err = fn()
+		return err
+	})
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return result, nil
+}
+
+func withMemoryFenceError(m *MemoryStore, ctx context.Context, fn func() error) error {
+	return m.withFence(ctx, fn)
+}
+
 func (m *MemoryStore) GetUser(_ context.Context, id string) (*model.User, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1766,7 +2277,11 @@ func (m *MemoryStore) FindUserIDByEmail(_ context.Context, email string) (string
 	defer m.mu.RUnlock()
 	return m.emails[strings.ToLower(strings.TrimSpace(email))], nil
 }
-func (m *MemoryStore) CreateUser(_ context.Context, u *model.User, hash string) error {
+func (m *MemoryStore) CreateUser(ctx context.Context, u *model.User, hash string) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.createUser(u, hash) })
+}
+
+func (m *MemoryStore) createUser(u *model.User, hash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.emails[u.Email]; ok {
@@ -1795,7 +2310,11 @@ func cloneClassroomMember(member *model.ClassroomMember) *model.ClassroomMember 
 	return &v
 }
 
-func (m *MemoryStore) CreateClassroom(_ context.Context, classroom *model.Classroom) error {
+func (m *MemoryStore) CreateClassroom(ctx context.Context, classroom *model.Classroom) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.createClassroom(classroom) })
+}
+
+func (m *MemoryStore) createClassroom(classroom *model.Classroom) error {
 	if classroom == nil {
 		return fmt.Errorf("classroom is required")
 	}
@@ -1908,7 +2427,11 @@ func (m *MemoryStore) FindClassroomByJoinCode(_ context.Context, joinCode string
 	return cloneClassroom(m.classrooms[id]), nil
 }
 
-func (m *MemoryStore) UpdateClassroom(_ context.Context, classroomID, ownerID string, patch model.ClassroomPatch) (*model.Classroom, error) {
+func (m *MemoryStore) UpdateClassroom(ctx context.Context, classroomID, ownerID string, patch model.ClassroomPatch) (*model.Classroom, error) {
+	return withMemoryFence(m, ctx, func() (*model.Classroom, error) { return m.updateClassroom(classroomID, ownerID, patch) })
+}
+
+func (m *MemoryStore) updateClassroom(classroomID, ownerID string, patch model.ClassroomPatch) (*model.Classroom, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	classroom := m.classrooms[strings.TrimSpace(classroomID)]
@@ -1928,7 +2451,11 @@ func (m *MemoryStore) UpdateClassroom(_ context.Context, classroomID, ownerID st
 	return cloneClassroom(classroom), nil
 }
 
-func (m *MemoryStore) DeleteClassroom(_ context.Context, classroomID, ownerID string) error {
+func (m *MemoryStore) DeleteClassroom(ctx context.Context, classroomID, ownerID string) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.deleteClassroom(classroomID, ownerID) })
+}
+
+func (m *MemoryStore) deleteClassroom(classroomID, ownerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	classroom := m.classrooms[strings.TrimSpace(classroomID)]
@@ -1944,7 +2471,11 @@ func (m *MemoryStore) DeleteClassroom(_ context.Context, classroomID, ownerID st
 	return nil
 }
 
-func (m *MemoryStore) AddClassroomMember(_ context.Context, member *model.ClassroomMember) error {
+func (m *MemoryStore) AddClassroomMember(ctx context.Context, member *model.ClassroomMember) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.addClassroomMember(member) })
+}
+
+func (m *MemoryStore) addClassroomMember(member *model.ClassroomMember) error {
 	if member == nil {
 		return fmt.Errorf("classroom member is required")
 	}
@@ -2013,7 +2544,11 @@ func (m *MemoryStore) IsClassroomMember(_ context.Context, classroomID, userID s
 	return ok, nil
 }
 
-func (m *MemoryStore) RemoveClassroomMember(_ context.Context, classroomID, ownerID, userID string) error {
+func (m *MemoryStore) RemoveClassroomMember(ctx context.Context, classroomID, ownerID, userID string) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.removeClassroomMember(classroomID, ownerID, userID) })
+}
+
+func (m *MemoryStore) removeClassroomMember(classroomID, ownerID, userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	classroom := m.classrooms[strings.TrimSpace(classroomID)]
@@ -2036,9 +2571,34 @@ func (m *MemoryStore) RemoveClassroomMember(_ context.Context, classroomID, owne
 	return nil
 }
 
-func (m *MemoryStore) EnsureExam(_ context.Context, id, title string, qs []model.Question, w map[string]any) error {
+func (m *MemoryStore) EnsureExam(ctx context.Context, id, title string, qs []model.Question, w map[string]any) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.ensureExam(id, title, qs, w) })
+}
+
+func (m *MemoryStore) ensureExam(id, title string, qs []model.Question, w map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureExamLocked(id, title, qs, w)
+	return nil
+}
+
+// EnsureExamIfMissing mirrors the atomic create-only behavior of the
+// DynamoDB implementation for the local harness.
+func (m *MemoryStore) EnsureExamIfMissing(ctx context.Context, id, title string, qs []model.Question, w map[string]any) error {
+	return withMemoryFenceError(m, ctx, func() error { return m.ensureExamIfMissing(id, title, qs, w) })
+}
+
+func (m *MemoryStore) ensureExamIfMissing(id, title string, qs []model.Question, w map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.exams[id] != nil {
+		return nil
+	}
+	m.ensureExamLocked(id, title, qs, w)
+	return nil
+}
+
+func (m *MemoryStore) ensureExamLocked(id, title string, qs []model.Question, w map[string]any) {
 	if m.exams == nil {
 		m.exams = map[string]*model.Exam{}
 	}
@@ -2068,7 +2628,6 @@ func (m *MemoryStore) EnsureExam(_ context.Context, id, title string, qs []model
 		v.Questions = append(v.Questions, q)
 	}
 	m.exams[id] = v
-	return nil
 }
 
 func toBool(v any) bool {
@@ -2082,7 +2641,11 @@ func toBool(v any) bool {
 	}
 }
 
-func (m *MemoryStore) CreateQuizDraft(_ context.Context, draft *model.QuizDraft) (*model.QuizDraft, error) {
+func (m *MemoryStore) CreateQuizDraft(ctx context.Context, draft *model.QuizDraft) (*model.QuizDraft, error) {
+	return withMemoryFence(m, ctx, func() (*model.QuizDraft, error) { return m.createQuizDraft(draft) })
+}
+
+func (m *MemoryStore) createQuizDraft(draft *model.QuizDraft) (*model.QuizDraft, error) {
 	if draft == nil || strings.TrimSpace(draft.ID) == "" || strings.TrimSpace(draft.OwnerID) == "" {
 		return nil, fmt.Errorf("quiz draft id and owner are required")
 	}
@@ -2148,7 +2711,11 @@ func (m *MemoryStore) ListQuizDrafts(_ context.Context, ownerID string, limit in
 	return rows, nil
 }
 
-func (m *MemoryStore) UpdateQuizDraft(_ context.Context, ownerID string, draft *model.QuizDraft) (*model.QuizDraft, error) {
+func (m *MemoryStore) UpdateQuizDraft(ctx context.Context, ownerID string, draft *model.QuizDraft) (*model.QuizDraft, error) {
+	return withMemoryFence(m, ctx, func() (*model.QuizDraft, error) { return m.updateQuizDraft(ownerID, draft) })
+}
+
+func (m *MemoryStore) updateQuizDraft(ownerID string, draft *model.QuizDraft) (*model.QuizDraft, error) {
 	if draft == nil {
 		return nil, fmt.Errorf("quiz draft is required")
 	}
@@ -2178,7 +2745,11 @@ func (m *MemoryStore) UpdateQuizDraft(_ context.Context, ownerID string, draft *
 	return cloneDraft(&value), nil
 }
 
-func (m *MemoryStore) DeleteQuizDraft(_ context.Context, id, ownerID string) (bool, error) {
+func (m *MemoryStore) DeleteQuizDraft(ctx context.Context, id, ownerID string) (bool, error) {
+	return withMemoryFence(m, ctx, func() (bool, error) { return m.deleteQuizDraft(id, ownerID) })
+}
+
+func (m *MemoryStore) deleteQuizDraft(id, ownerID string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	draft := m.drafts[strings.TrimSpace(id)]
@@ -2195,7 +2766,11 @@ func (m *MemoryStore) DeleteQuizDraft(_ context.Context, id, ownerID string) (bo
 	return true, nil
 }
 
-func (m *MemoryStore) PublishQuizDraft(_ context.Context, id, ownerID string) (*model.ExamMeta, error) {
+func (m *MemoryStore) PublishQuizDraft(ctx context.Context, id, ownerID string) (*model.ExamMeta, error) {
+	return withMemoryFence(m, ctx, func() (*model.ExamMeta, error) { return m.publishQuizDraft(id, ownerID) })
+}
+
+func (m *MemoryStore) publishQuizDraft(id, ownerID string) (*model.ExamMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	draft := m.drafts[strings.TrimSpace(id)]
@@ -2305,7 +2880,11 @@ func (m *MemoryStore) GetExam(_ context.Context, id string, include bool) (*mode
 	return &v, nil
 }
 
-func (m *MemoryStore) UpdateExamWindow(_ context.Context, id string, title *string, window map[string]any) (*model.ExamMeta, error) {
+func (m *MemoryStore) UpdateExamWindow(ctx context.Context, id string, title *string, window map[string]any) (*model.ExamMeta, error) {
+	return withMemoryFence(m, ctx, func() (*model.ExamMeta, error) { return m.updateExamWindow(id, title, window) })
+}
+
+func (m *MemoryStore) updateExamWindow(id string, title *string, window map[string]any) (*model.ExamMeta, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.exams[id]
@@ -2356,7 +2935,11 @@ func (m *MemoryStore) ListExams(_ context.Context, limit int) ([]model.ExamMeta,
 	return rows, nil
 }
 
-func (m *MemoryStore) DeleteExam(_ context.Context, id string) (int, error) {
+func (m *MemoryStore) DeleteExam(ctx context.Context, id string) (int, error) {
+	return withMemoryFence(m, ctx, func() (int, error) { return m.deleteExam(id) })
+}
+
+func (m *MemoryStore) deleteExam(id string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.exams[id]
@@ -2409,19 +2992,26 @@ func (m *MemoryStore) HeartbeatProbe(_ context.Context, _ string) (bool, float64
 func (m *MemoryStore) LatestReplicatedTS(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
-func (m *MemoryStore) RecordAttemptStart(_ context.Context, e, id string) (*model.Attempt, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	k := e + "/" + id
-	if a := m.attempts[k]; a != nil {
-		v := *a
-		return &v, nil
-	}
-	t := m.now()
-	a := &model.Attempt{PK: "ATTEMPT#" + e, SK: "STUDENT#" + id, StartedAt: t.UnixMilli(), StartedAtISO: iso(t)}
-	m.attempts[k] = a
-	v := *a
-	return &v, nil
+func (m *MemoryStore) RecordAttemptStart(ctx context.Context, e, id string) (*model.Attempt, error) {
+	var result *model.Attempt
+	err := m.withFence(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.attempts == nil {
+			m.attempts = map[string]*model.Attempt{}
+		}
+		k := e + "/" + id
+		if a := m.attempts[k]; a != nil {
+			result = cloneAttempt(a)
+			return nil
+		}
+		t := m.now()
+		a := &model.Attempt{PK: "ATTEMPT#" + e, SK: "STUDENT#" + id, AttemptNumber: 1, StartedAt: t.UnixMilli(), StartedAtISO: iso(t)}
+		m.attempts[k] = a
+		result = cloneAttempt(a)
+		return nil
+	})
+	return result, err
 }
 func (m *MemoryStore) AttemptDeadline(_ context.Context, e, id string) (*model.Attempt, *int64, error) {
 	m.mu.RLock()
@@ -2443,52 +3033,61 @@ func (m *MemoryStore) GetStudentAttempt(_ context.Context, examID, studentID str
 	if attempt == nil {
 		return nil, nil
 	}
-	value := *attempt
-	value.Answers = cloneAnswers(attempt.Answers)
-	return &value, nil
+	return cloneAttempt(attempt), nil
 }
 
-func (m *MemoryStore) SaveAttempt(_ context.Context, examID, studentID string, answers map[string]int, expectedVersion int, requestID string) (*model.Attempt, error) {
+func (m *MemoryStore) SaveAttempt(ctx context.Context, examID, studentID string, answers map[string]int, expectedVersion int, requestID string) (*model.Attempt, error) {
 	if requestID == "" {
 		return nil, fmt.Errorf("request_id is required")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.attempts == nil {
-		m.attempts = map[string]*model.Attempt{}
-	}
-	key := examID + "/" + studentID
-	attempt := m.attempts[key]
+	var result *model.Attempt
+	err := m.withFence(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.attempts == nil {
+			m.attempts = map[string]*model.Attempt{}
+		}
+		key := examID + "/" + studentID
+		attempt := m.attempts[key]
+		if attempt == nil {
+			now := m.now()
+			attempt = &model.Attempt{PK: "ATTEMPT#" + examID, SK: "STUDENT#" + studentID, AttemptNumber: 1, StartedAt: now.UnixMilli(), StartedAtISO: iso(now)}
+			m.attempts[key] = attempt
+		}
+		if attempt.LastRequestID == requestID {
+			result = cloneAttempt(attempt)
+			return nil
+		}
+		if _, exists := m.submissions[key]; exists {
+			return ErrAttemptSubmitted
+		}
+		if attempt.Submitted {
+			return ErrAttemptSubmitted
+		}
+		if attempt.Version != expectedVersion {
+			return ErrAttemptConflict
+		}
+		attempt.Answers = cloneAnswers(answers)
+		attempt.Version++
+		attempt.LastRequestID = requestID
+		attempt.UpdatedAt = m.now().UnixMilli()
+		attempt.UpdatedAtISO = iso(m.now())
+		if attempt.AttemptNumber <= 0 {
+			attempt.AttemptNumber = 1
+		}
+		result = cloneAttempt(attempt)
+		return nil
+	})
+	return result, err
+}
+
+func cloneAttempt(attempt *model.Attempt) *model.Attempt {
 	if attempt == nil {
-		now := m.now()
-		attempt = &model.Attempt{PK: "ATTEMPT#" + examID, SK: "STUDENT#" + studentID, AttemptNumber: 1, StartedAt: now.UnixMilli(), StartedAtISO: iso(now)}
-		m.attempts[key] = attempt
-	}
-	if attempt.LastRequestID == requestID {
-		value := *attempt
-		value.Answers = cloneAnswers(attempt.Answers)
-		return &value, nil
-	}
-	if _, exists := m.submissions[key]; exists {
-		return nil, ErrAttemptSubmitted
-	}
-	if attempt.Submitted {
-		return nil, ErrAttemptSubmitted
-	}
-	if attempt.Version != expectedVersion {
-		return nil, ErrAttemptConflict
-	}
-	attempt.Answers = cloneAnswers(answers)
-	attempt.Version++
-	attempt.LastRequestID = requestID
-	attempt.UpdatedAt = m.now().UnixMilli()
-	attempt.UpdatedAtISO = iso(m.now())
-	if attempt.AttemptNumber <= 0 {
-		attempt.AttemptNumber = 1
+		return nil
 	}
 	value := *attempt
 	value.Answers = cloneAnswers(attempt.Answers)
-	return &value, nil
+	return &value
 }
 
 func (m *MemoryStore) GradeAttempt(_ context.Context, e string, ans map[string]int) (int, int, error) {
@@ -2508,43 +3107,165 @@ func (m *MemoryStore) GradeAttempt(_ context.Context, e string, ans map[string]i
 	}
 	return score, total, nil
 }
-func (m *MemoryStore) SubmitAttempt(_ context.Context, e, id, name string, ans map[string]int, req string) (model.SubmissionResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *MemoryStore) FindSubmissionRequest(_ context.Context, examID, studentID string, answers map[string]int, requestID string) (model.SubmissionResult, bool, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return model.SubmissionResult{}, false, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	receipt, exists := m.submissionRequests[requestID]
+	if !exists {
+		return model.SubmissionResult{}, false, nil
+	}
+	if receipt.payloadHash != submissionPayloadHash(examID, studentID, answers) {
+		return model.SubmissionResult{}, false, ErrSubmissionRequestConflict
+	}
+	result := receipt.result
+	result.Status = "duplicate"
+	return result, true, nil
+}
+
+func (m *MemoryStore) SubmitAttempt(ctx context.Context, e, id, name string, ans map[string]int, req string) (model.SubmissionResult, error) {
 	if req == "" {
 		req = newID()
 	}
-	k := e + "/" + id
-	if old := m.submissions[k]; old != nil {
-		if old.RequestID == req {
-			return model.SubmissionResult{Status: "duplicate", RequestID: req, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total}, nil
+	payloadHash := submissionPayloadHash(e, id, ans)
+	var result model.SubmissionResult
+	err := m.withFence(ctx, func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.submissions == nil {
+			m.submissions = map[string]*model.Submission{}
 		}
-		return model.SubmissionResult{}, ErrSubmissionConflict
-	}
-	ex := m.exams[e]
-	score, total := 0, 0
-	attemptNumber := 1
-	if ex != nil {
-		if attempt := m.attempts[k]; attempt != nil && attempt.AttemptNumber > 0 {
-			attemptNumber = attempt.AttemptNumber
+		if m.submissionRequests == nil {
+			m.submissionRequests = map[string]memorySubmissionReceipt{}
 		}
-		for _, q := range ex.Questions {
-			points := effectivePoints(q.Points)
-			total += points
-			if a, ok := ans[strconv.Itoa(q.Index)]; ok && a == q.Answer {
-				score += points
+		k := e + "/" + id
+		if previous, exists := m.submissionRequests[req]; exists {
+			if previous.payloadHash != payloadHash {
+				return ErrSubmissionRequestConflict
+			}
+			result = previous.result
+			result.Status = "duplicate"
+			return nil
+		}
+		if old := m.submissions[k]; old != nil {
+			if old.RequestID == req {
+				oldHash := old.PayloadHash
+				if oldHash == "" {
+					oldHash = submissionPayloadHash(e, id, old.Answers)
+				}
+				if oldHash == payloadHash {
+					result = model.SubmissionResult{Status: "duplicate", RequestID: req, Version: old.Version, CommittedAt: old.UpdatedAt, Score: old.Score, Total: old.Total, AttemptNumber: old.AttemptNumber}
+					return nil
+				}
+				return ErrSubmissionRequestConflict
+			}
+			return ErrSubmissionConflict
+		}
+		ex := m.exams[e]
+		score, total := 0, 0
+		attemptNumber := 1
+		if ex != nil {
+			for _, q := range ex.Questions {
+				points := effectivePoints(q.Points)
+				total += points
+				if a, ok := ans[strconv.Itoa(q.Index)]; ok && a == q.Answer {
+					score += points
+				}
 			}
 		}
-	}
-	t := m.now()
-	sub := &model.Submission{PK: "SUBMISSION#" + e, SK: "STUDENT#" + id, RequestID: req, Version: 1, UpdatedAt: t.UnixMilli(), UpdatedAtISO: iso(t), WrittenByRegion: m.region, Answers: cloneAnswers(ans), StudentName: name, AttemptNumber: attemptNumber, Score: score, Total: total}
-	m.submissions[k] = sub
-	m.outbox = append(m.outbox, model.OutboxEntry{PK: "JOURNAL#" + req, SK: "OUTBOX", TargetPK: sub.PK, TargetSK: sub.SK, Version: 1, RequestID: req, CreatedAt: t.UnixMilli(), Answers: cloneAnswers(ans), StudentName: name, Score: score, Total: total, TTL: t.Unix() + 7*24*3600})
-	if attempt := m.attempts[k]; attempt != nil {
+		attempt := m.attempts[k]
+		if attempt != nil {
+			if attempt.Submitted {
+				return ErrAttemptSubmitted
+			}
+			attempt = cloneAttempt(attempt)
+			if attempt.AttemptNumber > 0 {
+				attemptNumber = attempt.AttemptNumber
+			}
+		} else {
+			now := m.now()
+			attempt = &model.Attempt{PK: "ATTEMPT#" + e, SK: "STUDENT#" + id, AttemptNumber: 1, StartedAt: now.UnixMilli(), StartedAtISO: iso(now)}
+		}
+		t := m.now()
+		attempt.Answers = cloneAnswers(ans)
+		attempt.Version++
 		attempt.Submitted = true
 		attempt.SubmittedAt = t.UnixMilli()
+		attempt.UpdatedAt = t.UnixMilli()
+		attempt.UpdatedAtISO = iso(t)
+		m.attempts[k] = attempt
+		sub := &model.Submission{PK: "SUBMISSION#" + e, SK: "STUDENT#" + id, RequestID: req, PayloadHash: payloadHash, Version: 1, UpdatedAt: t.UnixMilli(), UpdatedAtISO: iso(t), WrittenByRegion: m.region, Answers: cloneAnswers(ans), StudentName: name, AttemptNumber: attemptNumber, Score: score, Total: total}
+		m.submissions[k] = sub
+		m.outbox = append(m.outbox, model.OutboxEntry{PK: "JOURNAL#" + req, SK: "OUTBOX", TargetPK: sub.PK, TargetSK: sub.SK, Version: 1, RequestID: req, CreatedAt: t.UnixMilli(), Answers: cloneAnswers(ans), StudentName: name, AttemptNumber: attemptNumber, Score: score, Total: total, TTL: t.Unix() + 7*24*3600})
+		result = model.SubmissionResult{Status: "committed", RequestID: req, Version: 1, CommittedAt: t.UnixMilli(), Score: score, Total: total, AttemptNumber: attemptNumber}
+		m.submissionRequests[req] = memorySubmissionReceipt{payloadHash: payloadHash, examID: e, studentID: id, result: result}
+		return nil
+	})
+	return result, err
+}
+
+// ReconcileOutbox creates one answer-free audit summary per committed request
+// and marks its outbox entry processed under the same mutex. Missing or
+// mismatched canonical submissions remain pending for later investigation.
+func (m *MemoryStore) ReconcileOutbox(ctx context.Context) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
-	return model.SubmissionResult{Status: "committed", RequestID: req, Version: 1, Score: score, Total: total, AttemptNumber: attemptNumber}, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.auditSummaries == nil {
+		m.auditSummaries = map[string]model.AuditSummary{}
+	}
+	count := 0
+	for index := range m.outbox {
+		entry := &m.outbox[index]
+		if entry.Processed {
+			continue
+		}
+		if entry.RequestID == "" || entry.TargetPK == "" || entry.TargetSK == "" {
+			continue
+		}
+		var canonical *model.Submission
+		for _, submission := range m.submissions {
+			if submission.PK == entry.TargetPK && submission.SK == entry.TargetSK {
+				canonical = submission
+				break
+			}
+		}
+		if canonical == nil || canonical.RequestID != entry.RequestID {
+			continue
+		}
+		if summary, exists := m.auditSummaries[entry.RequestID]; exists {
+			if summary.TargetPK == entry.TargetPK && summary.TargetSK == entry.TargetSK {
+				entry.Processed = true
+			}
+			continue
+		}
+		m.auditSummaries[entry.RequestID] = model.AuditSummary{
+			RequestID: entry.RequestID, TargetPK: entry.TargetPK, TargetSK: entry.TargetSK,
+			ProcessedAt: m.now().UTC().Format(time.RFC3339Nano), Score: entry.Score, Total: entry.Total,
+		}
+		entry.Processed = true
+		count++
+	}
+	return count, nil
+}
+
+// ListAuditSummaries returns answer-free summaries created by ReconcileOutbox.
+func (m *MemoryStore) ListAuditSummaries(_ context.Context, limit int) ([]model.AuditSummary, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rows := make([]model.AuditSummary, 0, len(m.auditSummaries))
+	for _, summary := range m.auditSummaries {
+		rows = append(rows, summary)
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].ProcessedAt < rows[j].ProcessedAt })
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
 func (m *MemoryStore) GetSubmission(_ context.Context, e, id string) (*model.Submission, error) {
 	m.mu.RLock()

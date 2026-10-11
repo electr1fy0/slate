@@ -1,6 +1,8 @@
 import { clearAuth, getAccessToken, getRefreshToken, setAuth } from "./auth"
 import type {
   AdminStatus,
+  ContinuumAction,
+  ContinuumStatus,
   BoardElement,
   Exam,
   ExamDraft,
@@ -14,7 +16,11 @@ import type {
   SubmitResult,
 } from "./types"
 
-const BASE = "/api"
+const BASE = (
+  import.meta.env.VITE_API_ORIGIN ??
+  import.meta.env.VITE_API_BASE_URL ??
+  "/api"
+).replace(/\/$/, "")
 
 export class ApiError extends Error {
   status: number
@@ -278,6 +284,17 @@ export const api = {
     headers: adminHeaders(token),
   }),
 
+  continuumStatus: (token: string) => request<ContinuumStatus>("/continuum/status", {
+    headers: adminHeaders(token),
+  }),
+
+  continuumAction: (token: string, action: ContinuumAction, backend?: string) =>
+    request<ContinuumStatus | Record<string, unknown>>("/continuum/action", {
+      method: "POST",
+      headers: adminHeaders(token),
+      body: JSON.stringify({ action, ...(backend ? { backend } : {}) }),
+    }),
+
   setChaos: (
     token: string,
     payload: { error_pct?: number; latency_ms?: number; db_stall?: boolean },
@@ -304,4 +321,15 @@ export function boardSocketUrl(roomId: string, token: string | null): string {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws"
   const query = token ? `?token=${encodeURIComponent(token)}` : ""
   return `${scheme}://${window.location.host}/ws/board/${encodeURIComponent(roomId)}${query}`
+}
+
+export function hasExternalApiOrigin(
+  apiBase = BASE,
+  appOrigin = window.location.origin
+): boolean {
+  try {
+    return new URL(apiBase, appOrigin).origin !== new URL(appOrigin).origin
+  } catch {
+    return false
+  }
 }
