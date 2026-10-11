@@ -1,10 +1,15 @@
 import { useSyncExternalStore } from "react"
 
 import { api } from "./api"
-import type { ClassroomMemberRecord, ClassroomRecord } from "./api"
+import type {
+  ClassroomInvitation,
+  ClassroomMemberRecord,
+  ClassroomRecord,
+} from "./api"
+import { getAuth } from "./auth"
 import type { Role } from "./types"
 
-export type ClassroomMemberStatus = "active" | "invited"
+export type ClassroomMemberStatus = "active" | "invited" | "pending"
 
 export interface ClassroomMember {
   id: string
@@ -22,6 +27,8 @@ export interface Classroom {
   join_code: string
   created_at: string
   members: ClassroomMember[]
+  invitations?: ClassroomInvitation[]
+  sync_state?: "pending" | "synced" | "error"
   active_room_id?: string
 }
 
@@ -38,9 +45,19 @@ const SELECTED_KEY = "slate.selected-classroom"
 const MAX_CLASSROOMS = 20
 const SERVER_SNAPSHOT: Classroom[] = []
 
-let classroomCache: Classroom[] | null = null
-let selectedClassroomCache: string | null | undefined
+const classroomCache = new Map<string, Classroom[]>()
+const selectedClassroomCache = new Map<string, string | null>()
 const listeners = new Set<() => void>()
+
+function accountScope(): string {
+  return getAuth().user?.user_id ?? "anonymous"
+}
+
+function scopedKey(base: string, account = accountScope()): string {
+  return account === "anonymous"
+    ? base
+    : `${base}.${encodeURIComponent(account)}`
+}
 
 function nowIso(): string {
   return new Date().toISOString()
@@ -54,10 +71,10 @@ function randomId(prefix: string): string {
   return `${prefix}-${suffix}`
 }
 
-function readClassrooms(): Classroom[] {
+function readClassrooms(account = accountScope()): Classroom[] {
   if (typeof window === "undefined") return []
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(scopedKey(STORAGE_KEY, account))
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
@@ -90,28 +107,40 @@ function isMember(value: unknown): value is ClassroomMember {
     typeof candidate.name === "string" &&
     typeof candidate.email === "string" &&
     (candidate.role === "teacher" || candidate.role === "student") &&
-    (candidate.status === "active" || candidate.status === "invited") &&
+    (candidate.status === "active" ||
+      candidate.status === "invited" ||
+      candidate.status === "pending") &&
     typeof candidate.joined_at === "string"
   )
 }
 
-function readSelectedClassroom(): string | null {
+function readSelectedClassroom(account = accountScope()): string | null {
   if (typeof window === "undefined") return null
   try {
-    return window.localStorage.getItem(SELECTED_KEY)
+    return window.localStorage.getItem(scopedKey(SELECTED_KEY, account))
   } catch {
     return null
   }
 }
 
+function classroomSnapshot(account: string): Classroom[] {
+  if (!classroomCache.has(account))
+    classroomCache.set(account, readClassrooms(account))
+  return classroomCache.get(account) ?? []
+}
+
 function getClassroomSnapshot(): Classroom[] {
-  classroomCache ??= readClassrooms()
-  return classroomCache
+  return classroomSnapshot(accountScope())
+}
+
+function selectedSnapshot(account: string): string | null {
+  if (!selectedClassroomCache.has(account))
+    selectedClassroomCache.set(account, readSelectedClassroom(account))
+  return selectedClassroomCache.get(account) ?? null
 }
 
 function getSelectedSnapshot(): string | null {
-  selectedClassroomCache ??= readSelectedClassroom()
-  return selectedClassroomCache
+  return selectedSnapshot(accountScope())
 }
 
 function getServerClassrooms(): Classroom[] {
@@ -131,21 +160,25 @@ function notify(): void {
   for (const listener of listeners) listener()
 }
 
-function persistClassrooms(next: Classroom[]): void {
-  classroomCache = next.slice(0, MAX_CLASSROOMS)
+function persistClassrooms(next: Classroom[], account = accountScope()): void {
+  const snapshot = next.slice(0, MAX_CLASSROOMS)
+  classroomCache.set(account, snapshot)
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(classroomCache))
+    window.localStorage.setItem(
+      scopedKey(STORAGE_KEY, account),
+      JSON.stringify(snapshot)
+    )
   } catch {
     // Keep the in-memory workspace usable when storage is blocked or full.
   }
   notify()
 }
 
-function persistSelected(id: string | null): void {
-  selectedClassroomCache = id
+function persistSelected(id: string | null, account = accountScope()): void {
+  selectedClassroomCache.set(account, id)
   try {
-    if (id) window.localStorage.setItem(SELECTED_KEY, id)
-    else window.localStorage.removeItem(SELECTED_KEY)
+    if (id) window.localStorage.setItem(scopedKey(SELECTED_KEY, account), id)
+    else window.localStorage.removeItem(scopedKey(SELECTED_KEY, account))
   } catch {
     // Selection is still available for the current session.
   }
@@ -155,20 +188,29 @@ function persistSelected(id: string | null): void {
 function fromServer(
   record: ClassroomRecord,
   previous?: Classroom,
-  members: ClassroomMember[] = previous?.members ?? [],
+  members: ClassroomMember[] = previous?.members ?? []
 ): Classroom {
   return {
     id: record.id,
     name: record.name,
-    subject: previous?.subject || record.description || "General studies",
-    join_code: record.join_code || previous?.join_code || "",
+    subject:
+      record.description === undefined
+        ? (previous?.subject ?? "General studies")
+        : record.description.trim(),
+    join_code: record.join_code ?? "",
     created_at: record.created_at || previous?.created_at || nowIso(),
     members,
+    invitations: previous?.invitations ?? [],
+    sync_state: "synced",
     active_room_id: previous?.active_room_id,
   }
 }
 
-function membersFromServer(rows: ClassroomMemberRecord[], previous: Classroom | undefined): ClassroomMember[] {
+function membersFromServer(
+  rows: ClassroomMemberRecord[],
+  previous: Classroom | undefined,
+  invitations: ClassroomInvitation[] = previous?.invitations ?? []
+): ClassroomMember[] {
   const owner = previous?.members.find((member) => member.role === "teacher")
   const members: ClassroomMember[] = rows.map((member) => ({
     id: member.user_id,
@@ -178,90 +220,406 @@ function membersFromServer(rows: ClassroomMemberRecord[], previous: Classroom | 
     status: "active" as const,
     joined_at: member.joined_at,
   }))
-  if (owner && !members.some((member) => member.id === owner.id)) members.unshift(owner)
+  if (owner && !members.some((member) => member.id === owner.id))
+    members.unshift(owner)
+  for (const invitation of invitations.filter(
+    (item) => item.status === "pending"
+  )) {
+    if (
+      members.some(
+        (member) =>
+          member.email.toLowerCase() === invitation.email.toLowerCase()
+      )
+    )
+      continue
+    members.push({
+      id: invitation.id,
+      name: invitation.name,
+      email: invitation.email,
+      role: "student",
+      status: "pending",
+      joined_at: invitation.created_at,
+    })
+  }
   return members
 }
 
 export function mergeJoinedMember(
   members: ClassroomMember[],
   nextMember: ClassroomMember,
-  email?: string,
+  email?: string
 ): ClassroomMember[] {
-  return members.some((item) => item.id === nextMember.id || (email && item.email === email))
-    ? members.map((item) => (item.id === nextMember.id || (email && item.email === email) ? { ...item, status: "active" as const } : item))
+  return members.some(
+    (item) => item.id === nextMember.id || (email && item.email === email)
+  )
+    ? members.map((item) =>
+        item.id === nextMember.id || (email && item.email === email)
+          ? { ...item, status: "active" as const }
+          : item
+      )
     : [...members, nextMember]
 }
 
-function replaceClassroom(previousId: string, next: Classroom): Classroom {
-  persistClassrooms([next, ...getClassroomSnapshot().filter((item) => item.id !== previousId && item.id !== next.id)])
-  if (getSelectedSnapshot() === previousId) persistSelected(next.id)
+function replaceClassroom(
+  previousId: string,
+  next: Classroom,
+  account = accountScope()
+): Classroom {
+  const current = classroomSnapshot(account)
+  persistClassrooms(
+    [
+      next,
+      ...current.filter(
+        (item) => item.id !== previousId && item.id !== next.id
+      ),
+    ],
+    account
+  )
+  if (selectedSnapshot(account) === previousId)
+    persistSelected(next.id, account)
   return next
 }
 
-export async function syncClassroomsFromApi(): Promise<void> {
+export async function syncClassroomsFromApi(): Promise<boolean> {
+  const account = accountScope()
   try {
     const records = await api.listClassrooms()
-    const local = getClassroomSnapshot()
+    if (accountScope() !== account) return false
+    const local = classroomSnapshot(account)
     const remoteIds = new Set(records.map((record) => record.id))
+    const adoptedLocalIds = new Set<string>()
+    const mapped = records.map((record) => {
+      const exact = local.find((item) => item.id === record.id)
+      const pendingMatch =
+        !exact && record.owner_id === getAuth().user?.user_id
+          ? local.find(
+              (item) =>
+                (item.sync_state === "pending" ||
+                  item.sync_state === "error") &&
+                item.name.trim().toLocaleLowerCase() ===
+                  record.name.trim().toLocaleLowerCase() &&
+                item.subject.trim().toLocaleLowerCase() ===
+                  (record.description ?? "General studies")
+                    .trim()
+                    .toLocaleLowerCase()
+            )
+          : undefined
+      if (pendingMatch) {
+        adoptedLocalIds.add(pendingMatch.id)
+        if (selectedSnapshot(account) === pendingMatch.id)
+          persistSelected(record.id, account)
+      }
+      return fromServer(record, exact ?? pendingMatch)
+    })
     const merged = [
-      ...records.map((record) => fromServer(record, local.find((item) => item.id === record.id))),
-      ...local.filter((item) => !remoteIds.has(item.id)),
+      ...mapped,
+      ...local.filter(
+        (item) =>
+          !remoteIds.has(item.id) &&
+          !adoptedLocalIds.has(item.id) &&
+          (item.sync_state === "pending" || item.sync_state === "error")
+      ),
     ]
-    persistClassrooms(merged)
-  } catch {
-    // Offline-first fallback: keep local classes available when the API is down.
-  }
-}
-
-export async function createClassroomOnServer(local: Classroom): Promise<Classroom | null> {
-  try {
-    const remote = await api.createClassroom({ name: local.name, description: local.subject })
-    return replaceClassroom(local.id, fromServer(remote, local, local.members))
-  } catch {
-    return null
-  }
-}
-
-export async function joinClassroomOnServer(code: string, member: MemberInput): Promise<Classroom | null> {
-  try {
-    const remote = await api.joinClassroom(code)
-    const existing = getClassroom(remote.id)
-    const email = member.email?.trim().toLowerCase()
-    const nextMember = memberFromInput({ ...member, email, role: "student", status: "active" })
-    const members = existing?.members ?? []
-    const mergedMembers = mergeJoinedMember(members, nextMember, email)
-    const next = fromServer(remote, existing ?? undefined, mergedMembers)
-    persistClassrooms([next, ...getClassroomSnapshot().filter((item) => item.id !== next.id)])
-    persistSelected(next.id)
-    return next
-  } catch {
-    return null
-  }
-}
-
-export async function syncClassroomRosterFromApi(classroomId: string): Promise<Classroom | null> {
-  try {
-    const rows = await api.classroomRoster(classroomId)
-    const classroom = getClassroom(classroomId)
-    if (!classroom) return null
-    const next = { ...classroom, members: membersFromServer(rows, classroom) }
-    persistClassrooms(getClassroomSnapshot().map((item) => (item.id === classroomId ? next : item)))
-    return next
-  } catch {
-    return null
-  }
-}
-
-export async function removeClassroomMemberOnServer(classroomId: string, memberId: string): Promise<boolean> {
-  try {
-    await api.removeClassroomMember(classroomId, memberId)
+    persistClassrooms(merged, account)
     return true
   } catch {
     return false
   }
 }
 
-function memberFromInput(input: MemberInput, fallbackRole: Role = "student"): ClassroomMember {
+export async function createClassroomOnServer(
+  local: Classroom
+): Promise<Classroom | null> {
+  const account = accountScope()
+  try {
+    const remote = await api.createClassroom({
+      name: local.name,
+      description: local.subject,
+      client_id: local.id,
+    })
+    if (accountScope() !== account) return null
+    return replaceClassroom(
+      local.id,
+      fromServer(remote, local, local.members),
+      account
+    )
+  } catch {
+    if (accountScope() === account) {
+      const current = classroomSnapshot(account)
+      persistClassrooms(
+        current.map((classroom) =>
+          classroom.id === local.id
+            ? { ...classroom, sync_state: "error" }
+            : classroom
+        ),
+        account
+      )
+    }
+    return null
+  }
+}
+
+export async function joinClassroomOnServer(
+  code: string,
+  member: MemberInput
+): Promise<Classroom | null> {
+  const account = accountScope()
+  try {
+    const remote = await api.joinClassroom(code)
+    if (accountScope() !== account) return null
+    const existing =
+      classroomSnapshot(account).find((item) => item.id === remote.id) ?? null
+    const email = member.email?.trim().toLowerCase()
+    const nextMember = memberFromInput({
+      ...member,
+      email,
+      role: "student",
+      status: "active",
+    })
+    const members = existing?.members ?? []
+    const mergedMembers = mergeJoinedMember(members, nextMember, email)
+    const next = fromServer(remote, existing ?? undefined, mergedMembers)
+    persistClassrooms(
+      [
+        next,
+        ...classroomSnapshot(account).filter((item) => item.id !== next.id),
+      ],
+      account
+    )
+    persistSelected(next.id, account)
+    return next
+  } catch {
+    return null
+  }
+}
+
+export async function syncClassroomRosterFromApi(
+  classroomId: string
+): Promise<Classroom | null> {
+  const account = accountScope()
+  try {
+    const [rows, invitations] = await Promise.all([
+      api.classroomRoster(classroomId),
+      typeof api.classroomInvitations === "function"
+        ? api.classroomInvitations(classroomId)
+        : Promise.resolve([]),
+    ])
+    if (accountScope() !== account) return null
+    const classroom =
+      classroomSnapshot(account).find((item) => item.id === classroomId) ?? null
+    if (!classroom) return null
+    const next = {
+      ...classroom,
+      invitations,
+      members: membersFromServer(rows, classroom, invitations),
+    }
+    persistClassrooms(
+      classroomSnapshot(account).map((item) =>
+        item.id === classroomId ? next : item
+      ),
+      account
+    )
+    return next
+  } catch {
+    return null
+  }
+}
+
+export async function updateClassroomOnServer(
+  classroomId: string,
+  payload: { name?: string; description?: string }
+): Promise<Classroom> {
+  const account = accountScope()
+  const classroom = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (!classroom) throw new Error("Classroom not found")
+  const remote = await api.updateClassroom(classroomId, payload)
+  if (accountScope() !== account)
+    throw new Error(
+      "The active account changed before the class update finished"
+    )
+  const next = fromServer(remote, classroom)
+  persistClassrooms(
+    classroomSnapshot(account).map((item) =>
+      item.id === classroomId ? next : item
+    ),
+    account
+  )
+  return next
+}
+
+export async function deleteClassroomOnServer(
+  classroomId: string
+): Promise<void> {
+  const account = accountScope()
+  const remote = await api.listClassrooms()
+  if (remote.some((item) => item.id === classroomId))
+    await api.deleteClassroom(classroomId)
+  if (accountScope() !== account) return
+  const remaining = classroomSnapshot(account).filter(
+    (item) => item.id !== classroomId
+  )
+  persistClassrooms(remaining, account)
+  if (selectedSnapshot(account) === classroomId)
+    persistSelected(remaining[0]?.id ?? null, account)
+}
+
+export async function leaveClassroomOnServer(
+  classroomId: string
+): Promise<void> {
+  const account = accountScope()
+  const remote = await api.listClassrooms()
+  if (remote.some((item) => item.id === classroomId))
+    await api.leaveClassroom(classroomId)
+  if (accountScope() !== account) return
+  const remaining = classroomSnapshot(account).filter(
+    (item) => item.id !== classroomId
+  )
+  persistClassrooms(remaining, account)
+  if (selectedSnapshot(account) === classroomId)
+    persistSelected(remaining[0]?.id ?? null, account)
+}
+
+export async function inviteClassroomMemberOnServer(
+  classroomId: string,
+  input: { name: string; email: string }
+): Promise<ClassroomInvitation> {
+  const account = accountScope()
+  const email = input.email.trim().toLocaleLowerCase()
+  if (!email) throw new Error("Enter the learner's email address")
+  const invitationRows =
+    typeof api.classroomInvitations === "function"
+      ? await api.classroomInvitations(classroomId)
+      : []
+  let invitation = invitationRows.find(
+    (item) =>
+      item.email.trim().toLocaleLowerCase() === email &&
+      item.status === "pending"
+  )
+  if (!invitation)
+    invitation = await api.inviteClassroomMember(classroomId, {
+      name: input.name.trim(),
+      email,
+    })
+  if (accountScope() !== account)
+    throw new Error("The active account changed before the invitation finished")
+  const classroom = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (classroom) {
+    const allInvitations = [
+      ...invitationRows.filter(
+        (item) => item.email.trim().toLocaleLowerCase() !== email
+      ),
+      invitation,
+    ]
+    const members = classroom.members.filter(
+      (member) =>
+        !(
+          member.status !== "active" &&
+          member.email.toLocaleLowerCase() === email
+        )
+    )
+    const next = {
+      ...classroom,
+      invitations: allInvitations,
+      members:
+        invitation.status === "pending"
+          ? [
+              ...members,
+              {
+                id: invitation.id,
+                name: invitation.name,
+                email: invitation.email,
+                role: "student" as const,
+                status: "pending" as const,
+                joined_at: invitation.created_at,
+              },
+            ]
+          : members,
+    }
+    persistClassrooms(
+      classroomSnapshot(account).map((item) =>
+        item.id === classroomId ? next : item
+      ),
+      account
+    )
+  }
+  return invitation
+}
+
+export async function removeClassroomInvitationOnServer(
+  classroomId: string,
+  invitationId: string
+): Promise<void> {
+  const account = accountScope()
+  const rows =
+    typeof api.classroomInvitations === "function"
+      ? await api.classroomInvitations(classroomId)
+      : []
+  if (
+    rows.some((item) => item.id === invitationId && item.status === "pending")
+  ) {
+    await api.deleteClassroomInvitation(classroomId, invitationId)
+  }
+  if (accountScope() !== account) return
+  const classroom = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (!classroom) return
+  const invitations = (classroom.invitations ?? []).filter(
+    (item) => item.id !== invitationId
+  )
+  const members = classroom.members.filter(
+    (member) => member.id !== invitationId
+  )
+  const next = { ...classroom, invitations, members }
+  persistClassrooms(
+    classroomSnapshot(account).map((item) =>
+      item.id === classroomId ? next : item
+    ),
+    account
+  )
+}
+
+export async function removeClassroomMemberOnServer(
+  classroomId: string,
+  memberId: string
+): Promise<boolean> {
+  const account = accountScope()
+  try {
+    const rows = await api.classroomRoster(classroomId)
+    if (rows.some((member) => member.user_id === memberId)) {
+      await api.removeClassroomMember(classroomId, memberId)
+    }
+    if (accountScope() === account) {
+      const classroom = classroomSnapshot(account).find(
+        (item) => item.id === classroomId
+      )
+      if (classroom) {
+        const next = {
+          ...classroom,
+          members: classroom.members.filter((member) => member.id !== memberId),
+        }
+        persistClassrooms(
+          classroomSnapshot(account).map((item) =>
+            item.id === classroomId ? next : item
+          ),
+          account
+        )
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function memberFromInput(
+  input: MemberInput,
+  fallbackRole: Role = "student"
+): ClassroomMember {
   return {
     id: input.id ?? randomId("member"),
     name: input.name.trim(),
@@ -275,7 +633,10 @@ function memberFromInput(input: MemberInput, fallbackRole: Role = "student"): Cl
 export function newClassJoinCode(): string {
   const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
   const bytes = new Uint8Array(6)
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.getRandomValues === "function"
+  ) {
     crypto.getRandomValues(bytes)
   } else {
     for (let index = 0; index < bytes.length; index += 1) {
@@ -295,16 +656,25 @@ export function createClassroom(input: {
     id: randomId("class"),
     name: input.name.trim(),
     subject: input.subject?.trim() || "General studies",
-    join_code: newClassJoinCode(),
+    join_code: "",
     created_at: createdAt,
-    members: [memberFromInput({ ...input.owner, role: "teacher", status: "active" }, "teacher")],
+    members: [
+      memberFromInput(
+        { ...input.owner, role: "teacher", status: "active" },
+        "teacher"
+      ),
+    ],
+    sync_state: "pending",
   }
   persistClassrooms([classroom, ...getClassroomSnapshot()])
   persistSelected(classroom.id)
   return classroom
 }
 
-export function addClassroomMember(classroomId: string, input: MemberInput): Classroom | null {
+export function addClassroomMember(
+  classroomId: string,
+  input: MemberInput
+): Classroom | null {
   const classroom = getClassroom(classroomId)
   if (!classroom) return null
 
@@ -312,7 +682,7 @@ export function addClassroomMember(classroomId: string, input: MemberInput): Cla
   const duplicate = classroom.members.some(
     (member) =>
       (email && member.email.toLowerCase() === email) ||
-      (!email && member.name.toLowerCase() === input.name.trim().toLowerCase()),
+      (!email && member.name.toLowerCase() === input.name.trim().toLowerCase())
   )
   if (duplicate) return classroom
 
@@ -320,61 +690,100 @@ export function addClassroomMember(classroomId: string, input: MemberInput): Cla
     ...classroom,
     members: [...classroom.members, memberFromInput({ ...input, email })],
   }
-  persistClassrooms(getClassroomSnapshot().map((item) => (item.id === classroomId ? updated : item)))
+  persistClassrooms(
+    getClassroomSnapshot().map((item) =>
+      item.id === classroomId ? updated : item
+    )
+  )
   return updated
 }
 
-export function joinClassroom(code: string, member: MemberInput): Classroom | null {
+export function joinClassroom(
+  code: string,
+  member: MemberInput
+): Classroom | null {
   const normalised = code.trim().toUpperCase()
-  const classroom = getClassroomSnapshot().find((item) => item.join_code === normalised)
+  const classroom = getClassroomSnapshot().find(
+    (item) => item.join_code === normalised
+  )
   if (!classroom) return null
 
   const email = member.email?.trim().toLowerCase()
   const existing = classroom.members.find(
-    (item) => (email && item.email.toLowerCase() === email) || item.id === member.id,
+    (item) =>
+      (email && item.email.toLowerCase() === email) || item.id === member.id
   )
   const updated = existing
     ? {
         ...classroom,
         members: classroom.members.map((item) =>
-          item.id === existing.id ? { ...item, status: "active" as const } : item,
+          item.id === existing.id
+            ? { ...item, status: "active" as const }
+            : item
         ),
       }
     : {
         ...classroom,
-        members: [...classroom.members, memberFromInput({ ...member, email, role: "student" })],
+        members: [
+          ...classroom.members,
+          memberFromInput({ ...member, email, role: "student" }),
+        ],
       }
 
-  persistClassrooms(getClassroomSnapshot().map((item) => (item.id === classroom.id ? updated : item)))
+  persistClassrooms(
+    getClassroomSnapshot().map((item) =>
+      item.id === classroom.id ? updated : item
+    )
+  )
   persistSelected(classroom.id)
   return updated
 }
 
-export function removeClassroomMember(classroomId: string, memberId: string): Classroom | null {
+export function removeClassroomMember(
+  classroomId: string,
+  memberId: string
+): Classroom | null {
   const classroom = getClassroom(classroomId)
   if (!classroom || classroom.members.length <= 1) return classroom
   const owner = classroom.members.find((member) => member.role === "teacher")
   if (owner?.id === memberId) return classroom
 
-  const updated = { ...classroom, members: classroom.members.filter((member) => member.id !== memberId) }
-  persistClassrooms(getClassroomSnapshot().map((item) => (item.id === classroomId ? updated : item)))
+  const updated = {
+    ...classroom,
+    members: classroom.members.filter((member) => member.id !== memberId),
+  }
+  persistClassrooms(
+    getClassroomSnapshot().map((item) =>
+      item.id === classroomId ? updated : item
+    )
+  )
   return updated
 }
 
-export function setClassroomActiveRoom(classroomId: string, roomId: string | undefined): void {
+export function setClassroomActiveRoom(
+  classroomId: string,
+  roomId: string | undefined
+): void {
   const updated = getClassroomSnapshot().map((classroom) =>
-    classroom.id === classroomId ? { ...classroom, active_room_id: roomId } : classroom,
+    classroom.id === classroomId
+      ? { ...classroom, active_room_id: roomId }
+      : classroom
   )
   persistClassrooms(updated)
 }
 
 export function selectClassroom(classroomId: string | null): void {
-  const exists = classroomId ? getClassroomSnapshot().some((item) => item.id === classroomId) : true
+  const exists = classroomId
+    ? getClassroomSnapshot().some((item) => item.id === classroomId)
+    : true
   persistSelected(exists ? classroomId : null)
 }
 
 export function getClassroom(classroomId: string): Classroom | null {
-  return getClassroomSnapshot().find((classroom) => classroom.id === classroomId) ?? null
+  return (
+    getClassroomSnapshot().find((classroom) => classroom.id === classroomId) ??
+    null
+  )
 }
 
 /** Imperative selection read for non-React consumers such as hydration helpers. */
@@ -383,12 +792,20 @@ export function getSelectedClassroomId(): string | null {
 }
 
 export function useClassrooms(): Classroom[] {
-  return useSyncExternalStore(subscribe, getClassroomSnapshot, getServerClassrooms)
+  return useSyncExternalStore(
+    subscribe,
+    getClassroomSnapshot,
+    getServerClassrooms
+  )
 }
 
 export function useSelectedClassroom(): Classroom | null {
   const classrooms = useClassrooms()
-  const selectedId = useSyncExternalStore(subscribe, getSelectedSnapshot, getServerSelected)
+  const selectedId = useSyncExternalStore(
+    subscribe,
+    getSelectedSnapshot,
+    getServerSelected
+  )
   const selected = classrooms.find((classroom) => classroom.id === selectedId)
   if (selected) return selected
   return classrooms.length > 0 ? classrooms[0] : null

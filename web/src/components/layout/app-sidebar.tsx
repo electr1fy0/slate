@@ -6,6 +6,7 @@ import {
   LogInIcon,
   LogOutIcon,
   PresentationIcon,
+  SettingsIcon,
 } from "lucide-react"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -32,6 +33,7 @@ const NAV_ITEMS = [
   { label: "Assessments", to: "/teacher", icon: ClipboardListIcon },
   { label: "Live board", to: "/board", icon: PresentationIcon },
   { label: "Continuum", to: "/ops", icon: ActivityIcon },
+  { label: "Settings", to: "/settings", icon: SettingsIcon },
 ]
 
 function initials(name: string): string {
@@ -73,7 +75,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Assessment continuity</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.map((item) => {
+              {NAV_ITEMS.filter((item) => auth.user?.role === "teacher" || (item.to !== "/teacher" && item.to !== "/ops")).filter((item) => item.to !== "/settings" || auth.user).map((item) => {
                 const active =
                   item.to === "/"
                     ? pathname === "/"

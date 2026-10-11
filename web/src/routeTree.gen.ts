@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OpsRouteImport } from './routes/ops'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TeacherRouteImport } from './routes/teacher'
 import { Route as BoardIndexRouteImport } from './routes/board.index'
 import { Route as BoardRoomIdRouteImport } from './routes/board.$roomId'
@@ -30,6 +31,11 @@ const LoginRoute = LoginRouteImport.update({
 const OpsRoute = OpsRouteImport.update({
   id: '/ops',
   path: '/ops',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TeacherRoute = TeacherRouteImport.update({
@@ -57,6 +63,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/ops': typeof OpsRoute
+  '/settings': typeof SettingsRoute
   '/teacher': typeof TeacherRoute
   '/board/$roomId': typeof BoardRoomIdRoute
   '/quiz/$examId': typeof QuizExamIdRoute
@@ -66,6 +73,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/ops': typeof OpsRoute
+  '/settings': typeof SettingsRoute
   '/teacher': typeof TeacherRoute
   '/board/$roomId': typeof BoardRoomIdRoute
   '/quiz/$examId': typeof QuizExamIdRoute
@@ -76,6 +84,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/ops': typeof OpsRoute
+  '/settings': typeof SettingsRoute
   '/teacher': typeof TeacherRoute
   '/board/$roomId': typeof BoardRoomIdRoute
   '/quiz/$examId': typeof QuizExamIdRoute
@@ -87,6 +96,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/ops'
+    | '/settings'
     | '/teacher'
     | '/board/$roomId'
     | '/quiz/$examId'
@@ -96,6 +106,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/ops'
+    | '/settings'
     | '/teacher'
     | '/board/$roomId'
     | '/quiz/$examId'
@@ -105,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/ops'
+    | '/settings'
     | '/teacher'
     | '/board/$roomId'
     | '/quiz/$examId'
@@ -115,6 +127,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
   OpsRoute: typeof OpsRoute
+  SettingsRoute: typeof SettingsRoute
   TeacherRoute: typeof TeacherRoute
   BoardRoomIdRoute: typeof BoardRoomIdRoute
   QuizExamIdRoute: typeof QuizExamIdRoute
@@ -142,6 +155,13 @@ declare module '@tanstack/react-router' {
       path: '/ops'
       fullPath: '/ops'
       preLoaderRoute: typeof OpsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/teacher': {
@@ -179,6 +199,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
   OpsRoute: OpsRoute,
+  SettingsRoute: SettingsRoute,
   TeacherRoute: TeacherRoute,
   BoardRoomIdRoute: BoardRoomIdRoute,
   QuizExamIdRoute: QuizExamIdRoute,
