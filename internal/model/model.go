@@ -3,14 +3,15 @@
 package model
 
 type User struct {
-	PK           string `json:"-" dynamodbav:"pk"`
-	SK           string `json:"-" dynamodbav:"sk"`
-	UserID       string `json:"user_id" dynamodbav:"user_id"`
-	Email        string `json:"email" dynamodbav:"email"`
-	Name         string `json:"name" dynamodbav:"name"`
-	Role         string `json:"role" dynamodbav:"role"`
-	PasswordHash string `json:"-" dynamodbav:"password_hash"`
-	CreatedAt    string `json:"created_at" dynamodbav:"created_at"`
+	PK             string `json:"-" dynamodbav:"pk"`
+	SK             string `json:"-" dynamodbav:"sk"`
+	UserID         string `json:"user_id" dynamodbav:"user_id"`
+	Email          string `json:"email" dynamodbav:"email"`
+	Name           string `json:"name" dynamodbav:"name"`
+	Role           string `json:"role" dynamodbav:"role"`
+	PasswordHash   string `json:"-" dynamodbav:"password_hash"`
+	SessionVersion int64  `json:"-" dynamodbav:"session_version,omitempty"`
+	CreatedAt      string `json:"created_at" dynamodbav:"created_at"`
 }
 
 // Classroom is a teacher-owned class space. PK and SK are the canonical
@@ -50,6 +51,24 @@ type ClassroomMember struct {
 	JoinedAt    string `json:"joined_at" dynamodbav:"joined_at"`
 }
 
+// ClassroomInvitation is a teacher-created invitation code. The raw join code
+// is returned to classroom owners so they can share a link; password reset
+// tokens use a different, hashed-at-rest representation.
+type ClassroomInvitation struct {
+	PK          string `json:"-" dynamodbav:"pk"`
+	SK          string `json:"-" dynamodbav:"sk"`
+	ID          string `json:"id" dynamodbav:"id"`
+	ClassroomID string `json:"classroom_id" dynamodbav:"classroom_id"`
+	Name        string `json:"name" dynamodbav:"name"`
+	Email       string `json:"email" dynamodbav:"email"`
+	Status      string `json:"status" dynamodbav:"status"`
+	CreatedAt   string `json:"created_at" dynamodbav:"created_at"`
+	JoinCode    string `json:"join_code" dynamodbav:"join_code"`
+	Delivery    string `json:"delivery,omitempty" dynamodbav:"-"`
+	AcceptedBy  string `json:"-" dynamodbav:"accepted_by,omitempty"`
+	AcceptedAt  string `json:"-" dynamodbav:"accepted_at,omitempty"`
+}
+
 type EmailIndex struct {
 	PK     string `dynamodbav:"pk"`
 	SK     string `dynamodbav:"sk"`
@@ -73,6 +92,8 @@ type ExamMeta struct {
 	Title            string `json:"title" dynamodbav:"title"`
 	CreatedAt        string `json:"created_at" dynamodbav:"created_at"`
 	OwnerID          string `json:"owner_id,omitempty" dynamodbav:"owner_id,omitempty"`
+	ClassroomID      string `json:"classroom_id,omitempty" dynamodbav:"classroom_id,omitempty"`
+	Instructions     string `json:"instructions,omitempty" dynamodbav:"instructions,omitempty"`
 	Status           string `json:"status,omitempty" dynamodbav:"status,omitempty"`
 	QuestionCount    int    `json:"question_count" dynamodbav:"question_count"`
 	OpensAt          string `json:"opens_at,omitempty" dynamodbav:"opens_at,omitempty"`
@@ -81,6 +102,11 @@ type ExamMeta struct {
 	MaxAttempts      int    `json:"max_attempts,omitempty" dynamodbav:"max_attempts,omitempty"`
 	AllowLate        bool   `json:"allow_late,omitempty" dynamodbav:"allow_late,omitempty"`
 	LateGraceMinutes int    `json:"late_grace_minutes,omitempty" dynamodbav:"late_grace_minutes,omitempty"`
+	AttemptStatus    string `json:"attempt_status,omitempty" dynamodbav:"-"`
+	Score            int    `json:"score,omitempty" dynamodbav:"-"`
+	Total            int    `json:"total,omitempty" dynamodbav:"-"`
+	SubmittedAt      string `json:"submitted_at,omitempty" dynamodbav:"-"`
+	AttemptNumber    int    `json:"attempt_number,omitempty" dynamodbav:"-"`
 }
 
 type Exam struct {
@@ -99,7 +125,9 @@ type QuizDraft struct {
 	SK               string     `json:"-" dynamodbav:"sk"`
 	ID               string     `json:"id" dynamodbav:"-"`
 	OwnerID          string     `json:"owner_id" dynamodbav:"owner_id"`
+	ClassroomID      string     `json:"classroom_id,omitempty" dynamodbav:"classroom_id,omitempty"`
 	Title            string     `json:"title" dynamodbav:"title"`
+	Instructions     string     `json:"instructions,omitempty" dynamodbav:"instructions,omitempty"`
 	Questions        []Question `json:"questions" dynamodbav:"-"`
 	QuestionCount    int        `json:"question_count" dynamodbav:"question_count"`
 	OpensAt          string     `json:"opens_at,omitempty" dynamodbav:"opens_at,omitempty"`
@@ -112,6 +140,30 @@ type QuizDraft struct {
 	CreatedAt        string     `json:"created_at" dynamodbav:"created_at"`
 	UpdatedAt        string     `json:"updated_at" dynamodbav:"updated_at"`
 	PublishedAt      string     `json:"published_at,omitempty" dynamodbav:"published_at,omitempty"`
+}
+
+// QuestionBankItem is a reusable teacher-owned authored question.
+type QuestionBankItem struct {
+	PK       string   `json:"-" dynamodbav:"pk"`
+	SK       string   `json:"-" dynamodbav:"sk"`
+	ID       string   `json:"id" dynamodbav:"id"`
+	OwnerID  string   `json:"-" dynamodbav:"owner_id"`
+	SavedAt  string   `json:"saved_at" dynamodbav:"saved_at"`
+	Question string   `json:"question" dynamodbav:"question"`
+	Options  []string `json:"options" dynamodbav:"options"`
+	Answer   int      `json:"answer" dynamodbav:"answer"`
+	Points   int      `json:"points,omitempty" dynamodbav:"points,omitempty"`
+	Feedback string   `json:"feedback,omitempty" dynamodbav:"feedback,omitempty"`
+}
+
+// PasswordResetRecord stores no raw reset token. The partition key contains
+// the SHA-256 digest and the value is single-use and time limited.
+type PasswordResetRecord struct {
+	PK        string `json:"-" dynamodbav:"pk"`
+	SK        string `json:"-" dynamodbav:"sk"`
+	UserID    string `json:"-" dynamodbav:"user_id"`
+	ExpiresAt int64  `json:"-" dynamodbav:"expires_at"`
+	CreatedAt string `json:"-" dynamodbav:"created_at"`
 }
 
 type Attempt struct {

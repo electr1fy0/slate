@@ -27,21 +27,27 @@ import (
 )
 
 var (
-	ErrNotFound                  = errors.New("not found")
-	ErrSubmissionConflict        = errors.New("submission conflict")
-	ErrEmailRegistered           = errors.New("email already registered")
-	ErrClassroomCodeTaken        = errors.New("classroom join code already in use")
-	ErrClassroomForbidden        = errors.New("classroom ownership required")
-	ErrClassroomMember           = errors.New("classroom member already exists")
-	ErrClassroomMemberNotFound   = errors.New("classroom member not found")
-	ErrQuizNotFound              = errors.New("quiz not found")
-	ErrQuizConflict              = errors.New("quiz conflict")
-	ErrQuizForbidden             = errors.New("quiz ownership violation")
-	ErrAttemptConflict           = errors.New("attempt version conflict")
-	ErrAttemptSubmitted          = errors.New("attempt already submitted")
-	ErrSubmissionRequestConflict = errors.New("submission request ID was reused with a different payload")
-	ErrAttemptsExhausted         = errors.New("attempt limit reached")
-	ErrInvalidAnswer             = errors.New("invalid answer")
+	ErrNotFound                     = errors.New("not found")
+	ErrSubmissionConflict           = errors.New("submission conflict")
+	ErrEmailRegistered              = errors.New("email already registered")
+	ErrClassroomCodeTaken           = errors.New("classroom join code already in use")
+	ErrClassroomForbidden           = errors.New("classroom ownership required")
+	ErrClassroomMember              = errors.New("classroom member already exists")
+	ErrClassroomMemberNotFound      = errors.New("classroom member not found")
+	ErrQuizNotFound                 = errors.New("quiz not found")
+	ErrQuizConflict                 = errors.New("quiz conflict")
+	ErrQuizForbidden                = errors.New("quiz ownership violation")
+	ErrAttemptConflict              = errors.New("attempt version conflict")
+	ErrAttemptSubmitted             = errors.New("attempt already submitted")
+	ErrSubmissionRequestConflict    = errors.New("submission request ID was reused with a different payload")
+	ErrAttemptsExhausted            = errors.New("attempt limit reached")
+	ErrInvalidAnswer                = errors.New("invalid answer")
+	ErrPasswordResetInvalid         = errors.New("invalid or expired password reset token")
+	ErrPasswordMismatch             = errors.New("current password changed")
+	ErrClassroomInvitation          = errors.New("classroom invitation is invalid")
+	ErrClassroomInvitationUsed      = errors.New("classroom invitation is no longer pending")
+	ErrQuestionBankNotFound         = errors.New("question bank item not found")
+	ErrClassroomIdempotencyConflict = errors.New("classroom client_id was reused with a different payload")
 )
 
 // DynamoAPI is the subset of the AWS client used by Store. Keeping this
@@ -122,6 +128,9 @@ func unmarshal(item map[string]types.AttributeValue, out any) error {
 	return attributevalue.UnmarshalMap(item, out)
 }
 func isConditional(err error) bool {
+	if err == nil {
+		return false
+	}
 	var c *types.ConditionalCheckFailedException
 	if errors.As(err, &c) {
 		return true
@@ -640,7 +649,7 @@ func (s *Store) scanAll(ctx context.Context, input *dynamodb.ScanInput) ([]map[s
 }
 
 func (s *Store) ListQuizDrafts(ctx context.Context, ownerID string, limit int) ([]model.QuizDraft, error) {
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 50
 	}
 	names := map[string]string{"#pk": "pk", "#sk": "sk", "#status": "status"}
@@ -654,7 +663,7 @@ func (s *Store) ListQuizDrafts(ctx context.Context, ownerID string, limit int) (
 		filter += " AND owner_id = :owner"
 		values[":owner"] = &types.AttributeValueMemberS{Value: ownerID}
 	}
-	items, err := s.scanAll(ctx, &dynamodb.ScanInput{TableName: aws.String(s.TableName), Limit: aws.Int32(int32(limit)), FilterExpression: aws.String(filter), ExpressionAttributeNames: names, ExpressionAttributeValues: values})
+	items, err := s.scanAll(ctx, &dynamodb.ScanInput{TableName: aws.String(s.TableName), Limit: aws.Int32(200), FilterExpression: aws.String(filter), ExpressionAttributeNames: names, ExpressionAttributeValues: values})
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +682,7 @@ func (s *Store) ListQuizDrafts(ctx context.Context, ownerID string, limit int) (
 		}
 		return result[i].UpdatedAt > result[j].UpdatedAt
 	})
-	if len(result) > limit {
+	if limit > 0 && len(result) > limit {
 		result = result[:limit]
 	}
 	return result, nil
@@ -848,7 +857,7 @@ func (s *Store) PublishQuizDraft(ctx context.Context, id, ownerID string) (*mode
 	if len(draft.Questions) > 97 {
 		return nil, fmt.Errorf("quiz draft has too many questions to publish atomically")
 	}
-	meta := model.ExamMeta{PK: "EXAM#" + id, SK: "META", Title: draft.Title, CreatedAt: iso(s.now()), OwnerID: draft.OwnerID, Status: "published", QuestionCount: len(draft.Questions), OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
+	meta := model.ExamMeta{PK: "EXAM#" + id, SK: "META", Title: draft.Title, CreatedAt: iso(s.now()), OwnerID: draft.OwnerID, ClassroomID: draft.ClassroomID, Instructions: draft.Instructions, Status: "published", QuestionCount: len(draft.Questions), OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
 	metaItem, err := marshal(meta)
 	if err != nil {
 		return nil, err
@@ -890,6 +899,7 @@ func (s *Store) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requestedI
 	var sourceTitle string
 	var sourceQuestions []model.Question
 	var opensAt, closesAt string
+	var classroomID, instructions string
 	var duration, maxAttempts, lateGrace int
 	var allowLate bool
 	draft, err := s.GetQuizDraft(ctx, sourceID)
@@ -901,6 +911,7 @@ func (s *Store) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requestedI
 			return nil, ErrQuizForbidden
 		}
 		sourceTitle, sourceQuestions = draft.Title, draft.Questions
+		classroomID, instructions = draft.ClassroomID, draft.Instructions
 		opensAt, closesAt, duration = draft.OpensAt, draft.ClosesAt, draft.DurationMinutes
 		maxAttempts, allowLate, lateGrace = draft.MaxAttempts, draft.AllowLate, draft.LateGraceMinutes
 	} else {
@@ -915,6 +926,7 @@ func (s *Store) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requestedI
 			return nil, ErrQuizForbidden
 		}
 		sourceTitle, sourceQuestions = exam.Title, exam.Questions
+		classroomID, instructions = exam.ClassroomID, exam.Instructions
 		opensAt, closesAt, duration = exam.OpensAt, exam.ClosesAt, exam.DurationMinutes
 		maxAttempts, allowLate, lateGrace = exam.MaxAttempts, exam.AllowLate, exam.LateGraceMinutes
 	}
@@ -925,7 +937,7 @@ func (s *Store) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requestedI
 	if strings.TrimSpace(title) == "" {
 		title = "Copy of " + sourceTitle
 	}
-	copy := &model.QuizDraft{ID: copyID, OwnerID: ownerID, Title: title, Questions: cloneQuestions(sourceQuestions), OpensAt: opensAt, ClosesAt: closesAt, DurationMinutes: duration, MaxAttempts: maxAttempts, AllowLate: allowLate, LateGraceMinutes: lateGrace}
+	copy := &model.QuizDraft{ID: copyID, OwnerID: ownerID, ClassroomID: classroomID, Instructions: instructions, Title: title, Questions: cloneQuestions(sourceQuestions), OpensAt: opensAt, ClosesAt: closesAt, DurationMinutes: duration, MaxAttempts: maxAttempts, AllowLate: allowLate, LateGraceMinutes: lateGrace}
 	return s.CreateQuizDraft(ctx, copy)
 }
 
@@ -939,7 +951,7 @@ func (s *Store) UpdateExamWindow(ctx context.Context, examID string, title *stri
 		names["#title"] = "title"
 		values[":title"] = &types.AttributeValueMemberS{Value: *title}
 	}
-	for _, field := range []string{"opens_at", "closes_at", "duration_minutes", "owner_id", "status", "max_attempts", "allow_late", "late_grace_minutes"} {
+	for _, field := range []string{"opens_at", "closes_at", "duration_minutes", "owner_id", "classroom_id", "instructions", "status", "max_attempts", "allow_late", "late_grace_minutes"} {
 		if value, ok := window[field]; ok {
 			av, err := attributevalue.Marshal(value)
 			if err != nil {
@@ -1056,15 +1068,15 @@ func (s *Store) GetExam(ctx context.Context, examID string, includeAnswers bool)
 }
 
 func (s *Store) ListExams(ctx context.Context, limit int) ([]model.ExamMeta, error) {
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 50
 	}
-	out, err := s.Client.Scan(ctx, &dynamodb.ScanInput{TableName: aws.String(s.TableName), Limit: aws.Int32(int32(limit)), FilterExpression: aws.String("begins_with(#pk, :prefix) AND #sk = :meta"), ExpressionAttributeNames: map[string]string{"#pk": "pk", "#sk": "sk"}, ExpressionAttributeValues: map[string]types.AttributeValue{":prefix": &types.AttributeValueMemberS{Value: "EXAM#"}, ":meta": &types.AttributeValueMemberS{Value: "META"}}})
+	items, err := s.scanAll(ctx, &dynamodb.ScanInput{TableName: aws.String(s.TableName), Limit: aws.Int32(200), FilterExpression: aws.String("begins_with(#pk, :prefix) AND #sk = :meta"), ExpressionAttributeNames: map[string]string{"#pk": "pk", "#sk": "sk"}, ExpressionAttributeValues: map[string]types.AttributeValue{":prefix": &types.AttributeValueMemberS{Value: "EXAM#"}, ":meta": &types.AttributeValueMemberS{Value: "META"}}})
 	if err != nil {
 		return nil, err
 	}
-	result := make([]model.ExamMeta, 0, len(out.Items))
-	for _, item := range out.Items {
+	result := make([]model.ExamMeta, 0, len(items))
+	for _, item := range items {
 		var m model.ExamMeta
 		if err := unmarshal(item, &m); err != nil {
 			return nil, err
@@ -1073,6 +1085,9 @@ func (s *Store) ListExams(ctx context.Context, limit int) ([]model.ExamMeta, err
 		result = append(result, m)
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt < result[j].CreatedAt })
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
 	return result, nil
 }
 
@@ -1969,6 +1984,10 @@ func (s *Store) DeleteClassroom(ctx context.Context, classroomID, ownerID string
 		if err := unmarshal(item, &member); err == nil && member.UserID != "" {
 			addKey(classroomMemberIndexKey(member.UserID, classroom.ID))
 		}
+		var invitation model.ClassroomInvitation
+		if err := unmarshal(item, &invitation); err == nil && invitation.JoinCode != "" {
+			addKey(invitationCodeKey(invitation.JoinCode))
+		}
 	}
 	return s.batchDeleteKeys(ctx, keys)
 }
@@ -2148,23 +2167,29 @@ func (s *Store) RemoveClassroomMember(ctx context.Context, classroomID, ownerID,
 // contract useful for local development and service tests. It deliberately
 // uses the same logical keys and result semantics as DynamoDBStore.
 type MemoryStore struct {
-	mu                 sync.RWMutex
-	guardMu            sync.RWMutex
-	fenceGuard         clusterstate.FenceGuard
-	users              map[string]*model.User
-	emails             map[string]string
-	exams              map[string]*model.Exam
-	classrooms         map[string]*model.Classroom
-	classroomCodes     map[string]string
-	classroomMembers   map[string]map[string]*model.ClassroomMember
-	drafts             map[string]*model.QuizDraft
-	attempts           map[string]*model.Attempt
-	submissions        map[string]*model.Submission
-	submissionRequests map[string]memorySubmissionReceipt
-	outbox             []model.OutboxEntry
-	auditSummaries     map[string]model.AuditSummary
-	now                func() time.Time
-	region             string
+	mu                       sync.RWMutex
+	guardMu                  sync.RWMutex
+	fenceGuard               clusterstate.FenceGuard
+	users                    map[string]*model.User
+	emails                   map[string]string
+	exams                    map[string]*model.Exam
+	classrooms               map[string]*model.Classroom
+	classroomCodes           map[string]string
+	classroomMembers         map[string]map[string]*model.ClassroomMember
+	classroomInvitations     map[string]*model.ClassroomInvitation
+	classroomInvitationCodes map[string]string
+	classroomCreateReceipts  map[string]classroomCreateReceipt
+	drafts                   map[string]*model.QuizDraft
+	questionBank             map[string]map[string]*model.QuestionBankItem
+	passwordResets           map[string]model.PasswordResetRecord
+	boardSnapshots           map[string]map[int64][]byte
+	attempts                 map[string]*model.Attempt
+	submissions              map[string]*model.Submission
+	submissionRequests       map[string]memorySubmissionReceipt
+	outbox                   []model.OutboxEntry
+	auditSummaries           map[string]model.AuditSummary
+	now                      func() time.Time
+	region                   string
 }
 
 type memorySubmissionReceipt struct {
@@ -2196,19 +2221,25 @@ func isBootstrapWrite(ctx context.Context) bool {
 
 func NewMemory(region string) *MemoryStore {
 	return &MemoryStore{
-		users:              map[string]*model.User{},
-		emails:             map[string]string{},
-		exams:              map[string]*model.Exam{},
-		classrooms:         map[string]*model.Classroom{},
-		classroomCodes:     map[string]string{},
-		classroomMembers:   map[string]map[string]*model.ClassroomMember{},
-		drafts:             map[string]*model.QuizDraft{},
-		attempts:           map[string]*model.Attempt{},
-		submissions:        map[string]*model.Submission{},
-		submissionRequests: map[string]memorySubmissionReceipt{},
-		auditSummaries:     map[string]model.AuditSummary{},
-		now:                time.Now,
-		region:             region,
+		users:                    map[string]*model.User{},
+		emails:                   map[string]string{},
+		exams:                    map[string]*model.Exam{},
+		classrooms:               map[string]*model.Classroom{},
+		classroomCodes:           map[string]string{},
+		classroomMembers:         map[string]map[string]*model.ClassroomMember{},
+		classroomInvitations:     map[string]*model.ClassroomInvitation{},
+		classroomInvitationCodes: map[string]string{},
+		classroomCreateReceipts:  map[string]classroomCreateReceipt{},
+		drafts:                   map[string]*model.QuizDraft{},
+		questionBank:             map[string]map[string]*model.QuestionBankItem{},
+		passwordResets:           map[string]model.PasswordResetRecord{},
+		boardSnapshots:           map[string]map[int64][]byte{},
+		attempts:                 map[string]*model.Attempt{},
+		submissions:              map[string]*model.Submission{},
+		submissionRequests:       map[string]memorySubmissionReceipt{},
+		auditSummaries:           map[string]model.AuditSummary{},
+		now:                      time.Now,
+		region:                   region,
 	}
 }
 
@@ -2468,6 +2499,12 @@ func (m *MemoryStore) deleteClassroom(classroomID, ownerID string) error {
 	delete(m.classrooms, classroom.ID)
 	delete(m.classroomCodes, normaliseClassroomCode(classroom.JoinCode))
 	delete(m.classroomMembers, classroom.ID)
+	for invitationKey, invitation := range m.classroomInvitations {
+		if invitation.ClassroomID == classroom.ID {
+			delete(m.classroomInvitationCodes, normaliseClassroomCode(invitation.JoinCode))
+			delete(m.classroomInvitations, invitationKey)
+		}
+	}
 	return nil
 }
 
@@ -2613,6 +2650,10 @@ func (m *MemoryStore) ensureExamLocked(id, title string, qs []model.Question, w 
 			v.DurationMinutes = toInt(val)
 		case "owner_id":
 			v.OwnerID = fmt.Sprint(val)
+		case "classroom_id":
+			v.ClassroomID = fmt.Sprint(val)
+		case "instructions":
+			v.Instructions = fmt.Sprint(val)
 		case "status":
 			v.Status = fmt.Sprint(val)
 		case "max_attempts":
@@ -2689,7 +2730,7 @@ func (m *MemoryStore) GetQuizDraft(_ context.Context, id string) (*model.QuizDra
 func (m *MemoryStore) ListQuizDrafts(_ context.Context, ownerID string, limit int) ([]model.QuizDraft, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 50
 	}
 	rows := make([]model.QuizDraft, 0, len(m.drafts))
@@ -2705,7 +2746,7 @@ func (m *MemoryStore) ListQuizDrafts(_ context.Context, ownerID string, limit in
 		}
 		return rows[i].UpdatedAt > rows[j].UpdatedAt
 	})
-	if len(rows) > limit {
+	if limit > 0 && len(rows) > limit {
 		rows = rows[:limit]
 	}
 	return rows, nil
@@ -2789,7 +2830,7 @@ func (m *MemoryStore) publishQuizDraft(id, ownerID string) (*model.ExamMeta, err
 	if _, exists := m.exams[draft.ID]; exists {
 		return nil, ErrQuizConflict
 	}
-	meta := model.ExamMeta{PK: "EXAM#" + draft.ID, SK: "META", ID: draft.ID, Title: draft.Title, CreatedAt: iso(m.now()), OwnerID: draft.OwnerID, Status: "published", QuestionCount: len(draft.Questions), OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
+	meta := model.ExamMeta{PK: "EXAM#" + draft.ID, SK: "META", ID: draft.ID, Title: draft.Title, CreatedAt: iso(m.now()), OwnerID: draft.OwnerID, ClassroomID: draft.ClassroomID, Instructions: draft.Instructions, Status: "published", QuestionCount: len(draft.Questions), OpensAt: draft.OpensAt, ClosesAt: draft.ClosesAt, DurationMinutes: draft.DurationMinutes, MaxAttempts: draft.MaxAttempts, AllowLate: draft.AllowLate, LateGraceMinutes: draft.LateGraceMinutes}
 	m.exams[draft.ID] = &model.Exam{ExamMeta: meta, Questions: cloneQuestions(draft.Questions)}
 	draft.Status = "published"
 	draft.PublishedAt = iso(m.now())
@@ -2802,6 +2843,7 @@ func (m *MemoryStore) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requ
 	var sourceTitle string
 	var sourceQuestions []model.Question
 	var opensAt, closesAt string
+	var classroomID, instructions string
 	var duration, maxAttempts, lateGrace int
 	var allowLate bool
 	if draft != nil {
@@ -2809,6 +2851,7 @@ func (m *MemoryStore) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requ
 			return nil, ErrQuizForbidden
 		}
 		sourceTitle, sourceQuestions, opensAt, closesAt = draft.Title, draft.Questions, draft.OpensAt, draft.ClosesAt
+		classroomID, instructions = draft.ClassroomID, draft.Instructions
 		duration, maxAttempts, allowLate, lateGrace = draft.DurationMinutes, draft.MaxAttempts, draft.AllowLate, draft.LateGraceMinutes
 	} else {
 		exam, _ := m.GetExam(ctx, sourceID, true)
@@ -2819,6 +2862,7 @@ func (m *MemoryStore) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requ
 			return nil, ErrQuizForbidden
 		}
 		sourceTitle, sourceQuestions, opensAt, closesAt = exam.Title, exam.Questions, exam.OpensAt, exam.ClosesAt
+		classroomID, instructions = exam.ClassroomID, exam.Instructions
 		duration, maxAttempts, allowLate, lateGrace = exam.DurationMinutes, exam.MaxAttempts, exam.AllowLate, exam.LateGraceMinutes
 	}
 	newQuizID := strings.TrimSpace(requestedID)
@@ -2828,7 +2872,7 @@ func (m *MemoryStore) DuplicateQuiz(ctx context.Context, sourceID, ownerID, requ
 	if strings.TrimSpace(title) == "" {
 		title = "Copy of " + sourceTitle
 	}
-	return m.CreateQuizDraft(ctx, &model.QuizDraft{ID: newQuizID, OwnerID: ownerID, Title: title, Questions: cloneQuestions(sourceQuestions), OpensAt: opensAt, ClosesAt: closesAt, DurationMinutes: duration, MaxAttempts: maxAttempts, AllowLate: allowLate, LateGraceMinutes: lateGrace})
+	return m.CreateQuizDraft(ctx, &model.QuizDraft{ID: newQuizID, OwnerID: ownerID, ClassroomID: classroomID, Instructions: instructions, Title: title, Questions: cloneQuestions(sourceQuestions), OpensAt: opensAt, ClosesAt: closesAt, DurationMinutes: duration, MaxAttempts: maxAttempts, AllowLate: allowLate, LateGraceMinutes: lateGrace})
 }
 func toInt(v any) int {
 	switch n := v.(type) {
@@ -2904,6 +2948,10 @@ func (m *MemoryStore) updateExamWindow(id string, title *string, window map[stri
 			e.DurationMinutes = toInt(val)
 		case "owner_id":
 			e.OwnerID = fmt.Sprint(val)
+		case "classroom_id":
+			e.ClassroomID = fmt.Sprint(val)
+		case "instructions":
+			e.Instructions = fmt.Sprint(val)
 		case "status":
 			e.Status = fmt.Sprint(val)
 		case "max_attempts":

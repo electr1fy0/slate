@@ -42,6 +42,12 @@ type Settings struct {
 	WSMaxIdleS            int
 	WSSweepIntervalS      int
 	CORSOrigins           []string
+	SMTPHost              string
+	SMTPPort              int
+	SMTPUsername          string
+	SMTPPassword          string
+	SMTPFrom              string
+	PublicBaseURL         string
 }
 
 // Defaults returns a new settings value with the same defaults as the legacy
@@ -69,6 +75,7 @@ func Defaults() Settings {
 		WSMaxMessageBytes:  64 * 1024,
 		WSMaxIdleS:         90,
 		WSSweepIntervalS:   15,
+		SMTPPort:           587,
 		CORSOrigins:        []string{"http://localhost:3000", "http://127.0.0.1:3000"},
 	}
 }
@@ -153,6 +160,27 @@ func LoadFrom(getenv func(string) string) (Settings, error) {
 	}
 	s.BootstrapTeacherEmail = getenv("BOOTSTRAP_TEACHER_EMAIL")
 	s.BootstrapTeacherPass = getenv("BOOTSTRAP_TEACHER_PASSWORD")
+	s.SMTPHost = strings.TrimSpace(getenv("SMTP_HOST"))
+	s.SMTPPort, err = intEnv(getenv, "SMTP_PORT", s.SMTPPort)
+	if err != nil {
+		return s, err
+	}
+	s.SMTPUsername = getenv("SMTP_USERNAME")
+	s.SMTPPassword = getenv("SMTP_PASSWORD")
+	s.SMTPFrom = strings.TrimSpace(getenv("SMTP_FROM"))
+	s.PublicBaseURL = strings.TrimRight(strings.TrimSpace(getenv("PUBLIC_BASE_URL")), "/")
+	if s.SMTPPort <= 0 || s.SMTPPort > 65535 {
+		return s, fmt.Errorf("SMTP_PORT must be between 1 and 65535")
+	}
+	if (s.SMTPUsername == "") != (s.SMTPPassword == "") {
+		return s, fmt.Errorf("SMTP_USERNAME and SMTP_PASSWORD must be configured together")
+	}
+	if (s.SMTPHost == "") != (s.SMTPFrom == "") {
+		return s, fmt.Errorf("SMTP_HOST and SMTP_FROM must be configured together")
+	}
+	if s.SMTPHost != "" && s.PublicBaseURL == "" {
+		return s, fmt.Errorf("PUBLIC_BASE_URL is required when SMTP is configured")
+	}
 	s.WSMaxMessageBytes, err = intEnv(getenv, "WS_MAX_MESSAGE_BYTES", s.WSMaxMessageBytes)
 	if err != nil {
 		return s, err

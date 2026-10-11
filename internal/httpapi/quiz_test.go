@@ -8,10 +8,22 @@ import (
 func TestQuizDraftPreviewAndDurableAttemptLifecycle(t *testing.T) {
 	_, handler := newTestServer(t, "active")
 	teacher := registerTeacher(t, handler, "quiz-author@example.com")
+	student, _ := registerStudent(t, handler, "quiz-student@example.com")
+	classroomResponse := call(t, handler, http.MethodPost, "/classrooms", map[string]any{"name": "Quiz class", "client_id": "quiz-class"}, teacher)
+	if classroomResponse.Code != http.StatusCreated {
+		t.Fatalf("create classroom: %d %s", classroomResponse.Code, classroomResponse.Body.String())
+	}
+	classroom := decodeBody(t, classroomResponse)
+	classroomID := classroom["id"].(string)
+	joined := call(t, handler, http.MethodPost, "/classrooms/join", map[string]any{"join_code": classroom["join_code"]}, student)
+	if joined.Code != http.StatusOK {
+		t.Fatalf("join classroom: %d %s", joined.Code, joined.Body.String())
+	}
 
 	created := call(t, handler, http.MethodPost, "/quiz/drafts", map[string]any{
-		"id":    "physics-draft",
-		"title": "Physics checkpoint",
+		"id":           "physics-draft",
+		"title":        "Physics checkpoint",
+		"classroom_id": classroomID,
 		"questions": []map[string]any{
 			{"question": "What is force?", "options": []string{"Mass", "Mass times acceleration"}, "answer": 1, "points": 2, "feedback": "F = ma."},
 			{"question": "What is RPO?", "options": []string{"Data loss window", "Downtime"}, "answer": 0, "points": 3},
@@ -33,7 +45,7 @@ func TestQuizDraftPreviewAndDurableAttemptLifecycle(t *testing.T) {
 	}
 
 	updated := call(t, handler, http.MethodPatch, "/quiz/drafts/physics-draft", map[string]any{
-		"id": "physics-draft", "title": "Physics checkpoint updated",
+		"id": "physics-draft", "title": "Physics checkpoint updated", "classroom_id": classroomID,
 		"questions": []map[string]any{{"question": "What is force?", "options": []string{"Mass", "Mass times acceleration"}, "answer": 1, "points": 2}},
 	}, teacher)
 	if updated.Code != http.StatusOK || decodeBody(t, updated)["title"] != "Physics checkpoint updated" {
@@ -60,7 +72,6 @@ func TestQuizDraftPreviewAndDurableAttemptLifecycle(t *testing.T) {
 		t.Fatalf("preview answer metadata: %#v", previewQuestion)
 	}
 
-	student, _ := registerStudent(t, handler, "quiz-student@example.com")
 	started := call(t, handler, http.MethodGet, "/exam/physics-draft/attempt", nil, student)
 	startedBody := decodeBody(t, started)
 	if started.Code != http.StatusOK || len(startedBody["answers"].(map[string]any)) != 0 {

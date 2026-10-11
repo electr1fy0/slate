@@ -7,9 +7,11 @@ package classrooms
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -19,16 +21,17 @@ import (
 )
 
 var (
-	ErrStoreUnavailable   = errors.New("classroom store unavailable")
-	ErrClassroomNotFound  = errors.New("classroom not found")
-	ErrClassroomForbidden = errors.New("classroom access forbidden")
-	ErrTeacherRequired    = auth.ErrTeacherRequired
-	ErrStudentRequired    = errors.New("student role required")
-	ErrAlreadyMember      = errors.New("student is already a classroom member")
-	ErrMemberNotFound     = errors.New("classroom member not found")
-	ErrInvalidJoinCode    = errors.New("invalid classroom join code")
-	ErrJoinCodeTaken      = errors.New("classroom join code already in use")
-	ErrInvalidInput       = errors.New("invalid classroom input")
+	ErrStoreUnavailable    = errors.New("classroom store unavailable")
+	ErrClassroomNotFound   = errors.New("classroom not found")
+	ErrClassroomForbidden  = errors.New("classroom access forbidden")
+	ErrTeacherRequired     = auth.ErrTeacherRequired
+	ErrStudentRequired     = errors.New("student role required")
+	ErrAlreadyMember       = errors.New("student is already a classroom member")
+	ErrMemberNotFound      = errors.New("classroom member not found")
+	ErrInvalidJoinCode     = errors.New("invalid classroom join code")
+	ErrJoinCodeTaken       = errors.New("classroom join code already in use")
+	ErrIdempotencyConflict = errors.New("classroom client_id was reused with a different payload")
+	ErrInvalidInput        = errors.New("invalid classroom input")
 )
 
 var readRandom = rand.Read
@@ -48,6 +51,26 @@ type Store interface {
 	ListClassroomMembers(context.Context, string) ([]model.ClassroomMember, error)
 	IsClassroomMember(context.Context, string, string) (bool, error)
 	RemoveClassroomMember(context.Context, string, string, string) error
+}
+
+type idempotentCreateStore interface {
+	CreateClassroomWithClientID(context.Context, *model.Classroom, string, string) (*model.Classroom, error)
+}
+
+type invitationStore interface {
+	CreateClassroomInvitation(context.Context, string, *model.ClassroomInvitation) error
+	ListClassroomInvitations(context.Context, string, string) ([]model.ClassroomInvitation, error)
+	FindClassroomInvitationByJoinCode(context.Context, string) (*model.ClassroomInvitation, error)
+	DeleteClassroomInvitation(context.Context, string, string, string) error
+	AcceptClassroomInvitation(context.Context, string, string, *model.ClassroomMember) error
+}
+
+type leaveStore interface {
+	LeaveClassroom(context.Context, string, string) error
+}
+
+type memberProfileStore interface {
+	GetUser(context.Context, string) (*model.User, error)
 }
 
 type Service struct {
@@ -76,6 +99,7 @@ func (s *Service) available() error {
 type CreateInput struct {
 	Name        string
 	Description string
+	ClientID    string
 }
 
 type UpdateInput struct {
@@ -94,6 +118,15 @@ func (s *Service) Create(ctx context.Context, user *model.User, input CreateInpu
 	if err != nil {
 		return nil, err
 	}
+	clientID := strings.TrimSpace(input.ClientID)
+	if len(clientID) > 128 {
+		return nil, fmt.Errorf("%w: client_id must be at most 128 characters", ErrInvalidInput)
+	}
+	payloadHash := ""
+	if clientID != "" {
+		sum := sha256.Sum256([]byte(name + "\x00" + description))
+		payloadHash = hex.EncodeToString(sum[:])
+	}
 	// A code collision is extremely unlikely, but the persistence layer keeps
 	// it conditional and the service retries without exposing the race.
 	for attempt := 0; attempt < 5; attempt++ {
@@ -107,11 +140,21 @@ func (s *Service) Create(ctx context.Context, user *model.User, input CreateInpu
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
-		if err := s.Store.CreateClassroom(ctx, classroom); err != nil {
-			if errors.Is(err, store.ErrClassroomCodeTaken) {
+		var createErr error
+		if clientID != "" {
+			if store, ok := s.Store.(idempotentCreateStore); ok {
+				classroom, createErr = store.CreateClassroomWithClientID(ctx, classroom, clientID, payloadHash)
+			} else {
+				createErr = ErrStoreUnavailable
+			}
+		} else {
+			createErr = s.Store.CreateClassroom(ctx, classroom)
+		}
+		if createErr != nil {
+			if errors.Is(createErr, store.ErrClassroomCodeTaken) {
 				continue
 			}
-			return nil, translateStoreError(err)
+			return nil, translateStoreError(createErr)
 		}
 		return classroom, nil
 	}
@@ -212,6 +255,38 @@ func (s *Service) Join(ctx context.Context, user *model.User, joinCode, expected
 	if !validJoinCode(joinCode) {
 		return nil, ErrInvalidJoinCode
 	}
+	if invitations, ok := s.Store.(invitationStore); ok {
+		invitation, err := invitations.FindClassroomInvitationByJoinCode(ctx, joinCode)
+		if err != nil {
+			return nil, translateStoreError(err)
+		}
+		if invitation != nil {
+			classroom, err := s.Store.GetClassroom(ctx, invitation.ClassroomID)
+			if err != nil {
+				return nil, translateStoreError(err)
+			}
+			if classroom == nil || (expectedClassroomID != "" && classroom.ID != strings.TrimSpace(expectedClassroomID)) {
+				return nil, ErrClassroomNotFound
+			}
+			if invitation.Status == "accepted" && invitation.AcceptedBy == user.UserID {
+				member, err := s.Store.IsClassroomMember(ctx, classroom.ID, user.UserID)
+				if err != nil {
+					return nil, translateStoreError(err)
+				}
+				if member {
+					return visibleToUser(classroom, user), nil
+				}
+			}
+			if invitation.Status != "pending" || !strings.EqualFold(invitation.Email, user.Email) {
+				return nil, ErrInvalidJoinCode
+			}
+			member := &model.ClassroomMember{ClassroomID: classroom.ID, UserID: user.UserID, Name: user.Name, Email: user.Email, Role: auth.RoleStudent, JoinedAt: s.now().UTC().Format(time.RFC3339Nano)}
+			if err := invitations.AcceptClassroomInvitation(ctx, classroom.ID, invitation.ID, member); err != nil {
+				return nil, translateStoreError(err)
+			}
+			return visibleToUser(classroom, user), nil
+		}
+	}
 	classroom, err := s.Store.FindClassroomByJoinCode(ctx, joinCode)
 	if err != nil {
 		return nil, translateStoreError(err)
@@ -224,6 +299,98 @@ func (s *Service) Join(ctx context.Context, user *model.User, joinCode, expected
 		return nil, translateStoreError(err)
 	}
 	return visibleToUser(classroom, user), nil
+}
+
+func (s *Service) Invite(ctx context.Context, user *model.User, classroomID, name, email string) (*model.ClassroomInvitation, error) {
+	if err := requireTeacher(user); err != nil {
+		return nil, err
+	}
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	invitations, ok := s.Store.(invitationStore)
+	if !ok {
+		return nil, ErrStoreUnavailable
+	}
+	name = strings.TrimSpace(name)
+	email = auth.NormalizeEmail(email)
+	parsed, err := mail.ParseAddress(email)
+	if name == "" || len([]rune(name)) > 80 || err != nil || !strings.EqualFold(parsed.Address, email) || !auth.ValidEmail(email) {
+		return nil, fmt.Errorf("%w: a name and valid email are required", ErrInvalidInput)
+	}
+	classroom, err := s.Store.GetClassroom(ctx, strings.TrimSpace(classroomID))
+	if err != nil {
+		return nil, translateStoreError(err)
+	}
+	if classroom == nil {
+		return nil, ErrClassroomNotFound
+	}
+	if classroom.OwnerID != user.UserID {
+		return nil, ErrClassroomForbidden
+	}
+	rows, err := invitations.ListClassroomInvitations(ctx, user.UserID, classroom.ID)
+	if err != nil {
+		return nil, translateStoreError(err)
+	}
+	for _, existing := range rows {
+		if existing.Status == "pending" && strings.EqualFold(existing.Email, email) {
+			return &existing, nil
+		}
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		invitation := &model.ClassroomInvitation{ID: "invite-" + randomHex(12), ClassroomID: classroom.ID, Name: name, Email: email, Status: "pending", CreatedAt: s.now().UTC().Format(time.RFC3339Nano), JoinCode: randomJoinCode()}
+		if err := invitations.CreateClassroomInvitation(ctx, user.UserID, invitation); err != nil {
+			if errors.Is(err, store.ErrClassroomCodeTaken) {
+				continue
+			}
+			return nil, translateStoreError(err)
+		}
+		return invitation, nil
+	}
+	return nil, ErrJoinCodeTaken
+}
+
+func (s *Service) ListInvitations(ctx context.Context, user *model.User, classroomID string) ([]model.ClassroomInvitation, error) {
+	if err := requireTeacher(user); err != nil {
+		return nil, err
+	}
+	if err := s.available(); err != nil {
+		return nil, err
+	}
+	invitations, ok := s.Store.(invitationStore)
+	if !ok {
+		return nil, ErrStoreUnavailable
+	}
+	rows, err := invitations.ListClassroomInvitations(ctx, user.UserID, strings.TrimSpace(classroomID))
+	return rows, translateStoreError(err)
+}
+
+func (s *Service) DeleteInvitation(ctx context.Context, user *model.User, classroomID, invitationID string) error {
+	if err := requireTeacher(user); err != nil {
+		return err
+	}
+	if err := s.available(); err != nil {
+		return err
+	}
+	invitations, ok := s.Store.(invitationStore)
+	if !ok {
+		return ErrStoreUnavailable
+	}
+	return translateStoreError(invitations.DeleteClassroomInvitation(ctx, user.UserID, strings.TrimSpace(classroomID), strings.TrimSpace(invitationID)))
+}
+
+func (s *Service) Leave(ctx context.Context, user *model.User, classroomID string) error {
+	if err := requireStudent(user); err != nil {
+		return err
+	}
+	if err := s.available(); err != nil {
+		return err
+	}
+	leaver, ok := s.Store.(leaveStore)
+	if !ok {
+		return ErrStoreUnavailable
+	}
+	return translateStoreError(leaver.LeaveClassroom(ctx, strings.TrimSpace(classroomID), user.UserID))
 }
 
 func (s *Service) ListMembers(ctx context.Context, user *model.User, classroomID string) ([]model.ClassroomMember, error) {
@@ -246,6 +413,17 @@ func (s *Service) ListMembers(ctx context.Context, user *model.User, classroomID
 	rows, err := s.Store.ListClassroomMembers(ctx, classroom.ID)
 	if err != nil {
 		return nil, translateStoreError(err)
+	}
+	if profiles, ok := s.Store.(memberProfileStore); ok {
+		for i := range rows {
+			profile, err := profiles.GetUser(ctx, rows[i].UserID)
+			if err != nil {
+				return nil, translateStoreError(err)
+			}
+			if profile != nil && strings.TrimSpace(profile.Name) != "" {
+				rows[i].Name = profile.Name
+			}
+		}
 	}
 	return rows, nil
 }
@@ -415,6 +593,10 @@ func translateStoreError(err error) error {
 		return ErrAlreadyMember
 	case errors.Is(err, store.ErrClassroomMemberNotFound):
 		return ErrMemberNotFound
+	case errors.Is(err, store.ErrClassroomInvitation), errors.Is(err, store.ErrClassroomInvitationUsed):
+		return ErrInvalidJoinCode
+	case errors.Is(err, store.ErrClassroomIdempotencyConflict):
+		return ErrIdempotencyConflict
 	case errors.Is(err, store.ErrClassroomCodeTaken):
 		return ErrJoinCodeTaken
 	default:

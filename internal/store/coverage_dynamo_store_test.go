@@ -219,8 +219,8 @@ func TestDynamoExamAndQuizListingPaths(t *testing.T) {
 
 	seedItem(fake, model.ExamMeta{PK: "EXAM#e1", SK: "META", ID: "", Title: "Exam", CreatedAt: "2026-09-01T00:00:00Z"})
 	seedItem(fake, model.ExamMeta{PK: "EXAM#e2", SK: "META", Title: "Earlier", CreatedAt: "2026-08-01T00:00:00Z"})
-	if exams, err := s.ListExams(ctx, 1); err != nil || len(exams) != 2 {
-		t.Fatalf("ListExams fake page should preserve backend rows = %#v, %v", exams, err)
+	if exams, err := s.ListExams(ctx, 1); err != nil || len(exams) != 1 || exams[0].ID != "e2" {
+		t.Fatalf("ListExams should apply the result limit after scanning and sorting = %#v, %v", exams, err)
 	}
 	// A scripted scan error reaches the public listing unchanged.
 	fake.scanErrors = []error{errors.New("exam scan failed")}

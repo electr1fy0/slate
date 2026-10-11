@@ -5,9 +5,13 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -32,6 +36,8 @@ var (
 	ErrAccountDeleted         = errors.New("account no longer exists")
 	ErrTeacherRequired        = errors.New("teacher role required")
 	ErrInvalidAdminToken      = errors.New("invalid admin token")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
+	ErrInvalidResetToken      = errors.New("invalid or expired reset token")
 )
 
 var readRandom = rand.Read
@@ -45,10 +51,27 @@ type UserStore interface {
 }
 
 type Service struct {
-	Users    UserStore
-	Settings config.Settings
-	Now      func() time.Time
-	sign     func(*jwt.Token, []byte) (string, error)
+	Users       UserStore
+	Settings    config.Settings
+	Now         func() time.Time
+	sign        func(*jwt.Token, []byte) (string, error)
+	ResetMailer PasswordResetMailer
+}
+
+// PasswordResetMailer receives reset links only through the configured local
+// or SMTP delivery adapter. The HTTP API never receives or returns the link.
+type PasswordResetMailer interface {
+	SendPasswordReset(context.Context, string, string, string) error
+}
+
+type ProfileStore interface {
+	UpdateUserName(context.Context, string, string) (*model.User, error)
+	ChangePassword(context.Context, string, string, string) error
+}
+
+type PasswordResetStore interface {
+	CreatePasswordReset(context.Context, model.PasswordResetRecord) error
+	CompletePasswordReset(context.Context, string, string, int64) error
 }
 
 func New(users UserStore, settings config.Settings) *Service {
@@ -77,6 +100,9 @@ func ValidEmail(email string) bool       { return EmailPattern.MatchString(email
 // HashPassword emits the standard modular bcrypt format accepted by the
 // bcrypt package (and by other bcrypt implementations).
 func HashPassword(password string) (string, error) {
+	if len(password) < 8 || len(password) > 72 {
+		return "", fmt.Errorf("password must contain 8 to 72 bytes")
+	}
 	// The deployed service uses bcrypt's 12-round default.
 	// Keep that work factor when accounts are created by Go.
 	digest, err := bcrypt.GenerateFromPassword([]byte(password), 12)
@@ -168,6 +194,123 @@ func (s *Service) Authenticate(ctx context.Context, email, password string) (*mo
 	return safeUser(user), nil
 }
 
+func (s *Service) UpdateName(ctx context.Context, userID, name string) (*model.User, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 60 {
+		return nil, fmt.Errorf("name is required and must be at most 60 characters")
+	}
+	profiles, ok := s.Users.(ProfileStore)
+	if !ok {
+		return nil, fmt.Errorf("profile updates are unavailable")
+	}
+	user, err := profiles.UpdateUserName(ctx, userID, name)
+	if err != nil || user == nil {
+		return nil, err
+	}
+	return safeUser(user), nil
+}
+
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	if len(newPassword) < 8 || len(newPassword) > 72 {
+		return fmt.Errorf("password must contain 8 to 72 bytes")
+	}
+	user, err := s.Users.GetUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user == nil || !VerifyPassword(currentPassword, user.PasswordHash) {
+		return ErrInvalidCredentials
+	}
+	profiles, ok := s.Users.(ProfileStore)
+	if !ok {
+		return fmt.Errorf("password updates are unavailable")
+	}
+	digest, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := profiles.ChangePassword(ctx, userID, user.PasswordHash, digest); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RequestPasswordReset is enumeration-safe: an unknown email, an unconfigured
+// mail adapter, or a delivery failure all produce the same nil result. The
+// token is random, stored by digest, and sent only to the injected mailer.
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	if s.ResetMailer == nil {
+		return nil
+	}
+	id, err := s.FindUserIDByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return nil
+	}
+	user, err := s.Users.GetUser(ctx, id)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return nil
+	}
+	resetStore, ok := s.Users.(PasswordResetStore)
+	if !ok {
+		return nil
+	}
+	raw := make([]byte, 32)
+	if _, err := readRandom(raw); err != nil {
+		return err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	digest := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(digest[:])
+	now := s.now().UTC()
+	record := model.PasswordResetRecord{UserID: id, ExpiresAt: now.Add(time.Hour).Unix(), CreatedAt: now.Format(time.RFC3339Nano)}
+	if err := resetStore.CreatePasswordReset(ctx, recordWithHash(record, tokenHash)); err != nil {
+		return err
+	}
+	base := strings.TrimRight(strings.TrimSpace(s.Settings.PublicBaseURL), "/")
+	link := base + "/login?token=" + url.QueryEscape(token)
+	_ = s.ResetMailer.SendPasswordReset(ctx, user.Email, user.Name, link)
+	return nil
+}
+
+func recordWithHash(record model.PasswordResetRecord, tokenHash string) model.PasswordResetRecord {
+	record.PK = "PASSWORD_RESET#" + tokenHash
+	record.SK = "TOKEN"
+	return record
+}
+
+func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
+	if len(newPassword) < 8 || len(newPassword) > 72 {
+		return fmt.Errorf("password must contain 8 to 72 bytes")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" || len(token) > 256 {
+		return ErrInvalidResetToken
+	}
+	resetStore, ok := s.Users.(PasswordResetStore)
+	if !ok {
+		return ErrInvalidResetToken
+	}
+	digest := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(digest[:])
+	passwordHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := resetStore.CompletePasswordReset(ctx, tokenHash, passwordHash, s.now().Unix()); err != nil {
+		if errors.Is(err, store.ErrPasswordResetInvalid) {
+			return ErrInvalidResetToken
+		}
+		return err
+	}
+	return nil
+}
+
 // Claims is the decoded JWT claims set. Numeric timestamps are represented as
 // int64 in newly issued tokens and are accepted by standard JSON decoders.
 type Claims struct {
@@ -182,7 +325,7 @@ type Claims struct {
 
 func (s *Service) EncodeToken(user *model.User, typ string, ttl time.Duration) (string, error) {
 	now := s.now().Unix()
-	claims := jwt.MapClaims{"sub": user.UserID, "role": user.Role, "name": user.Name, "typ": typ, "iat": now, "exp": now + int64(ttl/time.Second), "jti": randomHexID()}
+	claims := jwt.MapClaims{"sub": user.UserID, "role": user.Role, "name": user.Name, "typ": typ, "iat": now, "exp": now + int64(ttl/time.Second), "jti": randomHexID(), "sv": user.SessionVersion}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	if s.sign != nil {
 		return s.sign(token, []byte(s.Settings.JWTSecret))
@@ -259,7 +402,37 @@ func (s *Service) CurrentUser(ctx context.Context, authorization string) (*model
 	if user == nil {
 		return nil, ErrAccountDeleted
 	}
+	if !SessionValid(claims, user) {
+		return nil, ErrInvalidSession
+	}
 	return safeUser(user), nil
+}
+
+// SessionValid checks the JWT's revocation counter. Tokens minted before the
+// counter existed carry no `sv` claim and are treated as version zero.
+func SessionValid(claims jwt.MapClaims, user *model.User) bool {
+	if user == nil {
+		return false
+	}
+	version := int64(0)
+	switch value := claims["sv"].(type) {
+	case float64:
+		version = int64(value)
+	case int64:
+		version = value
+	case int:
+		version = int64(value)
+	case json.Number:
+		parsed, err := value.Int64()
+		if err != nil {
+			return false
+		}
+		version = parsed
+	case nil:
+	default:
+		return false
+	}
+	return version == user.SessionVersion
 }
 
 func ParseBearer(header string) (scheme, token string, ok bool) {
@@ -288,6 +461,9 @@ func (s *Service) ResolveOptionalUser(ctx context.Context, authorization string)
 		return nil, err
 	}
 	if user == nil {
+		return nil, nil
+	}
+	if !SessionValid(claims, user) {
 		return nil, nil
 	}
 	return safeUser(user), nil

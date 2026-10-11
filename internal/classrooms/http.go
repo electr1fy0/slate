@@ -1,10 +1,12 @@
 package classrooms
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -18,13 +20,27 @@ import (
 type ActiveChecker func(http.ResponseWriter, *http.Request) bool
 
 type HTTPHandler struct {
-	service       *Service
-	auth          *auth.Service
-	requireActive ActiveChecker
+	service          *Service
+	auth             *auth.Service
+	requireActive    ActiveChecker
+	invitationSender InvitationSender
+	publicBaseURL    string
+}
+
+type InvitationSender interface {
+	SendClassroomInvitation(context.Context, string, string, string, string) error
 }
 
 func NewHTTPHandler(service *Service, authService *auth.Service, requireActive ActiveChecker) *HTTPHandler {
 	return &HTTPHandler{service: service, auth: authService, requireActive: requireActive}
+}
+
+func (h *HTTPHandler) SetInvitationDelivery(sender InvitationSender, publicBaseURL string) {
+	if h == nil {
+		return
+	}
+	h.invitationSender = sender
+	h.publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +62,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.resource(w, r, segments[0])
 	case len(segments) == 2 && segments[1] == "join":
 		h.join(w, r, segments[0])
+	case len(segments) == 2 && segments[1] == "leave":
+		h.leave(w, r, segments[0])
+	case len(segments) == 2 && segments[1] == "invitations":
+		h.invitations(w, r, segments[0])
+	case len(segments) == 3 && segments[1] == "invitations":
+		h.invitation(w, r, segments[0], segments[2])
 	case len(segments) == 2 && (segments[1] == "members" || segments[1] == "roster"):
 		h.roster(w, r, segments[0])
 	case len(segments) == 3 && (segments[1] == "members" || segments[1] == "roster"):
@@ -82,16 +104,110 @@ func (h *HTTPHandler) collection(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		ClientID    string `json:"client_id"`
 	}
 	if !decode(w, r, &payload) {
 		return
 	}
-	classroom, err := h.service.Create(r.Context(), user, CreateInput{Name: payload.Name, Description: payload.Description})
+	classroom, err := h.service.Create(r.Context(), user, CreateInput{Name: payload.Name, Description: payload.Description, ClientID: payload.ClientID})
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, classroom)
+}
+
+func (h *HTTPHandler) invitations(w http.ResponseWriter, r *http.Request, classroomID string) {
+	user, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := h.service.ListInvitations(r.Context(), user, classroomID)
+		if err != nil {
+			h.writeError(w, err)
+			return
+		}
+		if rows == nil {
+			rows = []model.ClassroomInvitation{}
+		}
+		writeJSON(w, http.StatusOK, rows)
+	case http.MethodPost:
+		if !h.active(w, r) {
+			return
+		}
+		var payload struct {
+			Name  string `json:"name"`
+			Email string `json:"email"`
+		}
+		if !decode(w, r, &payload) {
+			return
+		}
+		invitation, err := h.service.Invite(r.Context(), user, classroomID, payload.Name, payload.Email)
+		if err != nil {
+			h.writeError(w, err)
+			return
+		}
+		invitation.Delivery = "not_configured"
+		if h.invitationSender != nil && h.publicBaseURL != "" {
+			link := h.publicBaseURL + "/?join_class=" + url.QueryEscape(invitation.JoinCode)
+			if err := h.invitationSender.SendClassroomInvitation(r.Context(), invitation.Email, invitation.Name, classroomName(r.Context(), h.service, user, classroomID), link); err != nil {
+				invitation.Delivery = "failed"
+			} else {
+				invitation.Delivery = "sent"
+			}
+		}
+		writeJSON(w, http.StatusCreated, invitation)
+	default:
+		methodNotAllowed(w, http.MethodGet, http.MethodPost)
+	}
+}
+
+func classroomName(ctx context.Context, service *Service, user *model.User, classroomID string) string {
+	classroom, err := service.GetForUser(ctx, user, classroomID)
+	if err != nil || classroom == nil {
+		return "your classroom"
+	}
+	return classroom.Name
+}
+
+func (h *HTTPHandler) invitation(w http.ResponseWriter, r *http.Request, classroomID, invitationID string) {
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w, http.MethodDelete)
+		return
+	}
+	user, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	if !h.active(w, r) {
+		return
+	}
+	if err := h.service.DeleteInvitation(r.Context(), user, classroomID, invitationID); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTPHandler) leave(w http.ResponseWriter, r *http.Request, classroomID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	user, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	if !h.active(w, r) {
+		return
+	}
+	if err := h.service.Leave(r.Context(), user, classroomID); err != nil {
+		h.writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTPHandler) resource(w http.ResponseWriter, r *http.Request, classroomID string) {
@@ -254,6 +370,8 @@ func (h *HTTPHandler) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrClassroomNotFound), errors.Is(err, ErrMemberNotFound):
 		detail(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrAlreadyMember), errors.Is(err, ErrJoinCodeTaken):
+		detail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrIdempotencyConflict):
 		detail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrInvalidJoinCode), errors.Is(err, ErrInvalidInput):
 		validation(w, err.Error())

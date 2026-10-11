@@ -25,6 +25,7 @@ import (
 	"github.com/ayush/slate/internal/classrooms"
 	"github.com/ayush/slate/internal/clusterstate"
 	"github.com/ayush/slate/internal/config"
+	"github.com/ayush/slate/internal/emaildelivery"
 	"github.com/ayush/slate/internal/exams"
 	"github.com/ayush/slate/internal/health"
 	appmw "github.com/ayush/slate/internal/middleware"
@@ -42,6 +43,9 @@ type Backend interface {
 	ListSubmissions(context.Context, string, int) ([]model.Submission, error)
 	ListOutbox(context.Context, int) ([]model.OutboxEntry, error)
 	GetSubmission(context.Context, string, string) (*model.Submission, error)
+	ListQuestionBank(context.Context, string) ([]model.QuestionBankItem, error)
+	SaveQuestionBankItem(context.Context, *model.QuestionBankItem) (*model.QuestionBankItem, error)
+	DeleteQuestionBankItem(context.Context, string, string) error
 	HeartbeatProbe(context.Context, string) (bool, float64, error)
 	auth.UserStore
 	exams.Store
@@ -77,16 +81,19 @@ func (r *RoleManager) Promote() {
 }
 
 type Server struct {
-	Settings   config.Settings
-	Store      Backend
-	Auth       *auth.Service
-	Exams      *exams.Service
-	Classrooms *classrooms.Service
-	Boards     *boards.Manager
-	Chaos      *chaos.State
-	Roles      *RoleManager
-	Now        func() time.Time
-	WS         http.Handler
+	Settings         config.Settings
+	Store            Backend
+	Auth             *auth.Service
+	Exams            *exams.Service
+	Classrooms       *classrooms.Service
+	ClassroomStore   classrooms.Store
+	Mailer           *emaildelivery.SMTP
+	InvitationSender classrooms.InvitationSender
+	Boards           *boards.Manager
+	Chaos            *chaos.State
+	Roles            *RoleManager
+	Now              func() time.Time
+	WS               http.Handler
 }
 
 func New(settings config.Settings, backend Backend) *Server {
@@ -97,19 +104,30 @@ func New(settings config.Settings, backend Backend) *Server {
 	var boardStore boards.BoardSnapshotStore
 	if candidate, ok := backend.(*store.Store); ok {
 		boardStore = store.NewBoardStore(candidate)
+	} else if candidate, ok := backend.(*store.MemoryStore); ok {
+		boardStore = store.NewMemoryBoardStore(candidate)
+	} else if candidate, ok := backend.(interface{ MemoryStoreBackend() *store.MemoryStore }); ok {
+		boardStore = store.NewMemoryBoardStore(candidate.MemoryStoreBackend())
 	}
-	return &Server{
-		Settings:   settings,
-		Store:      backend,
-		Auth:       auth.New(backend, settings),
-		Exams:      exams.New(backend),
-		Classrooms: classrooms.New(classroomStore),
-		Boards:     boards.NewManagerWithPersistence(boardStore, boards.DefaultSaveDebounce),
+	server := &Server{
+		Settings:       settings,
+		Store:          backend,
+		Auth:           auth.New(backend, settings),
+		Exams:          exams.New(backend),
+		Classrooms:     classrooms.New(classroomStore),
+		ClassroomStore: classroomStore,
+		Boards:         boards.NewManagerWithPersistence(boardStore, boards.DefaultSaveDebounce),
 		Chaos: chaos.NewState(chaos.Config{ErrorPct: settings.ChaosErrorPct, LatencyMS: settings.ChaosLatencyMS,
 			DBStall: settings.DBStall, ErrorWindow: settings.ErrorRateWindow}),
 		Roles: NewRoleManager(settings.RoleFile, settings.AppRole),
 		Now:   time.Now,
 	}
+	if settings.SMTPHost != "" {
+		server.Mailer = &emaildelivery.SMTP{Settings: settings}
+		server.InvitationSender = server.Mailer
+		server.Auth.ResetMailer = server.Mailer
+	}
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -121,10 +139,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/login", s.login)
 	mux.HandleFunc("POST /auth/refresh", s.refresh)
 	mux.HandleFunc("GET /auth/me", s.me)
+	mux.HandleFunc("PATCH /auth/me", s.patchMe)
+	mux.HandleFunc("POST /auth/change-password", s.changePassword)
+	mux.HandleFunc("POST /auth/forgot-password", s.forgotPassword)
+	mux.HandleFunc("POST /auth/reset-password", s.resetPassword)
 	if s.Classrooms != nil {
 		classroomHandler := classrooms.NewHTTPHandler(s.Classrooms, s.Auth, func(w http.ResponseWriter, _ *http.Request) bool {
 			return s.requireActive(w)
 		})
+		classroomHandler.SetInvitationDelivery(s.InvitationSender, s.Settings.PublicBaseURL)
 		// The project historically mounted API resources at the root. Keep both
 		// forms so existing clients continue to work while new clients can use
 		// the conventional /api prefix.
@@ -137,6 +160,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /exams", s.listExams)
 	mux.HandleFunc("POST /exam", s.createExam)
 	mux.HandleFunc("GET /exam/{examID}", s.getExam)
+	mux.HandleFunc("GET /exam/{examID}/info", s.examInfo)
 	mux.HandleFunc("GET /exam/{examID}/preview", s.previewExam)
 	mux.HandleFunc("GET /exam/{examID}/attempt", s.getAttempt)
 	mux.HandleFunc("PUT /exam/{examID}/attempt", s.saveAttempt)
@@ -158,6 +182,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/boards/{roomID}/export", s.boardExport)
 	mux.HandleFunc("POST /api/boards/{roomID}/restore", s.boardRestore)
 	mux.HandleFunc("GET /admin/exams/{examID}/results", s.examResults)
+	mux.HandleFunc("GET /question-bank", s.questionBank)
+	mux.HandleFunc("POST /question-bank", s.saveQuestionBankItem)
+	mux.HandleFunc("DELETE /question-bank/{itemID}", s.deleteQuestionBankItem)
+	mux.HandleFunc("GET /api/question-bank", s.questionBank)
+	mux.HandleFunc("POST /api/question-bank", s.saveQuestionBankItem)
+	mux.HandleFunc("DELETE /api/question-bank/{itemID}", s.deleteQuestionBankItem)
 	mux.HandleFunc("GET /admin/outbox", s.outbox)
 	mux.HandleFunc("GET /admin/submissions", s.submissions)
 	mux.HandleFunc("GET /admin/status", s.status)
@@ -353,6 +383,10 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		detail(w, 401, "account no longer exists")
 		return
 	}
+	if !auth.SessionValid(claims, u) {
+		detail(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		return
+	}
 	tokens, err := s.Auth.IssueTokens(u)
 	if err != nil {
 		detail(w, 500, "token issue failed")
@@ -368,6 +402,139 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"user": u})
+}
+
+func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	u, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		Name *string `json:"name"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if payload.Name == nil {
+		validation(w, "name is required")
+		return
+	}
+	updated, err := s.Auth.UpdateName(r.Context(), u.UserID, *payload.Name)
+	if err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
+		if strings.Contains(err.Error(), "name is required") {
+			validation(w, err.Error())
+			return
+		}
+		detail(w, http.StatusServiceUnavailable, "account settings could not be updated")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	u, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	var payload struct {
+		CurrentPassword string `json:"current_password"`
+		Password        string `json:"password"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if payload.CurrentPassword == "" || payload.Password == "" {
+		validation(w, "current_password and password are required")
+		return
+	}
+	if len(payload.Password) < 8 || len(payload.Password) > 72 {
+		validation(w, "password must contain 8 to 72 bytes")
+		return
+	}
+	err := s.Auth.ChangePassword(r.Context(), u.UserID, payload.CurrentPassword, payload.Password)
+	switch {
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		detail(w, http.StatusUnauthorized, "current password is incorrect")
+	case errors.Is(err, clusterstate.ErrFenced):
+		writeWriterFenced(w)
+	case err != nil:
+		detail(w, http.StatusServiceUnavailable, "password could not be changed")
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"message": "Password changed. Sign in again with your new password."})
+	}
+}
+
+func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Email string `json:"email"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if !auth.ValidEmail(payload.Email) {
+		validation(w, "a valid email is required")
+		return
+	}
+	if !s.requireActive(w) {
+		return
+	}
+	if s.Auth.ResetMailer == nil {
+		detail(w, http.StatusServiceUnavailable, "password reset email delivery is unavailable")
+		return
+	}
+	if err := s.Auth.RequestPasswordReset(r.Context(), payload.Email); err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
+		detail(w, http.StatusServiceUnavailable, "password reset could not be requested")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "If the address belongs to an account and email delivery succeeds, reset instructions will be sent."})
+}
+
+func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &payload) {
+		return
+	}
+	if payload.Token == "" || payload.Password == "" {
+		validation(w, "token and password are required")
+		return
+	}
+	if len(payload.Password) < 8 || len(payload.Password) > 72 {
+		validation(w, "password must contain 8 to 72 bytes")
+		return
+	}
+	if !s.requireActive(w) {
+		return
+	}
+	if err := s.Auth.ResetPassword(r.Context(), payload.Token, payload.Password); err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
+		if errors.Is(err, auth.ErrInvalidResetToken) {
+			detail(w, http.StatusBadRequest, "invalid or expired reset token")
+			return
+		}
+		detail(w, http.StatusServiceUnavailable, "password could not be reset")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Password reset. Sign in with your new password."})
 }
 
 func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +581,9 @@ func (s *Server) getExam(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), u); !ok {
+		return
+	}
 	exam, err := s.Exams.Get(r.Context(), r.PathValue("examID"), u)
 	if s.writeExamError(w, err) {
 		return
@@ -421,10 +591,116 @@ func (s *Server) getExam(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, exam)
 }
 
+func (s *Server) examInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.currentUser(w, r)
+	if !ok {
+		return
+	}
+	meta, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), user)
+	if !ok {
+		return
+	}
+	if user.Role == auth.RoleStudent {
+		if err := s.fillExamAttemptStatus(r.Context(), meta, user.UserID); err != nil {
+			detail(w, http.StatusServiceUnavailable, "attempt status unavailable")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
+func (s *Server) authorizeExamUser(w http.ResponseWriter, r *http.Request, examID string, user *model.User) (*model.ExamMeta, bool) {
+	meta, err := s.Store.GetExamMeta(r.Context(), examID)
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "data layer unavailable")
+		return nil, false
+	}
+	if meta == nil {
+		detail(w, http.StatusNotFound, "exam not found")
+		return nil, false
+	}
+	meta.ID = examID
+	allowed, err := s.canAccessExam(r.Context(), user, meta)
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "exam access could not be checked")
+		return nil, false
+	}
+	if !allowed {
+		detail(w, http.StatusForbidden, "exam access forbidden")
+		return nil, false
+	}
+	return meta, true
+}
+
+func (s *Server) canAccessExam(ctx context.Context, user *model.User, meta *model.ExamMeta) (bool, error) {
+	if user == nil || meta == nil {
+		return false, nil
+	}
+	classroomID := strings.TrimSpace(meta.ClassroomID)
+	ownerID := strings.TrimSpace(meta.OwnerID)
+	if ownerID == "" && classroomID == "" {
+		return user.Role == auth.RoleStudent || user.Role == auth.RoleTeacher, nil
+	}
+	if classroomID != "" {
+		if ownerID == "" || s.ClassroomStore == nil {
+			return false, nil
+		}
+		classroom, err := s.ClassroomStore.GetClassroom(ctx, classroomID)
+		if err != nil {
+			return false, err
+		}
+		if classroom == nil || classroom.OwnerID != ownerID {
+			return false, nil
+		}
+	}
+	switch user.Role {
+	case auth.RoleTeacher:
+		return ownerID != "" && user.UserID == ownerID, nil
+	case auth.RoleStudent:
+		if classroomID == "" || s.ClassroomStore == nil {
+			return false, nil
+		}
+		return s.ClassroomStore.IsClassroomMember(ctx, classroomID, user.UserID)
+	default:
+		return false, nil
+	}
+}
+
+func (s *Server) fillExamAttemptStatus(ctx context.Context, meta *model.ExamMeta, studentID string) error {
+	submission, err := s.Store.GetSubmission(ctx, meta.ID, studentID)
+	if err != nil {
+		return err
+	}
+	if submission != nil {
+		meta.AttemptStatus = "submitted"
+		meta.Score, meta.Total = submission.Score, submission.Total
+		meta.SubmittedAt = submission.UpdatedAtISO
+		meta.AttemptNumber = submission.AttemptNumber
+		return nil
+	}
+	attempt, err := s.Store.GetStudentAttempt(ctx, meta.ID, studentID)
+	if err != nil {
+		return err
+	}
+	if attempt == nil {
+		meta.AttemptStatus = "not_started"
+		return nil
+	}
+	meta.AttemptStatus = "in_progress"
+	meta.AttemptNumber = attempt.AttemptNumber
+	return nil
+}
+
 // previewExam deliberately includes answer metadata, but only for staff. The
 // student delivery route above always redacts it through exams.Service.
 func (s *Server) previewExam(w http.ResponseWriter, r *http.Request) {
-	if !s.requireActive(w) || !s.requireStaff(w, r) {
+	if !s.requireActive(w) {
+		return
+	}
+	if _, _, ok := s.authorizeExamStaff(w, r, r.PathValue("examID")); !ok {
 		return
 	}
 	exam, err := s.Store.GetExam(r.Context(), r.PathValue("examID"), true)
@@ -447,6 +723,9 @@ func (s *Server) getAttempt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), user); !ok {
+		return
+	}
 	attempt, deadline, err := s.Exams.Resume(r.Context(), r.PathValue("examID"), user)
 	if s.writeExamError(w, err) {
 		return
@@ -460,6 +739,9 @@ func (s *Server) saveAttempt(w http.ResponseWriter, r *http.Request) {
 	}
 	user, ok := s.currentUser(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), user); !ok {
 		return
 	}
 	var payload struct {
@@ -496,6 +778,9 @@ func (s *Server) submitSavedAttempt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), user); !ok {
+		return
+	}
 	var payload struct {
 		RequestID string `json:"request_id"`
 	}
@@ -519,6 +804,9 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	u, ok := s.currentUser(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := s.authorizeExamUser(w, r, r.PathValue("examID"), u); !ok {
 		return
 	}
 	var p struct {
@@ -561,6 +849,9 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	examID := r.PathValue("examID")
+	if _, ok := s.authorizeExamUser(w, r, examID, u); !ok {
+		return
+	}
 	sub, err := s.Store.GetSubmission(r.Context(), examID, u.UserID)
 	if err != nil {
 		detail(w, 503, "data layer unavailable")
@@ -580,7 +871,8 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 				chosenValue = chosen
 			}
 			review = append(review, map[string]any{"index": q.Index, "question": q.Question, "options": q.Options,
-				"chosen": chosenValue, "correct_answer": q.Answer, "was_correct": exists && chosen == q.Answer})
+				"chosen": chosenValue, "correct_answer": q.Answer, "was_correct": exists && chosen == q.Answer,
+				"points": effectiveQuestionPoints(q.Points), "feedback": q.Feedback})
 		}
 	}
 	writeJSON(w, 200, map[string]any{"status": "submitted", "score": sub.Score, "total": sub.Total,
@@ -588,12 +880,42 @@ func (s *Server) result(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listExams(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Store.ListExams(r.Context(), 50)
+	user, err := s.Auth.ResolveOptionalUser(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "data layer unavailable")
+		return
+	}
+	rows, err := s.Store.ListExams(r.Context(), -1)
 	if err != nil {
 		detail(w, 503, "data layer unavailable")
 		return
 	}
-	writeJSON(w, 200, rows)
+	visible := make([]model.ExamMeta, 0, len(rows))
+	for i := range rows {
+		rows[i].ID = strings.TrimPrefix(rows[i].PK, "EXAM#")
+		if user == nil {
+			if rows[i].OwnerID != "" || rows[i].ClassroomID != "" {
+				continue
+			}
+		} else {
+			allowed, err := s.canAccessExam(r.Context(), user, &rows[i])
+			if err != nil {
+				detail(w, http.StatusServiceUnavailable, "exam access could not be checked")
+				return
+			}
+			if !allowed {
+				continue
+			}
+		}
+		if user != nil && user.Role == auth.RoleStudent {
+			if err := s.fillExamAttemptStatus(r.Context(), &rows[i], user.UserID); err != nil {
+				detail(w, http.StatusServiceUnavailable, "attempt status unavailable")
+				return
+			}
+		}
+		visible = append(visible, rows[i])
+	}
+	writeJSON(w, http.StatusOK, visible)
 }
 
 func (s *Server) boardHistory(w http.ResponseWriter, r *http.Request) {
@@ -665,12 +987,114 @@ func (s *Server) writeBoardError(w http.ResponseWriter, err error) {
 	}
 }
 
+func (s *Server) questionBank(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.Store.ListQuestionBank(r.Context(), user.UserID)
+	if err != nil {
+		if errors.Is(err, clusterstate.ErrFenced) {
+			writeWriterFenced(w)
+			return
+		}
+		detail(w, http.StatusServiceUnavailable, "question bank unavailable")
+		return
+	}
+	if rows == nil {
+		rows = []model.QuestionBankItem{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (s *Server) saveQuestionBankItem(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	var payload questionPayload
+	if !decode(w, r, &payload) {
+		return
+	}
+	question, err := questionFromPayload(payload, 0)
+	if err != nil {
+		validation(w, err.Error())
+		return
+	}
+	item, err := s.Store.SaveQuestionBankItem(r.Context(), &model.QuestionBankItem{
+		OwnerID: user.UserID, Question: question.Question, Options: question.Options,
+		Answer: question.Answer, Points: question.Points, Feedback: question.Feedback,
+	})
+	if err != nil {
+		s.writeQuestionBankError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) deleteQuestionBankItem(w http.ResponseWriter, r *http.Request) {
+	if !s.requireActive(w) {
+		return
+	}
+	user, ok := s.teacherUser(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Store.DeleteQuestionBankItem(r.Context(), user.UserID, r.PathValue("itemID")); err != nil {
+		s.writeQuestionBankError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) writeQuestionBankError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, clusterstate.ErrFenced):
+		writeWriterFenced(w)
+	case errors.Is(err, store.ErrQuestionBankNotFound):
+		detail(w, http.StatusNotFound, "question bank item not found")
+	case errors.Is(err, store.ErrQuizConflict):
+		detail(w, http.StatusConflict, "question bank item already exists")
+	default:
+		detail(w, http.StatusServiceUnavailable, "question bank could not be updated")
+	}
+}
+
+func questionFromPayload(payload questionPayload, index int) (model.Question, error) {
+	if strings.TrimSpace(payload.Question) == "" || len(payload.Options) < 2 {
+		return model.Question{}, fmt.Errorf("question text and at least two non-empty options are required")
+	}
+	options := trimStrings(payload.Options)
+	for _, option := range options {
+		if option == "" {
+			return model.Question{}, fmt.Errorf("all options must be non-empty")
+		}
+	}
+	if payload.Answer == nil || *payload.Answer < 0 || *payload.Answer >= len(options) {
+		return model.Question{}, fmt.Errorf("answer index is out of range")
+	}
+	if payload.Points < 0 || payload.Points > 1000 {
+		return model.Question{}, fmt.Errorf("points must be between 0 and 1000")
+	}
+	if len([]rune(payload.Feedback)) > 1000 {
+		return model.Question{}, fmt.Errorf("feedback must be at most 1000 characters")
+	}
+	return model.Question{Index: index, Question: strings.TrimSpace(payload.Question), Options: options, Answer: *payload.Answer, Points: payload.Points, Feedback: strings.TrimSpace(payload.Feedback)}, nil
+}
+
 func (s *Server) listQuizDrafts(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.teacherUser(w, r)
 	if !ok {
 		return
 	}
-	rows, err := s.Store.ListQuizDrafts(r.Context(), user.UserID, clamp(queryInt(r, "limit", 50), 1, 100))
+	limit := -1
+	if r.URL.Query().Has("limit") {
+		limit = clamp(queryInt(r, "limit", 50), 1, 100)
+	}
+	rows, err := s.Store.ListQuizDrafts(r.Context(), user.UserID, limit)
 	if err != nil {
 		detail(w, 503, "data layer unavailable")
 		return
@@ -691,6 +1115,10 @@ func (s *Server) createQuizDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	var payload quizDraftPayload
 	if !decode(w, r, &payload) {
+		return
+	}
+	if err := s.validateClassroomAssignment(r.Context(), user, payload.ClassroomID); err != nil {
+		s.writeExamAssignmentError(w, err)
 		return
 	}
 	draft, err := s.quizDraftFromPayload(payload, user.UserID, "")
@@ -739,6 +1167,10 @@ func (s *Server) updateQuizDraft(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &payload) {
 		return
 	}
+	if err := s.validateClassroomAssignment(r.Context(), user, payload.ClassroomID); err != nil {
+		s.writeExamAssignmentError(w, err)
+		return
+	}
 	draft, err := s.quizDraftFromPayload(payload, user.UserID, r.PathValue("draftID"))
 	if err != nil {
 		s.writeQuizError(w, err)
@@ -778,6 +1210,23 @@ func (s *Server) publishQuizDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	user, ok := s.teacherUser(w, r)
 	if !ok {
+		return
+	}
+	draft, err := s.Store.GetQuizDraft(r.Context(), r.PathValue("draftID"))
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "data layer unavailable")
+		return
+	}
+	if draft == nil {
+		detail(w, http.StatusNotFound, "quiz draft not found")
+		return
+	}
+	if draft.OwnerID != user.UserID {
+		detail(w, http.StatusForbidden, "quiz ownership violation")
+		return
+	}
+	if err := s.validateClassroomAssignment(r.Context(), user, draft.ClassroomID); err != nil {
+		s.writeExamAssignmentError(w, err)
 		return
 	}
 	meta, err := s.Store.PublishQuizDraft(r.Context(), r.PathValue("draftID"), user.UserID)
@@ -849,6 +1298,8 @@ type questionPayload struct {
 type examPayload struct {
 	ID               string            `json:"id"`
 	Title            string            `json:"title"`
+	ClassroomID      string            `json:"classroom_id,omitempty"`
+	Instructions     string            `json:"instructions,omitempty"`
 	Questions        []questionPayload `json:"questions"`
 	OpensAt          *string           `json:"opens_at"`
 	ClosesAt         *string           `json:"closes_at"`
@@ -861,6 +1312,8 @@ type examPayload struct {
 type quizDraftPayload struct {
 	ID               string            `json:"id"`
 	Title            string            `json:"title"`
+	ClassroomID      string            `json:"classroom_id,omitempty"`
+	Instructions     string            `json:"instructions,omitempty"`
 	Questions        []questionPayload `json:"questions"`
 	OpensAt          *string           `json:"opens_at"`
 	ClosesAt         *string           `json:"closes_at"`
@@ -871,11 +1324,19 @@ type quizDraftPayload struct {
 }
 
 func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
-	if !s.requireStaff(w, r) || !s.requireActive(w) {
+	if !s.requireActive(w) {
+		return
+	}
+	actor, admin, ok := s.staffActor(w, r)
+	if !ok {
 		return
 	}
 	var p examPayload
 	if !decode(w, r, &p) || !validateExam(w, p) {
+		return
+	}
+	if err := s.validateClassroomAssignment(r.Context(), actor, p.ClassroomID); err != nil {
+		s.writeExamAssignmentError(w, err)
 		return
 	}
 	id := slugify(p.ID)
@@ -913,6 +1374,19 @@ func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
 		qs[i] = model.Question{Index: i, Question: q.Question, Options: trimStrings(q.Options), Answer: *q.Answer, Points: q.Points, Feedback: strings.TrimSpace(q.Feedback)}
 	}
 	window := payloadWindow(p.OpensAt, p.ClosesAt, p.DurationMinutes)
+	if actor != nil {
+		window["owner_id"] = actor.UserID
+	}
+	if strings.TrimSpace(p.ClassroomID) != "" {
+		window["classroom_id"] = strings.TrimSpace(p.ClassroomID)
+	}
+	if strings.TrimSpace(p.Instructions) != "" {
+		window["instructions"] = strings.TrimSpace(p.Instructions)
+	}
+	if admin && strings.TrimSpace(p.ClassroomID) != "" {
+		detail(w, http.StatusForbidden, "an owning teacher is required for classroom assignment")
+		return
+	}
 	if p.MaxAttempts != nil {
 		window["max_attempts"] = *p.MaxAttempts
 	}
@@ -934,19 +1408,18 @@ func (s *Server) createExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
-	if !s.requireStaff(w, r) || !s.requireActive(w) {
+	if !s.requireActive(w) {
 		return
 	}
 	id := r.PathValue("examID")
-	if meta, err := s.Store.GetExamMeta(r.Context(), id); err != nil {
-		detail(w, 503, "data layer unavailable")
-		return
-	} else if meta == nil {
-		detail(w, 404, "exam not found")
+	meta, actor, admin, ok := s.authorizeExamStaffActor(w, r, id)
+	if !ok {
 		return
 	}
 	var p struct {
 		Title            *string `json:"title"`
+		ClassroomID      *string `json:"classroom_id"`
+		Instructions     *string `json:"instructions"`
 		OpensAt          *string `json:"opens_at"`
 		ClosesAt         *string `json:"closes_at"`
 		DurationMinutes  *int    `json:"duration_minutes"`
@@ -957,11 +1430,70 @@ func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p) {
 		return
 	}
-	if p.DurationMinutes != nil && (*p.DurationMinutes <= 0 || *p.DurationMinutes > 1440) {
-		validation(w, "duration_minutes must be greater than 0 and at most 1440")
+	if p.DurationMinutes != nil && (*p.DurationMinutes < 0 || *p.DurationMinutes > 1440) {
+		validation(w, "duration_minutes must be between 0 and 1440")
 		return
 	}
+	if p.MaxAttempts != nil && (*p.MaxAttempts < 0 || *p.MaxAttempts > 20) {
+		validation(w, "max_attempts must be between 0 and 20")
+		return
+	}
+	if p.LateGraceMinutes != nil && (*p.LateGraceMinutes < 0 || *p.LateGraceMinutes > 10080) {
+		validation(w, "late_grace_minutes must be between 0 and 10080")
+		return
+	}
+	if p.Title != nil && (strings.TrimSpace(*p.Title) == "" || len([]rune(*p.Title)) > 200) {
+		validation(w, "title must contain 1 to 200 characters")
+		return
+	}
+	if p.Instructions != nil && len([]rune(*p.Instructions)) > 2000 {
+		validation(w, "instructions must be at most 2000 characters")
+		return
+	}
+	if p.ClassroomID != nil {
+		if err := s.validateClassroomAssignment(r.Context(), actor, *p.ClassroomID); err != nil {
+			s.writeExamAssignmentError(w, err)
+			return
+		}
+		if admin && strings.TrimSpace(*p.ClassroomID) != "" {
+			detail(w, http.StatusForbidden, "an owning teacher is required for classroom assignment")
+			return
+		}
+	}
+	if p.OpensAt != nil && strings.TrimSpace(*p.OpensAt) != "" {
+		if _, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*p.OpensAt)); err != nil {
+			validation(w, "opens_at must be an RFC3339 timestamp")
+			return
+		}
+	}
+	if p.ClosesAt != nil && strings.TrimSpace(*p.ClosesAt) != "" {
+		if _, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*p.ClosesAt)); err != nil {
+			validation(w, "closes_at must be an RFC3339 timestamp")
+			return
+		}
+	}
+	opensAt, closesAt := meta.OpensAt, meta.ClosesAt
+	if p.OpensAt != nil {
+		opensAt = strings.TrimSpace(*p.OpensAt)
+	}
+	if p.ClosesAt != nil {
+		closesAt = strings.TrimSpace(*p.ClosesAt)
+	}
+	if opensAt != "" && closesAt != "" {
+		opens, openErr := time.Parse(time.RFC3339Nano, opensAt)
+		closes, closeErr := time.Parse(time.RFC3339Nano, closesAt)
+		if openErr == nil && closeErr == nil && !closes.After(opens) {
+			validation(w, "closes_at must be after opens_at")
+			return
+		}
+	}
 	window := payloadWindow(p.OpensAt, p.ClosesAt, p.DurationMinutes)
+	if p.ClassroomID != nil {
+		window["classroom_id"] = strings.TrimSpace(*p.ClassroomID)
+	}
+	if p.Instructions != nil {
+		window["instructions"] = strings.TrimSpace(*p.Instructions)
+	}
 	if p.MaxAttempts != nil {
 		window["max_attempts"] = *p.MaxAttempts
 	}
@@ -983,22 +1515,24 @@ func (s *Server) patchExam(w http.ResponseWriter, r *http.Request) {
 	if updated.ClosesAt != "" {
 		body["closes_at"] = updated.ClosesAt
 	}
-	if updated.DurationMinutes > 0 {
+	if p.DurationMinutes != nil || updated.DurationMinutes > 0 {
 		body["duration_minutes"] = updated.DurationMinutes
+	}
+	if p.ClassroomID != nil {
+		body["classroom_id"] = updated.ClassroomID
+	}
+	if p.Instructions != nil {
+		body["instructions"] = updated.Instructions
 	}
 	writeJSON(w, 200, body)
 }
 
 func (s *Server) closeExam(w http.ResponseWriter, r *http.Request) {
-	if !s.requireStaff(w, r) || !s.requireActive(w) {
+	if !s.requireActive(w) {
 		return
 	}
 	id := r.PathValue("examID")
-	if meta, err := s.Store.GetExamMeta(r.Context(), id); err != nil {
-		detail(w, 503, "data layer unavailable")
-		return
-	} else if meta == nil {
-		detail(w, 404, "exam not found")
+	if _, _, _, ok := s.authorizeExamStaffActor(w, r, id); !ok {
 		return
 	}
 	now := s.now().UTC().Format(time.RFC3339Nano)
@@ -1010,7 +1544,10 @@ func (s *Server) closeExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteExam(w http.ResponseWriter, r *http.Request) {
-	if !s.requireStaff(w, r) || !s.requireActive(w) {
+	if !s.requireActive(w) {
+		return
+	}
+	if _, _, _, ok := s.authorizeExamStaffActor(w, r, r.PathValue("examID")); !ok {
 		return
 	}
 	n, err := s.Store.DeleteExam(r.Context(), r.PathValue("examID"))
@@ -1026,7 +1563,7 @@ func (s *Server) deleteExam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) examResults(w http.ResponseWriter, r *http.Request) {
-	if !s.requireStaff(w, r) {
+	if _, _, _, ok := s.authorizeExamStaffActor(w, r, r.PathValue("examID")); !ok {
 		return
 	}
 	id := r.PathValue("examID")
@@ -1186,6 +1723,89 @@ func (s *Server) requireStaff(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+func (s *Server) staffActor(w http.ResponseWriter, r *http.Request) (*model.User, bool, bool) {
+	user, err := s.Auth.ResolveOptionalUser(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "data layer unavailable")
+		return nil, false, false
+	}
+	adminToken := strings.TrimSpace(r.Header.Get("x-admin-token"))
+	if adminToken != "" {
+		if adminToken == s.Settings.AdminToken {
+			return nil, true, true
+		}
+		detail(w, http.StatusForbidden, "invalid admin token")
+		return nil, false, false
+	}
+	if user == nil {
+		detail(w, http.StatusUnauthorized, "authentication required")
+		return nil, false, false
+	}
+	if user.Role != auth.RoleTeacher {
+		detail(w, http.StatusForbidden, "teacher role required")
+		return nil, false, false
+	}
+	return user, false, true
+}
+
+func (s *Server) authorizeExamStaff(w http.ResponseWriter, r *http.Request, examID string) (*model.ExamMeta, *model.User, bool) {
+	meta, user, _, ok := s.authorizeExamStaffActor(w, r, examID)
+	return meta, user, ok
+}
+
+func (s *Server) authorizeExamStaffActor(w http.ResponseWriter, r *http.Request, examID string) (*model.ExamMeta, *model.User, bool, bool) {
+	user, admin, ok := s.staffActor(w, r)
+	if !ok {
+		return nil, nil, false, false
+	}
+	meta, err := s.Store.GetExamMeta(r.Context(), examID)
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "data layer unavailable")
+		return nil, nil, admin, false
+	}
+	if meta == nil {
+		detail(w, http.StatusNotFound, "exam not found")
+		return nil, nil, admin, false
+	}
+	meta.ID = examID
+	if !admin {
+		allowed, err := s.canAccessExam(r.Context(), user, meta)
+		if err != nil {
+			detail(w, http.StatusServiceUnavailable, "exam access could not be checked")
+			return nil, nil, false, false
+		}
+		if !allowed {
+			detail(w, http.StatusForbidden, "exam ownership required")
+			return nil, nil, false, false
+		}
+	}
+	return meta, user, admin, true
+}
+
+func (s *Server) validateClassroomAssignment(ctx context.Context, user *model.User, classroomID string) error {
+	classroomID = strings.TrimSpace(classroomID)
+	if classroomID == "" {
+		return nil
+	}
+	if user == nil || user.Role != auth.RoleTeacher || s.ClassroomStore == nil {
+		return errClassroomAssignmentTeacherRequired
+	}
+	classroom, err := s.ClassroomStore.GetClassroom(ctx, classroomID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errClassroomAssignmentNotFound
+		}
+		return err
+	}
+	if classroom == nil {
+		return errClassroomAssignmentNotFound
+	}
+	if classroom.OwnerID != user.UserID {
+		return errClassroomAssignmentForbidden
+	}
+	return nil
+}
+
 func (s *Server) teacherUser(w http.ResponseWriter, r *http.Request) (*model.User, bool) {
 	user, ok := s.currentUser(w, r)
 	if !ok {
@@ -1238,11 +1858,11 @@ func (s *Server) quizDraftFromPayload(payload quizDraftPayload, ownerID, forcedI
 			Answer: *question.Answer, Points: question.Points, Feedback: strings.TrimSpace(question.Feedback),
 		}
 	}
-	if payload.DurationMinutes != nil && (*payload.DurationMinutes <= 0 || *payload.DurationMinutes > 1440) {
-		return nil, fmt.Errorf("duration_minutes must be greater than 0 and at most 1440")
+	if payload.DurationMinutes != nil && (*payload.DurationMinutes < 0 || *payload.DurationMinutes > 1440) {
+		return nil, fmt.Errorf("duration_minutes must be between 0 and 1440")
 	}
-	if payload.MaxAttempts != nil && (*payload.MaxAttempts <= 0 || *payload.MaxAttempts > 20) {
-		return nil, fmt.Errorf("max_attempts must be between 1 and 20")
+	if payload.MaxAttempts != nil && (*payload.MaxAttempts < 0 || *payload.MaxAttempts > 20) {
+		return nil, fmt.Errorf("max_attempts must be between 0 and 20")
 	}
 	if payload.LateGraceMinutes != nil && (*payload.LateGraceMinutes < 0 || *payload.LateGraceMinutes > 10080) {
 		return nil, fmt.Errorf("late_grace_minutes must be between 0 and 10080")
@@ -1254,7 +1874,7 @@ func (s *Server) quizDraftFromPayload(payload quizDraftPayload, ownerID, forcedI
 			return nil, fmt.Errorf("closes_at must be after opens_at")
 		}
 	}
-	draft := &model.QuizDraft{ID: id, OwnerID: ownerID, Title: strings.TrimSpace(payload.Title), Questions: questions}
+	draft := &model.QuizDraft{ID: id, OwnerID: ownerID, ClassroomID: strings.TrimSpace(payload.ClassroomID), Title: strings.TrimSpace(payload.Title), Instructions: strings.TrimSpace(payload.Instructions), Questions: questions}
 	if payload.OpensAt != nil {
 		draft.OpensAt = strings.TrimSpace(*payload.OpensAt)
 	}
@@ -1423,8 +2043,8 @@ func validAccountPayload(w http.ResponseWriter, email, password, name string) bo
 		validation(w, "invalid email")
 		return false
 	}
-	if len(password) < 8 || len(password) > 128 {
-		validation(w, "password must contain 8 to 128 characters")
+	if len(password) < 8 || len(password) > 72 {
+		validation(w, "password must contain 8 to 72 bytes")
 		return false
 	}
 	if len(name) > 60 {
@@ -1463,12 +2083,12 @@ func validateExam(w http.ResponseWriter, p examPayload) bool {
 			return false
 		}
 	}
-	if p.DurationMinutes != nil && (*p.DurationMinutes <= 0 || *p.DurationMinutes > 1440) {
-		validation(w, "duration_minutes must be greater than 0 and at most 1440")
+	if p.DurationMinutes != nil && (*p.DurationMinutes < 0 || *p.DurationMinutes > 1440) {
+		validation(w, "duration_minutes must be between 0 and 1440")
 		return false
 	}
-	if p.MaxAttempts != nil && (*p.MaxAttempts <= 0 || *p.MaxAttempts > 20) {
-		validation(w, "max_attempts must be between 1 and 20")
+	if p.MaxAttempts != nil && (*p.MaxAttempts < 0 || *p.MaxAttempts > 20) {
+		validation(w, "max_attempts must be between 0 and 20")
 		return false
 	}
 	if p.LateGraceMinutes != nil && (*p.LateGraceMinutes < 0 || *p.LateGraceMinutes > 10080) {

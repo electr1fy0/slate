@@ -432,7 +432,6 @@ func TestHTTPAPICoverageExamAndQuizEdges(t *testing.T) {
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}}}},
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 2}}},
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 0, "points": 1001}}},
-		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 0}}, "duration_minutes": 0},
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 0}}, "max_attempts": 21},
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 0}}, "late_grace_minutes": -1},
 		{"title": "x", "questions": []any{map[string]any{"question": "q", "options": []string{"a", "b"}, "answer": 0}}, "opens_at": "bad", "closes_at": "also-bad"},
@@ -505,8 +504,10 @@ func TestHTTPAPICoverageExamAndQuizEdges(t *testing.T) {
 		t.Fatalf("patch meta error: %d", response.Code)
 	}
 	backend.getExamMetaErr = nil
-	if response := call(t, handler, http.MethodPatch, "/exam/coverage-physics", map[string]any{"duration_minutes": 0}, admin); response.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("patch validation: %d", response.Code)
+	if response := call(t, handler, http.MethodPatch, "/exam/coverage-physics", map[string]any{"duration_minutes": 0, "max_attempts": 0, "late_grace_minutes": 0}, admin); response.Code != http.StatusOK {
+		t.Fatalf("clear exam timer and attempt limits: %d %s", response.Code, response.Body.String())
+	} else if body := decodeBody(t, response); body["duration_minutes"] != float64(0) {
+		t.Fatalf("untimed exam response: %#v", body)
 	}
 	backend.updateExamErr = errors.New("patch write unavailable")
 	if response := call(t, handler, http.MethodPatch, "/exam/coverage-physics", patchBody, admin); response.Code != http.StatusServiceUnavailable {
@@ -683,7 +684,6 @@ func TestHTTPAPICoverageHelpersAndErrors(t *testing.T) {
 		{Title: "x", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: nil}}},
 		{Title: "x", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: intPtr(2)}}},
 		{Title: "x", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: intPtr(0), Points: 1001}}},
-		{Title: "x", Questions: []questionPayload{validQuestion}, DurationMinutes: intPtr(0)},
 		{Title: "x", Questions: []questionPayload{validQuestion}, MaxAttempts: intPtr(21)},
 		{Title: "x", Questions: []questionPayload{validQuestion}, LateGraceMinutes: intPtr(-1)},
 		{Title: "x", Questions: []questionPayload{validQuestion}, OpensAt: stringPtr("bad"), ClosesAt: stringPtr("also-bad")},
@@ -710,7 +710,6 @@ func TestHTTPAPICoverageHelpersAndErrors(t *testing.T) {
 		{Title: "Draft", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: nil}}},
 		{Title: "Draft", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: intPtr(2)}}},
 		{Title: "Draft", Questions: []questionPayload{{Question: "q", Options: []string{"a", "b"}, Answer: intPtr(0), Points: 1001}}},
-		{Title: "Draft", Questions: baseDraft.Questions, DurationMinutes: intPtr(0)},
 		{Title: "Draft", Questions: baseDraft.Questions, MaxAttempts: intPtr(21)},
 		{Title: "Draft", Questions: baseDraft.Questions, LateGraceMinutes: intPtr(-1)},
 		{Title: "Draft", Questions: baseDraft.Questions, OpensAt: stringPtr("bad"), ClosesAt: stringPtr("also-bad")},
