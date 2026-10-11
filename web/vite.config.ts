@@ -5,10 +5,13 @@ import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
 const API_TARGET = process.env.API_ORIGIN ?? "http://localhost:8000"
+const CONTROL_TARGET = process.env.CONTINUUM_CONTROL_ORIGIN
 
 const config = defineConfig({
   define: {
-    "import.meta.env.CONTINUUM_DEMO": JSON.stringify(process.env.CONTINUUM_DEMO ?? ""),
+    "import.meta.env.CONTINUUM_DEMO": JSON.stringify(
+      process.env.CONTINUUM_DEMO ?? ""
+    ),
   },
   resolve: { tsconfigPaths: true },
   plugins: [
@@ -22,6 +25,15 @@ const config = defineConfig({
   ],
   server: {
     proxy: {
+      ...(CONTROL_TARGET
+        ? {
+            "/api/continuum": {
+              target: CONTROL_TARGET,
+              changeOrigin: true,
+              rewrite: (path: string) => path.replace(/^\/api/, ""),
+            },
+          }
+        : {}),
       "/api": {
         target: API_TARGET,
         changeOrigin: true,
