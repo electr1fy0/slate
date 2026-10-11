@@ -1,5 +1,11 @@
 import { useState } from "react"
-import { HeadContent, Scripts, createRootRoute, Link } from "@tanstack/react-router"
+import {
+  ClientOnly,
+  HeadContent,
+  Scripts,
+  createRootRoute,
+  Link,
+} from "@tanstack/react-router"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 import { TanStackDevtools } from "@tanstack/react-devtools"
 import { QueryClientProvider } from "@tanstack/react-query"
@@ -26,10 +32,14 @@ export const Route = createRootRoute({
           "Timed assessments with receipt-backed submissions and application failure recovery, powered by Continuum.",
       },
       { name: "theme-color", content: "#0f172a" },
-      { property: "og:title", content: "Continuum — Assessment continuity for timed exams" },
+      {
+        property: "og:title",
+        content: "Continuum — Assessment continuity for timed exams",
+      },
       {
         property: "og:description",
-        content: "Timed assessments with receipt-backed submissions and application failure recovery.",
+        content:
+          "Timed assessments with receipt-backed submissions and application failure recovery.",
       },
       { property: "og:type", content: "website" },
     ],
@@ -60,9 +70,12 @@ function NotFound() {
 function RootError({ error }: { error: Error }) {
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
-      <p className="text-5xl font-semibold tracking-tight text-destructive">Something broke</p>
+      <p className="text-5xl font-semibold tracking-tight text-destructive">
+        Something broke
+      </p>
       <p className="max-w-md text-sm text-muted-foreground">
-        {error.message || "An unexpected error occurred while rendering this page."}
+        {error.message ||
+          "An unexpected error occurred while rendering this page."}
       </p>
       <Button variant="outline" onClick={() => window.location.reload()}>
         <RefreshCwIcon data-icon="inline-start" />
@@ -88,12 +101,19 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body className="antialiased">
-        <Providers>{children}</Providers>
+        <Providers>
+          <ClientOnly>{children}</ClientOnly>
+        </Providers>
         <Toaster position="bottom-right" />
         {import.meta.env.DEV && import.meta.env.CONTINUUM_DEMO !== "1" ? (
           <TanStackDevtools
             config={{ position: "bottom-right" }}
-            plugins={[{ name: "Tanstack Router", render: <TanStackRouterDevtoolsPanel /> }]}
+            plugins={[
+              {
+                name: "Tanstack Router",
+                render: <TanStackRouterDevtoolsPanel />,
+              },
+            ]}
           />
         ) : null}
         <Scripts />

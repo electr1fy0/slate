@@ -677,7 +677,7 @@ export function ResultView({
               </Alert>
             ) : null}
             <p className="text-sm text-muted-foreground">
-              You answered{" "}
+              You earned{" "}
               <span className="font-medium text-foreground">
                 {result.score}
               </span>{" "}
@@ -685,7 +685,7 @@ export function ResultView({
               <span className="font-medium text-foreground">
                 {result.total}
               </span>{" "}
-              correctly.
+              points.
             </p>
             {result.submitted_at ? (
               <Badge variant="secondary">
