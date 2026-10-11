@@ -14,7 +14,10 @@ import type {
   ResultResponse,
   Submission,
   SubmitResult,
+  QuestionDraft,
 } from "./types"
+import type { AuthUser } from "./auth"
+import type { QuestionBankItem } from "./question-bank"
 
 const BASE = (
   import.meta.env.VITE_API_ORIGIN ??
@@ -52,6 +55,17 @@ export interface ClassroomMemberRecord {
   email: string
   role: "teacher" | "student"
   joined_at: string
+}
+
+export interface ClassroomInvitation {
+  id: string
+  classroom_id: string
+  name: string
+  email: string
+  status: "pending" | "accepted"
+  created_at: string
+  join_code: string
+  delivery?: "sent" | "not_configured" | "failed"
 }
 
 interface TokenResponse {
@@ -142,15 +156,45 @@ export const api = {
   login: (payload: { email: string; password: string }) =>
     request<TokenResponse>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
 
+  updateProfile: (payload: { name: string }) =>
+    request<AuthUser>("/auth/me", { method: "PATCH", body: JSON.stringify(payload) }),
+
+  changePassword: (payload: { current_password: string; password: string }) =>
+    request<{ message: string }>("/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
+
+  forgotPassword: (email: string) =>
+    request<{ message: string }>("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),
+
+  resetPassword: (payload: { token: string; password: string }) =>
+    request<{ message: string }>("/auth/reset-password", { method: "POST", body: JSON.stringify(payload) }),
+
   listExams: () => request<ExamMeta[]>("/exams"),
 
   listClassrooms: () => request<ClassroomRecord[]>("/classrooms"),
 
-  createClassroom: (payload: { name: string; description?: string }) =>
+  createClassroom: (payload: { name: string; description?: string; client_id?: string }) =>
     request<ClassroomRecord>("/classrooms", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  updateClassroom: (id: string, payload: { name?: string; description?: string }) =>
+    request<ClassroomRecord>(`/classrooms/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+
+  deleteClassroom: (id: string) =>
+    request<void>(`/classrooms/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  leaveClassroom: (id: string) =>
+    request<void>(`/classrooms/${encodeURIComponent(id)}/leave`, { method: "POST" }),
+
+  inviteClassroomMember: (id: string, payload: { name: string; email: string }) =>
+    request<ClassroomInvitation>(`/classrooms/${encodeURIComponent(id)}/invitations`, { method: "POST", body: JSON.stringify(payload) }),
+
+  classroomInvitations: (id: string) =>
+    request<ClassroomInvitation[]>(`/classrooms/${encodeURIComponent(id)}/invitations`),
+
+  deleteClassroomInvitation: (id: string, invitationId: string) =>
+    request<void>(`/classrooms/${encodeURIComponent(id)}/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" }),
 
   joinClassroom: (joinCode: string) =>
     request<ClassroomRecord>("/classrooms/join", {
@@ -184,6 +228,8 @@ export const api = {
 
   getExam: (examId: string) => request<Exam>(`/exam/${encodeURIComponent(examId)}`),
 
+  examInfo: (examId: string) => request<ExamMeta>(`/exam/${encodeURIComponent(examId)}/info`),
+
   previewExam: (examId: string) =>
     request<Exam>(`/exam/${encodeURIComponent(examId)}/preview`),
 
@@ -194,6 +240,14 @@ export const api = {
     }),
 
   listQuizDrafts: () => request<QuizDraft[]>("/quiz/drafts"),
+
+  listQuestionBank: () => request<QuestionBankItem[]>("/question-bank"),
+
+  createBankQuestion: (question: QuestionDraft) =>
+    request<QuestionBankItem>("/question-bank", { method: "POST", body: JSON.stringify(question) }),
+
+  deleteBankQuestion: (id: string) =>
+    request<void>(`/question-bank/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   getQuizDraft: (draftId: string) =>
     request<QuizDraft>(`/quiz/drafts/${encodeURIComponent(draftId)}`),
@@ -258,7 +312,7 @@ export const api = {
 
   patchExam: (
     examId: string,
-    payload: { title?: string; opens_at?: string; closes_at?: string; duration_minutes?: number },
+    payload: Partial<Omit<ExamDraft, "id" | "questions">>,
   ) => request<ExamMeta>(`/exam/${encodeURIComponent(examId)}`, {
     method: "PATCH",
     body: JSON.stringify(payload),

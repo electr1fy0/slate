@@ -13,6 +13,13 @@ export interface ExamMeta {
   max_attempts?: number
   allow_late?: boolean
   late_grace_minutes?: number
+  classroom_id?: string
+  instructions?: string
+  attempt_status?: "not_started" | "in_progress" | "submitted"
+  attempt_number?: number
+  score?: number
+  total?: number
+  submitted_at?: string
 }
 
 export function examState(meta: Pick<ExamMeta, "opens_at" | "closes_at">,
@@ -39,6 +46,12 @@ export interface Exam {
   attempt?: AttemptSnapshot
   attempt_started_at?: number
   deadline_ms?: number
+  instructions?: string
+  duration_minutes?: number
+  max_attempts?: number
+  opens_at?: string
+  closes_at?: string
+  classroom_id?: string
 }
 
 export interface QuestionDraft {
@@ -59,6 +72,8 @@ export interface ExamDraft {
   max_attempts?: number
   allow_late?: boolean
   late_grace_minutes?: number
+  classroom_id?: string
+  instructions?: string
 }
 
 export interface QuizDraft extends ExamDraft {
@@ -233,14 +248,30 @@ export interface PeerInfo {
   cursor: PeerCursor | null
 }
 
+export interface BoardRoomMetadata {
+  room_id: string
+  version: number
+  students_draw: boolean
+}
+
+export interface BoardVersion {
+  room_id: string
+  version: number
+  element_count: number
+  saved_at?: string
+}
+
 export type ClientMessage =
   | { type: "join"; name: string; role: Role }
   | { type: "elements"; elements: BoardElement[] }
   | { type: "cursor"; x: number; y: number; tool: string }
+  | { type: "permissions"; students_draw: boolean }
 
 export type ServerMessage =
-  | { type: "init"; you: string; elements: BoardElement[]; peers: PeerInfo[] }
+  | { type: "init"; you: string; elements: BoardElement[]; peers: PeerInfo[]; room?: BoardRoomMetadata }
   | { type: "elements"; elements: BoardElement[] }
+  | { type: "restored"; elements: BoardElement[]; version: number }
+  | { type: "permissions"; students_draw: boolean }
   | { type: "peer-joined"; peer: PeerInfo }
   | { type: "peer-left"; peer: PeerInfo }
   | { type: "cursor"; peer: PeerInfo }
