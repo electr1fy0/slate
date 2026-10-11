@@ -18,7 +18,10 @@ import { api } from "@/lib/api"
 import { clearAuth, useAuth } from "@/lib/auth"
 import { recordBoardVisit } from "@/lib/board-history"
 import { setClassroomActiveRoom, useClassrooms } from "@/lib/classrooms"
-import { filterAndSortAssessments } from "@/lib/assessment-history"
+import {
+  filterAndSortAssessments,
+  isAssessmentWindowOpen,
+} from "@/lib/assessment-history"
 import type {
   AssessmentFilterStatus,
   AssessmentSort,
@@ -332,12 +335,13 @@ function HomePage() {
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {filteredExams.map((exam) => {
                     const state = examState(exam)
+                    const windowOpen = isAssessmentWindowOpen(exam)
                     const attemptStatus = exam.attempt_status ?? "not_started"
                     const isStudent = auth.user?.role !== "teacher"
                     const canOpen =
                       !isStudent ||
                       attemptStatus !== "not_started" ||
-                      state === "open"
+                      windowOpen
                     return (
                       <Card
                         key={exam.id}
@@ -371,8 +375,12 @@ function HomePage() {
                             </div>
                           ) : attemptStatus === "in_progress" ? (
                             <Badge variant="default">in progress</Badge>
-                          ) : state === "open" ? (
-                            <Badge variant="default">open</Badge>
+                          ) : windowOpen ? (
+                            <Badge variant="default">
+                              {state === "closed"
+                                ? "late work accepted"
+                                : "open"}
+                            </Badge>
                           ) : (
                             <Badge
                               variant={

@@ -54,6 +54,7 @@ import {
 import { formatResultReceipt } from "@/lib/result-receipt"
 import {
   canRetakeAssessment,
+  isAssessmentWindowOpen,
   isResultForCurrentAttempt,
 } from "@/lib/assessment-history"
 import { AppShell } from "@/components/layout/app-shell"
@@ -400,7 +401,8 @@ export function ExamLobby({
   const resumed = meta.attempt_status === "in_progress" || hasLocalWork
   const submitted = meta.attempt_status === "submitted"
   const state = examState(meta)
-  const canBegin = !submitted && (resumed || state === "open")
+  const windowOpen = isAssessmentWindowOpen(meta)
+  const canBegin = !submitted && (resumed || windowOpen)
   const examStartError =
     beginRequested && examQuery.isError ? examQuery.error : null
 
@@ -468,7 +470,9 @@ export function ExamLobby({
                     ? "Open now"
                     : state === "upcoming"
                       ? "Opens later"
-                      : "Closed"}
+                      : windowOpen
+                        ? "Accepting late work"
+                        : "Closed"}
                 </p>
               </div>
               <div className="rounded-lg border p-3">

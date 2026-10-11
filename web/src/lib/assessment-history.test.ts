@@ -6,6 +6,7 @@ import {
   canRetakeAssessment,
   filterAndSortAssessments,
   isResultForCurrentAttempt,
+  isAssessmentWindowOpen,
 } from "./assessment-history"
 import type { ExamMeta } from "./types"
 
@@ -40,6 +41,40 @@ const exams: ExamMeta[] = [
 ]
 
 describe("assessment history", () => {
+  it("honors finite and unlimited late windows for new attempts and retakes", () => {
+    const now = Date.parse("2026-01-01T00:20:00Z")
+    const closed = {
+      ...exams[0],
+      closes_at: "2026-01-01T00:00:00Z",
+      allow_late: true,
+      attempt_number: 1,
+      max_attempts: 2,
+    }
+    expect(
+      isAssessmentWindowOpen({ ...closed, late_grace_minutes: 30 }, now)
+    ).toBe(true)
+    expect(
+      isAssessmentWindowOpen({ ...closed, late_grace_minutes: 10 }, now)
+    ).toBe(false)
+    expect(
+      isAssessmentWindowOpen({ ...closed, late_grace_minutes: 0 }, now)
+    ).toBe(true)
+    expect(isAssessmentWindowOpen({ ...closed, allow_late: false }, now)).toBe(
+      false
+    )
+    expect(
+      isAssessmentWindowOpen(
+        { ...closed, opens_at: "2026-01-02T00:00:00Z" },
+        now
+      )
+    ).toBe(false)
+    expect(canRetakeAssessment({ ...closed, late_grace_minutes: 0 }, now)).toBe(
+      true
+    )
+    expect(
+      canRetakeAssessment({ ...closed, late_grace_minutes: 10 }, now)
+    ).toBe(false)
+  })
   it("shows a current receipt despite stale metadata and hides it during a later retake", () => {
     expect(isResultForCurrentAttempt({}, undefined)).toBe(true)
     expect(isResultForCurrentAttempt({}, { attempt_number: 1 })).toBe(true)

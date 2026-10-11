@@ -443,4 +443,27 @@ describe("student account and assessment entry flows", () => {
     expect(screen.getByText(label)).toBeInTheDocument()
     expect(api.getExam).not.toHaveBeenCalled()
   })
+
+  it("allows a fresh late attempt when the teacher permits late work without a cutoff", () => {
+    state.examInfo = {
+      ...state.examInfo,
+      closes_at: "2020-01-01T00:00:00Z",
+      attempt_status: "not_started",
+      allow_late: true,
+      late_grace_minutes: 0,
+    }
+    render(
+      <ExamLobby
+        examId="exam-1"
+        userId="student-1"
+        pendingSubmission={null}
+        refreshResult={vi.fn(() => Promise.resolve())}
+      />
+    )
+    expect(screen.getByText("Accepting late work")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Begin assessment" })
+    ).toBeEnabled()
+    expect(api.getExam).not.toHaveBeenCalled()
+  })
 })

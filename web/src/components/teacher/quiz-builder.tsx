@@ -997,7 +997,10 @@ export function QuizBuilder({
                 placeholder="0"
                 disabled={!allowLate}
               />
-              <FieldDescription>Optional; up to 7 days.</FieldDescription>
+              <FieldDescription>
+                Blank or 0 allows late work without a cutoff. Otherwise, up to 7
+                days.
+              </FieldDescription>
             </Field>
           </FieldGroup>
         </CardContent>

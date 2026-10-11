@@ -81,11 +81,19 @@ export function canRetakeAssessment(exam: ExamMeta, now = Date.now()): boolean {
   const maxAttempts = exam.max_attempts ?? 1
   if (maxAttempts !== 0 && attemptNumber >= maxAttempts) return false
 
+  return isAssessmentWindowOpen(exam, now)
+}
+
+export function isAssessmentWindowOpen(
+  exam: ExamMeta,
+  now = Date.now()
+): boolean {
   const state = examState(exam, now)
   if (state === "open") return true
   if (state !== "closed" || !exam.allow_late || !exam.closes_at) return false
-  const lateDeadline =
-    Date.parse(exam.closes_at) + (exam.late_grace_minutes ?? 0) * 60_000
+  const grace = exam.late_grace_minutes ?? 0
+  if (grace <= 0) return true
+  const lateDeadline = Date.parse(exam.closes_at) + grace * 60_000
   return now <= lateDeadline
 }
 
