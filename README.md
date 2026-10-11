@@ -23,6 +23,8 @@ Local mode runs separate A/B HTTP servers with shared memory. Cloud mode runs tw
 
 The original server deadline continues across failover. A browser buffer is not a durable acknowledgment. Complete Region or DynamoDB outages are outside the demonstrated recovery boundary. Classroom boards/WebSockets are outside this bounded HTTP assessment demo.
 
+The product also supports classroom assignment and management, persistent invitations, teacher autosave and question libraries, learner review navigation and receipts, shared board permissions/history, and account settings. See the [feature and configuration guide](docs/qol-features.md) for the complete list and optional SMTP setup.
+
 ## AWS deployment
 
 Keep the project on its **Free** plan and all regional resources in **ap-southeast-2**. The deployable stack is `infra/demo`; it uses no NAT gateway, always-on load balancer, purchased domain, cross-Region resources, or database replicas.
