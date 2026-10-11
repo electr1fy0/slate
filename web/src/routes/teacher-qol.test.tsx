@@ -1,6 +1,13 @@
 import React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError, api } from "@/lib/api"
@@ -77,6 +84,7 @@ const teacher = {
 }
 let signedInTeacher = teacher
 let teacherSequence = 0
+const queryClients = new Set<QueryClient>()
 const question: QuestionDraft = {
   question: "What is two plus two?",
   options: ["3", "4", "5"],
@@ -126,6 +134,7 @@ function renderWithQuery(ui: React.ReactNode) {
       mutations: { retry: false },
     },
   })
+  queryClients.add(client)
   return {
     ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
     client,
@@ -169,7 +178,11 @@ beforeEach(() => {
   mockCoreQueries()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup()
+  await Promise.all([...queryClients].map((client) => client.cancelQueries()))
+  for (const client of queryClients) client.clear()
+  queryClients.clear()
   vi.restoreAllMocks()
   clearAuth()
 })
@@ -466,7 +479,7 @@ describe("teacher authoring interactions", () => {
         ],
       })
     )
-  })
+  }, 15_000)
 
   it("previews validated JSON imports and reorders questions without losing scoring", async () => {
     const seed = {

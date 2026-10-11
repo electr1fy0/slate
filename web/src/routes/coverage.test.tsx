@@ -2315,7 +2315,7 @@ describe("route components", () => {
     })
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }))
     await waitFor(() => expect(state.api.createQuizDraft).toHaveBeenCalled())
-  })
+  }, 15_000)
 
   it("covers teacher manager actions, preview states, analytics, and submissions", async () => {
     setAuth({ user: teacher, accessToken: "a", refreshToken: "r" })

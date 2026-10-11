@@ -52,7 +52,10 @@ import {
   writeQuizProgress,
 } from "@/lib/quiz-progress"
 import { formatResultReceipt } from "@/lib/result-receipt"
-import { canRetakeAssessment } from "@/lib/assessment-history"
+import {
+  canRetakeAssessment,
+  isResultForCurrentAttempt,
+} from "@/lib/assessment-history"
 import { AppShell } from "@/components/layout/app-shell"
 import { ConfirmAction } from "@/components/confirm-action"
 import {
@@ -182,7 +185,10 @@ function QuizPage() {
     )
   }
 
-  if (resultQuery.data && infoQuery.data?.attempt_status !== "in_progress") {
+  if (
+    resultQuery.data &&
+    isResultForCurrentAttempt(resultQuery.data, infoQuery.data)
+  ) {
     const receiptRecovered = Boolean(
       pendingForExam && resultQuery.data.request_id === pendingForExam.requestId
     )
@@ -947,6 +953,34 @@ export function ExamRunner({
     },
   })
 
+  function refreshAfterConfirmedReceipt(
+    receipt: SubmitResult | ResultResponse
+  ) {
+    queryClient.setQueryData<ExamMeta>(
+      ["exam-info", scope.userId, examId],
+      (meta) => {
+        if (!meta || (meta.attempt_number ?? 1) > scope.attemptNumber)
+          return meta
+        return {
+          ...meta,
+          attempt_status: "submitted",
+          attempt_number: scope.attemptNumber,
+          score: receipt.score,
+          total: receipt.total,
+        }
+      }
+    )
+    void Promise.allSettled([
+      queryClient.refetchQueries({
+        queryKey: ["result", scope.userId, examId],
+      }),
+      queryClient.refetchQueries({
+        queryKey: ["exam-info", scope.userId, examId],
+      }),
+      queryClient.refetchQueries({ queryKey: ["exams", scope.userId] }),
+    ])
+  }
+
   const submitMutation = useMutation({
     mutationFn: async (pending: PendingSubmission) => {
       setPendingSubmissionStatus(scope, pending.requestId, "submitting")
@@ -973,9 +1007,7 @@ export function ExamRunner({
       )
       setSubmissionState("confirmed")
       setRetryableFailure(false)
-      void queryClient.refetchQueries({
-        queryKey: ["result", scope.userId, examId],
-      })
+      refreshAfterConfirmedReceipt(receipt)
       toast.success("Submission receipt confirmed")
     },
     onError: async (error: unknown, pending: PendingSubmission) => {
@@ -997,6 +1029,7 @@ export function ExamRunner({
             setSubmissionState("receipt-recovered")
             setPendingSubmissionStatus(scope, pending.requestId, "buffered")
             queryClient.setQueryData(["result", scope.userId, examId], result)
+            refreshAfterConfirmedReceipt(result)
             return
           }
         } catch {

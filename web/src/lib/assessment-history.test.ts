@@ -5,6 +5,7 @@ import {
   assessmentStatusLabel,
   canRetakeAssessment,
   filterAndSortAssessments,
+  isResultForCurrentAttempt,
 } from "./assessment-history"
 import type { ExamMeta } from "./types"
 
@@ -39,6 +40,19 @@ const exams: ExamMeta[] = [
 ]
 
 describe("assessment history", () => {
+  it("shows a current receipt despite stale metadata and hides it during a later retake", () => {
+    expect(isResultForCurrentAttempt({}, undefined)).toBe(true)
+    expect(isResultForCurrentAttempt({}, { attempt_number: 1 })).toBe(true)
+    expect(
+      isResultForCurrentAttempt({ attempt_number: 1 }, { attempt_number: 2 })
+    ).toBe(false)
+    expect(
+      isResultForCurrentAttempt({ attempt_number: 2 }, { attempt_number: 2 })
+    ).toBe(true)
+    expect(
+      isResultForCurrentAttempt({ attempt_number: 2 }, { attempt_number: 1 })
+    ).toBe(true)
+  })
   it("keeps submitted results available when an exam is closed", () => {
     expect(assessmentActionLabel(exams[0])).toBe("View result")
     expect(

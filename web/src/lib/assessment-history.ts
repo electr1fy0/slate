@@ -1,5 +1,5 @@
 import { examState } from "./types"
-import type { ExamMeta } from "./types"
+import type { ExamMeta, ResultResponse } from "./types"
 
 export type AssessmentFilterStatus =
   "all" | "not_started" | "in_progress" | "submitted"
@@ -87,4 +87,13 @@ export function canRetakeAssessment(exam: ExamMeta, now = Date.now()): boolean {
   const lateDeadline =
     Date.parse(exam.closes_at) + (exam.late_grace_minutes ?? 0) * 60_000
   return now <= lateDeadline
+}
+
+// A confirmed result is authoritative even if cached metadata still says the
+// same attempt is in progress. An older receipt must not hide a fresh retake.
+export function isResultForCurrentAttempt(
+  result: Pick<ResultResponse, "attempt_number">,
+  meta?: Pick<ExamMeta, "attempt_number">
+): boolean {
+  return (result.attempt_number ?? 1) >= (meta?.attempt_number ?? 1)
 }

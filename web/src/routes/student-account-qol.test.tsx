@@ -18,7 +18,7 @@ import type { ExamMeta } from "@/lib/types"
 
 const state = vi.hoisted(() => ({
   search: {},
-  examInfo: {
+  examInfo: ((): ExamMeta => ({
     id: "exam-1",
     title: "Midterm",
     question_count: 4,
@@ -30,7 +30,7 @@ const state = vi.hoisted(() => ({
     max_attempts: 2,
     allow_late: true,
     late_grace_minutes: 10,
-  } as ExamMeta,
+  }))(),
   examRequested: false,
   navigate: vi.fn(() => Promise.resolve()),
   api: {
