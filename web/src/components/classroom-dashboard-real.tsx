@@ -755,7 +755,7 @@ export function ClassroomDashboard({
                   {isTeacher ? (
                     <ConfirmAction
                       title="Delete this class?"
-                      description="The class, roster, and pending invitations will be removed from the server."
+                      description="The class, roster, and pending invitations will be removed. Learners will lose access to its assessments; you can still manage those assessments in the teacher studio."
                       confirmLabel="Delete class"
                       onConfirm={() => deleteClassroomOnServer(selected.id)}
                     >

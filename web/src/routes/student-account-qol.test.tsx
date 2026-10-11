@@ -14,6 +14,7 @@ import { AccountSettingsPage } from "./settings"
 import { LoginPage } from "./login"
 import { ExamLobby, ResultView } from "./quiz.$examId"
 import { toast } from "sonner"
+import type { ExamMeta } from "@/lib/types"
 
 const state = vi.hoisted(() => ({
   search: {},
@@ -29,7 +30,7 @@ const state = vi.hoisted(() => ({
     max_attempts: 2,
     allow_late: true,
     late_grace_minutes: 10,
-  },
+  } as ExamMeta,
   examRequested: false,
   navigate: vi.fn(() => Promise.resolve()),
   api: {
@@ -419,5 +420,27 @@ describe("student account and assessment entry flows", () => {
     await waitFor(() =>
       expect(api.retakeExam).toHaveBeenCalledWith("exam-1", 1)
     )
+  })
+
+  it.each([
+    [0, "1 · unlimited attempts"],
+    [undefined, "1 of 1"],
+  ])("shows attempt limit %s honestly in the lobby", (limit, label) => {
+    state.examInfo = {
+      ...state.examInfo,
+      attempt_status: "not_started",
+      attempt_number: 1,
+      max_attempts: limit,
+    }
+    render(
+      <ExamLobby
+        examId="exam-1"
+        userId="student-1"
+        pendingSubmission={null}
+        refreshResult={vi.fn(() => Promise.resolve())}
+      />
+    )
+    expect(screen.getByText(label)).toBeInTheDocument()
+    expect(api.getExam).not.toHaveBeenCalled()
   })
 })

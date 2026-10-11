@@ -468,9 +468,9 @@ export function ExamLobby({
               <div className="rounded-lg border p-3">
                 <p className="text-xs text-muted-foreground">Attempts</p>
                 <p className="font-medium">
-                  {meta.max_attempts
-                    ? `${attemptNumber} of ${meta.max_attempts}`
-                    : `${attemptNumber} · no attempt limit shown`}
+                  {(meta.max_attempts ?? 1) > 0
+                    ? `${attemptNumber} of ${meta.max_attempts ?? 1}`
+                    : `${attemptNumber} · unlimited attempts`}
                 </p>
               </div>
             </div>
