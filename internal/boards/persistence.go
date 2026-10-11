@@ -35,8 +35,8 @@ var (
 
 // BoardSnapshotStore persists the latest exportable board snapshot and its
 // immutable version history. Implementations must treat Save as replacing the
-// current pointer and upserting the supplied version. The manager calls Save
-// outside its room lock, so implementations may perform blocking I/O.
+// current pointer and upserting the supplied version. Normal drawing saves run outside the room lock; explicit permission changes
+// and restores keep the room serialized until Save succeeds.
 //
 // A nil store is a supported configuration: the manager remains an in-memory
 // relay and all persistence hooks become no-ops. NoopSnapshotStore is provided
@@ -75,6 +75,7 @@ type RoomMetadata struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	ParticipantCount int       `json:"participant_count"`
+	StudentsDraw     bool      `json:"students_draw"`
 }
 
 // BoardSnapshot is the stable, export-friendly representation of board state.
@@ -398,9 +399,11 @@ func (m *Manager) ListVersions(ctx context.Context, roomID string, limit int) ([
 
 // Restore replaces the live element set with a historical revision and saves
 // the result as a new monotonically increasing revision. Existing peers remain
-// attached and receive the restored elements through the existing elements
-// message; no second WebSocket protocol is introduced.
+// attached and receive a restored frame so clients replace the scene even when
+// historical elements have lower per-element versions.
 func (m *Manager) Restore(ctx context.Context, roomID string, version int64) (RoomSnapshot, error) {
+	m.controlMu.Lock()
+	defer m.controlMu.Unlock()
 	store := m.persistenceStore()
 	if store == nil {
 		return RoomSnapshot{}, ErrPersistenceUnavailable
@@ -420,10 +423,12 @@ func (m *Manager) Restore(ctx context.Context, roomID string, version int64) (Ro
 	}
 	// Discard the pre-restore debounce before taking the new live snapshot. A
 	// concurrent element update after this point gets its own newer debounce.
-	m.cancelPendingSave(roomID)
+	previousPending := m.takePendingSave(roomID)
 
 	m.mu.Lock()
 	r := m.roomLocked(roomID)
+	previousElements, previousOrder := r.elements, r.elementOrder
+	previousVersion, previousCreated, previousUpdated, previousLoaded := r.version, r.createdAt, r.updatedAt, r.loaded
 	nextVersion := r.version + 1
 	if historical.Version >= nextVersion {
 		nextVersion = historical.Version + 1
@@ -447,18 +452,22 @@ func (m *Manager) Restore(ctx context.Context, roomID string, version int64) (Ro
 	r.updatedAt = now
 	snapshot := m.boardSnapshotLocked(roomID, r)
 	result := m.roomSnapshotLocked(roomID, r)
-	m.mu.Unlock()
-
-	// A restore is explicit, so it bypasses the debounce. If the store is
-	// temporarily unavailable, leave a retryable pending save behind while
-	// reporting the error to the caller.
+	// Keep updates serialized until persistence succeeds. A failed restore
+	// cannot replace the live canvas or apply later through an automatic save.
 	if err := m.persistSnapshot(ctx, snapshot); err != nil {
+		r.elements, r.elementOrder = previousElements, previousOrder
+		r.version, r.createdAt, r.updatedAt, r.loaded = previousVersion, previousCreated, previousUpdated, previousLoaded
+		result = m.roomSnapshotLocked(roomID, r)
+		m.mu.Unlock()
 		m.recordPersistenceError(roomID, err)
-		m.scheduleSnapshotSave(snapshot, ctx)
+		if previousPending != nil {
+			m.retainFailedSnapshot(previousPending.snapshot, previousPending.ctx)
+		}
 		return result, err
 	}
+	m.mu.Unlock()
 	m.Broadcast(ctx, roomID, map[string]any{
-		"type": "elements", "elements": snapshot.Elements,
+		"type": "restored", "elements": snapshot.Elements, "version": snapshot.Version,
 	}, nil)
 	return result, nil
 }
@@ -504,6 +513,7 @@ func (m *Manager) Metadata(roomID string) (RoomMetadata, bool) {
 		CreatedAt:        r.createdAt,
 		UpdatedAt:        r.updatedAt,
 		ParticipantCount: len(r.peers),
+		StudentsDraw:     r.studentsDraw,
 	}, true
 }
 
@@ -569,6 +579,7 @@ func (m *Manager) retainFailedSnapshot(snapshot BoardSnapshot, ctx context.Conte
 }
 
 func (m *Manager) mergeLoadedSnapshotLocked(roomID string, r *room, loaded BoardSnapshot) {
+	r.studentsDraw = loaded.StudentsDraw
 	if loaded.SchemaVersion == 0 {
 		loaded.SchemaVersion = BoardSnapshotSchemaVersion
 	}
@@ -608,6 +619,7 @@ func (m *Manager) boardSnapshotLocked(roomID string, r *room) BoardSnapshot {
 			CreatedAt:        r.createdAt,
 			UpdatedAt:        r.updatedAt,
 			ParticipantCount: len(r.peers),
+			StudentsDraw:     r.studentsDraw,
 		},
 		Elements: elements,
 	}
@@ -621,6 +633,7 @@ func (m *Manager) roomSnapshotLocked(roomID string, r *room) RoomSnapshot {
 			CreatedAt:        r.createdAt,
 			UpdatedAt:        r.updatedAt,
 			ParticipantCount: len(r.peers),
+			StudentsDraw:     r.studentsDraw,
 		},
 		Peers:    make([]Peer, 0, len(r.peers)),
 		Elements: make([]map[string]any, 0, len(r.elements)),

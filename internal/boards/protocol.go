@@ -93,6 +93,8 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 		return 0, s.Manager.Send(ctx, s.Socket, map[string]any{"type": "pong"})
 
 	case "join":
+		s.Manager.controlMu.Lock()
+		defer s.Manager.controlMu.Unlock()
 		requestedName := s.Identity.Name
 		if value, exists := frame["name"]; exists {
 			// The handler accepts any JSON value after stringification. Name is
@@ -123,10 +125,15 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 		return 0, nil
 
 	case "elements":
+		s.Manager.controlMu.Lock()
+		defer s.Manager.controlMu.Unlock()
 		values, ok := frame["elements"].([]any)
 		if !ok {
 			return 0, s.Manager.Send(ctx, s.Socket,
 				errorFrame(ErrorBadElements, "elements must be a list"))
+		}
+		if !s.Joined || !s.Manager.CanDraw(s.RoomID, s.Socket) {
+			return 0, s.Manager.Send(ctx, s.Socket, errorFrame("DRAWING_FORBIDDEN", "your teacher has disabled student drawing"))
 		}
 		incoming := make([]map[string]any, 0, len(values))
 		for _, value := range values {
@@ -137,6 +144,18 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 		if s.Manager.AbsorbContext(ctx, s.RoomID, incoming) > 0 {
 			s.Manager.Broadcast(ctx, s.RoomID,
 				map[string]any{"type": "elements", "elements": values}, s.Socket)
+		}
+		return 0, nil
+	case "permissions":
+		allowed, ok := frame["students_draw"].(bool)
+		if !ok {
+			return 0, s.Manager.Send(ctx, s.Socket, errorFrame("BAD_PERMISSIONS", "students_draw must be a boolean"))
+		}
+		if !s.Joined || s.Identity.Role != "teacher" {
+			return 0, s.Manager.Send(ctx, s.Socket, errorFrame("PERMISSIONS_FORBIDDEN", "only a teacher can change drawing permissions"))
+		}
+		if err := s.Manager.SetStudentDrawing(ctx, s.RoomID, allowed); err != nil {
+			return 0, s.Manager.Send(ctx, s.Socket, errorFrame(ErrorPersistence, "drawing permissions could not be saved"))
 		}
 		return 0, nil
 

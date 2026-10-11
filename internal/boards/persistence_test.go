@@ -198,7 +198,7 @@ func TestManagerDebouncedSaveRetainsOriginatingWriterAfterRequestCancellation(t 
 	manager := NewManagerWithPersistence(store, 10*time.Millisecond)
 
 	requestCtx, cancel := context.WithCancel(clusterstate.WithWriter(context.Background(), oldWriter))
-	session := NewSession(manager, "room", &testSocket{}, Identity{Name: "Student", Role: "student"})
+	session := NewSession(manager, "room", &testSocket{}, Identity{Name: "Teacher", Role: "teacher"})
 	if _, err := session.HandleFrame(requestCtx, `{"type":"join"}`, 1024); err != nil {
 		t.Fatalf("join frame: %v", err)
 	}

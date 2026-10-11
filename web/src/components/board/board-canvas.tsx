@@ -15,6 +15,7 @@ const SAVE_DELAY_MS = 800
 
 export interface BoardCanvasHandle {
   mergeRemote: ((elements: BoardElement[]) => void) | undefined
+  replaceRemote?: (elements: BoardElement[]) => void
   getSnapshot: (() => BoardElement[]) | undefined
 }
 
@@ -26,6 +27,7 @@ interface BoardCanvasProps {
   onLocalEdit?: () => void
   /** Reports the pointer position as percentages of the visible canvas. */
   onCursorMove?: (xPercent: number, yPercent: number) => void
+  remoteSnapshot?: BoardElement[] | null
 }
 
 function storageKey(roomId: string): string {
@@ -50,7 +52,7 @@ function loadSnapshot(roomId: string): OrderedExcalidrawElement[] {
     const raw = window.localStorage.getItem(storageKey(roomId))
     if (!raw) return []
     const parsed = JSON.parse(raw) as BoardElement[]
-    return parsed.filter((element) => element.id && !element.isDeleted) as OrderedExcalidrawElement[]
+    return parsed.filter((element) => element.id) as OrderedExcalidrawElement[]
   } catch {
     return []
   }
@@ -63,6 +65,7 @@ export default function BoardCanvas({
   senderRef,
   onLocalEdit,
   onCursorMove,
+  remoteSnapshot,
 }: BoardCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -71,6 +74,8 @@ export default function BoardCanvas({
   const outgoingRef = useRef<OrderedExcalidrawElement[]>([])
   const flushTimerRef = useRef<number | null>(null)
   const saveTimerRef = useRef<number | null>(null)
+  const remoteSnapshotRef = useRef(remoteSnapshot)
+  remoteSnapshotRef.current = remoteSnapshot
 
   const initialElements = useMemo(() => loadSnapshot(roomId), [roomId])
   if (elementsRef.current.size === 0 && initialElements.length > 0) {
@@ -108,7 +113,6 @@ export default function BoardCanvas({
       appStateRef.current = appState
       let changed = false
       for (const element of elements) {
-        if (element.isDeleted) continue
         const known = elementsRef.current.get(element.id)
         if (!known || element.version > known.version) {
           elementsRef.current.set(element.id, element)
@@ -128,7 +132,7 @@ export default function BoardCanvas({
     handle.current.mergeRemote = (incoming: BoardElement[]) => {
       const api = apiRef.current
       const remote = incoming
-        .filter((element) => element.id && !element.isDeleted)
+        .filter((element) => element.id)
         .map(normaliseElement)
       if (!api || remote.length === 0) return
 
@@ -140,17 +144,29 @@ export default function BoardCanvas({
       )
       elementsRef.current.clear()
       for (const element of merged) {
-        if (!element.isDeleted) elementsRef.current.set(element.id, element)
+        elementsRef.current.set(element.id, element)
       }
       api.updateScene({ elements: merged, captureUpdate: CaptureUpdateAction.NEVER })
       scheduleSave()
     }
     handle.current.getSnapshot = () => Array.from(elementsRef.current.values())
+    handle.current.replaceRemote = (incoming) => {
+      const elements = incoming.filter((element) => element.id).map(normaliseElement)
+      elementsRef.current = new Map(elements.map((element) => [element.id, element]))
+      outgoingRef.current = []
+      apiRef.current?.updateScene({ elements, captureUpdate: CaptureUpdateAction.NEVER })
+      scheduleSave()
+    }
     return () => {
       handle.current.mergeRemote = undefined
       handle.current.getSnapshot = undefined
+      handle.current.replaceRemote = undefined
     }
   }, [handle, scheduleSave])
+
+  useEffect(() => {
+    if (remoteSnapshot) handle.current.replaceRemote?.(remoteSnapshot)
+  }, [remoteSnapshot, handle])
 
   useEffect(() => {
     return () => {
@@ -188,6 +204,7 @@ export default function BoardCanvas({
         initialData={{ elements: initialElements }}
         excalidrawAPI={(api) => {
           apiRef.current = api
+          if (remoteSnapshotRef.current) handle.current.replaceRemote?.(remoteSnapshotRef.current)
         }}
         onChange={handleChange}
       />

@@ -13,11 +13,15 @@ const HEARTBEAT_INTERVAL_MS = 20_000
 
 interface UseBoardSyncOptions {
   roomId: string
+  sessionId?: string
   name: string
   role: Role
   enabled?: boolean
   onInit: (elements: BoardElement[]) => void
   onElements: (elements: BoardElement[]) => void
+  onRestored?: (elements: BoardElement[]) => void
+  onPermissions?: (allowed: boolean) => void
+  onError?: (message: string) => void
 }
 
 function drainOutbox(outbox: ClientMessage[]): ClientMessage[] {
@@ -64,6 +68,8 @@ export function useBoardSync(options: UseBoardSyncOptions) {
       return
     }
 
+    attemptRef.current = 0
+    outboxRef.current = []
     let disposed = false
     let reconnectTimer: number | undefined
 
@@ -107,9 +113,18 @@ export function useBoardSync(options: UseBoardSyncOptions) {
             setSelfId(message.you)
             setPeers(message.peers)
             optionsRef.current.onInit(message.elements)
+            optionsRef.current.onPermissions?.(message.room?.students_draw ?? false)
             break
           case "elements":
             optionsRef.current.onElements(message.elements)
+            break
+          case "restored":
+            outboxRef.current = []
+            optionsRef.current.onRestored?.(message.elements)
+            break
+          case "permissions":
+            optionsRef.current.onPermissions?.(message.students_draw)
+            if (!message.students_draw && optionsRef.current.role === "student") outboxRef.current = []
             break
           case "peer-joined":
             setPeers((current) => [
@@ -128,9 +143,9 @@ export function useBoardSync(options: UseBoardSyncOptions) {
             )
             break
           case "pong":
+            break
           case "error":
-            // Heartbeat replies and protocol errors need no UI action here;
-            // the status badge already reflects transport health.
+            optionsRef.current.onError?.(message.message ?? "Board request failed")
             break
         }
       }
@@ -187,7 +202,7 @@ export function useBoardSync(options: UseBoardSyncOptions) {
       setPeers([])
       setSelfId(null)
     }
-  }, [options.enabled, options.roomId, send])
+  }, [options.enabled, options.roomId, options.sessionId, send])
 
   const identity = `${options.name}|${options.role}`
   useEffect(() => {

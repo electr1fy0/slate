@@ -13,6 +13,7 @@ import {
 import type { BoardCanvasHandle } from "@/components/board/board-canvas"
 import { PeerCursors } from "@/components/board/peer-cursors"
 import { PresencePanel } from "@/components/board/presence-panel"
+import { BoardHistoryDialog } from "@/components/board/board-history-dialog"
 import { AppShell } from "@/components/layout/app-shell"
 import { normaliseRoomCode } from "@/lib/room-code"
 import { rememberRoom } from "@/lib/recent-rooms"
@@ -37,26 +38,7 @@ export const Route = createFileRoute("/board/$roomId")({
   head: () => ({ meta: [{ title: "Live board · Continuum" }] }),
 })
 
-const PERMISSION_KEY = "slate.board-perms"
 const CURSOR_THROTTLE_MS = 40
-
-function loadStudentDrawPermission(roomId: string): boolean {
-  try {
-    return JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")[roomId] === true
-  } catch {
-    return false
-  }
-}
-
-function saveStudentDrawPermission(roomId: string, allowed: boolean) {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(PERMISSION_KEY) ?? "{}")
-    stored[roomId] = allowed
-    window.localStorage.setItem(PERMISSION_KEY, JSON.stringify(stored))
-  } catch {
-    // best effort only
-  }
-}
 
 function BoardPage() {
   const { roomId: rawRoomId } = Route.useParams()
@@ -64,12 +46,15 @@ function BoardPage() {
   const auth = useAuth()
   const [copied, setCopied] = useState(false)
   const [studentDraw, setStudentDraw] = useState(false)
+  const [permissionPending, setPermissionPending] = useState(false)
+  const [remoteSnapshot, setRemoteSnapshot] = useState<BoardElement[] | null>(null)
 
   const canvasHandle = useRef<BoardCanvasHandle>({ mergeRemote: undefined, getSnapshot: undefined })
   const senderRef = useRef<((message: ClientMessage) => void) | null>(null)
 
   useEffect(() => {
-    setStudentDraw(loadStudentDrawPermission(roomId))
+    setStudentDraw(false)
+    setRemoteSnapshot(null)
   }, [roomId])
 
   useEffect(() => {
@@ -86,11 +71,15 @@ function BoardPage() {
 
   const sync = useBoardSync({
     roomId,
+    sessionId: auth.user?.user_id,
     name: auth.user?.name || "Guest",
     role: isTeacher ? "teacher" : "student",
     enabled: boardRealtimeEnabled,
-    onInit: onRemote,
+    onInit: setRemoteSnapshot,
     onElements: onRemote,
+    onRestored: setRemoteSnapshot,
+    onPermissions: (allowed) => { setStudentDraw(allowed); setPermissionPending(false) },
+    onError: (message) => { setPermissionPending(false); toast.error(message) },
   })
   senderRef.current = sync.send
 
@@ -106,11 +95,14 @@ function BoardPage() {
   )
 
   function toggleStudentDraw(allowed: boolean) {
-    setStudentDraw(allowed)
-    saveStudentDrawPermission(roomId, allowed)
-    if (allowed) toast.success("Students can draw")
-    else toast.info("Students are view-only")
+    if (sync.status !== "live") return
+    setPermissionPending(true)
+    sync.send({ type: "permissions", students_draw: allowed })
   }
+
+  useEffect(() => {
+    if (sync.status !== "live") setPermissionPending(false)
+  }, [sync.status])
 
   async function copyRoomCode() {
     try {
@@ -229,6 +221,7 @@ function BoardPage() {
             />
             <TooltipContent>Download a portable board snapshot</TooltipContent>
           </Tooltip>
+          <BoardHistoryDialog roomId={roomId} enabled={boardRealtimeEnabled} onRestored={setRemoteSnapshot} />
           <div className="flex items-center gap-1.5">
             <PresencePanel
               peers={sync.peers}
@@ -245,6 +238,7 @@ function BoardPage() {
               <Switch
                 id="students-draw"
                 checked={studentDraw}
+                disabled={sync.status !== "live" || permissionPending}
                 onCheckedChange={(checked) => toggleStudentDraw(checked)}
               />
             </label>
@@ -274,6 +268,7 @@ function BoardPage() {
           handle={canvasHandle}
           senderRef={senderRef}
           onCursorMove={onCursorMove}
+          remoteSnapshot={remoteSnapshot}
         />
       </Suspense>
       <PeerCursors peers={sync.peers} selfId={sync.selfId} />

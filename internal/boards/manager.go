@@ -53,6 +53,7 @@ type room struct {
 	loaded       bool
 	loading      bool
 	loadDone     chan struct{}
+	studentsDraw bool
 }
 
 // RoomSnapshot is a race-free copy of a room. Slices and maps in the result
@@ -65,9 +66,10 @@ type RoomSnapshot struct {
 
 // Manager stores rooms and serializes access to all room state.
 type Manager struct {
-	mu    sync.RWMutex
-	rooms map[string]*room
-	now   func() time.Time
+	mu        sync.RWMutex
+	controlMu sync.Mutex
+	rooms     map[string]*room
+	now       func() time.Time
 
 	persistenceMu      sync.Mutex
 	persistence        BoardSnapshotStore

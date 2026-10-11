@@ -897,8 +897,8 @@ func TestPersistenceResumeConcurrencyAndRestoreCoverage(t *testing.T) {
 	if _, err := saveFailManager.Restore(context.Background(), "room", 1); !errors.Is(err, saveErr) {
 		t.Fatalf("restore save error = %v", err)
 	}
-	if !saveFailManager.hasPendingSave("room") {
-		t.Fatal("failed restore did not leave a retryable save")
+	if saveFailManager.hasPendingSave("room") || len(saveFailManager.Snapshot("room").Elements) != 0 {
+		t.Fatal("failed restore changed the live canvas or scheduled an unconfirmed restore")
 	}
 
 	mergeManager := NewManager()

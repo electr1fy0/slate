@@ -17,10 +17,14 @@ func testHTTPServer(t *testing.T, maxBytes int) (*httptest.Server, *Manager) {
 	t.Helper()
 	manager := NewManager()
 	resolver := TokenResolver(func(_ context.Context, token string) (Identity, error) {
-		if token != "valid" {
+		if token != "valid" && token != "teacher" {
 			return Identity{}, ErrInvalidToken
 		}
-		return Identity{Name: "Test User", Role: "student"}, nil
+		role := "student"
+		if token == "teacher" {
+			role = "teacher"
+		}
+		return Identity{Name: "Test User", Role: role}, nil
 	})
 	handler := NewHTTPHandler(manager, resolver, []string{"https://allowed.example"}, maxBytes)
 	mux := http.NewServeMux()
@@ -78,7 +82,7 @@ func writeBoardMessage(t *testing.T, conn *websocket.Conn, raw string) {
 func TestHTTPHandlerBoardJourney(t *testing.T) {
 	server, manager := testHTTPServer(t, 64*1024)
 	defer server.Close()
-	teacher := dialBoard(t, server.URL, "room-1", "valid", "https://allowed.example")
+	teacher := dialBoard(t, server.URL, "room-1", "teacher", "https://allowed.example")
 	defer teacher.Close()
 	writeBoardMessage(t, teacher, `{"type":"join"}`)
 	init := readBoardMessage(t, teacher)

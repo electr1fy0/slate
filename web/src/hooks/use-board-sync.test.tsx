@@ -140,6 +140,20 @@ describe("useBoardSync", () => {
     expect(probe.state.current.selfId).toBe("peer-1")
   })
 
+  it("reconnects with the new identity when the signed-in account changes", () => {
+    let sessionId = "u1"
+    function Probe() { useBoardSync({ ...baseOptions, sessionId }); return null }
+    root = createRoot(container)
+    act(() => root!.render(<Probe />))
+    const first = MockWebSocket.instances[0]
+    act(() => first.simulateOpen())
+    setAuth({ user: { user_id: "u2", email: "b@example.test", name: "Ada", role: "teacher" }, accessToken: "new-access", refreshToken: "new-refresh" })
+    sessionId = "u2"
+    act(() => root!.render(<Probe />))
+    expect(first.readyState).toBe(MockWebSocket.CLOSED)
+    expect(MockWebSocket.instances.at(-1)?.url).toContain("new-access")
+  })
+
   it("marks realtime unavailable without opening a socket or buffering local edits", () => {
     const probe = useProbe({ ...baseOptions, enabled: false })
     mount(probe)
@@ -154,6 +168,24 @@ describe("useBoardSync", () => {
       })
     })
     expect(MockWebSocket.instances).toHaveLength(0)
+  })
+
+  it("applies server permission state and exact restored snapshots", () => {
+    const onPermissions = vi.fn()
+    const onRestored = vi.fn()
+    const onError = vi.fn()
+    const probe = useProbe({ ...baseOptions, role: "student", onPermissions, onRestored, onError })
+    mount(probe)
+    const socket = MockWebSocket.instances[0]
+    act(() => socket.simulateOpen())
+    act(() => socket.simulateMessage({ type: "init", you: "self", peers: [], elements: [], room: { room_id: "room-1", version: 4, students_draw: true } }))
+    expect(onPermissions).toHaveBeenLastCalledWith(true)
+    act(() => socket.simulateMessage({ type: "permissions", students_draw: false }))
+    expect(onPermissions).toHaveBeenLastCalledWith(false)
+    act(() => socket.simulateMessage({ type: "restored", version: 5, elements: [{ id: "historical", version: 1 }] }))
+    expect(onRestored).toHaveBeenCalledWith([{ id: "historical", version: 1 }])
+    act(() => socket.simulateMessage({ type: "error", message: "Permission denied" }))
+    expect(onError).toHaveBeenCalledWith("Permission denied")
   })
 
   it("joins as a guest, ignores a duplicate open, and closes on socket errors", () => {
