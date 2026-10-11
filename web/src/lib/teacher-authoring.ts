@@ -177,14 +177,74 @@ function parseCsvQuestions(source: string): ImportResult {
   const answerIndex = column("answer", "correct", "correct_answer")
   const pointsIndex = column("points")
   const feedbackIndex = column("feedback")
-  const optionIndexes = headers.flatMap((header, index) =>
-    /^(?:option_?[a-f]|option_?\d+|choice_?[a-f])$/.test(header) ? [index] : []
-  )
+  const optionColumns: {
+    index: number
+    family: "letter" | "number"
+    ordinal: number
+  }[] = []
+  headers.forEach((header, index) => {
+    const lettered = /^(?:option|choice)_?([a-f])$/.exec(header)
+    if (lettered) {
+      const suffix = lettered[1]
+      optionColumns.push({
+        index,
+        family: "letter",
+        ordinal: suffix.charCodeAt(0) - 96,
+      })
+      return
+    }
+    const numbered = /^option_?(\d+)$/.exec(header)
+    if (numbered) {
+      optionColumns.push({
+        index,
+        family: "number",
+        ordinal: Number(numbered[1]),
+      })
+    }
+  })
+  const optionIndexes = optionColumns
+    .slice()
+    .sort((left, right) => left.ordinal - right.ordinal)
+    .map(({ index }) => index)
   if (questionIndex < 0 || answerIndex < 0 || optionIndexes.length < 2) {
     return {
       questions: [],
       errors: [
-        "CSV headers must include question, at least two option_a…option_f columns, and answer.",
+        "CSV headers must include question, at least two option_a…option_f or option_1…option_6 columns, and answer.",
+      ],
+    }
+  }
+  if (new Set(optionColumns.map(({ family }) => family)).size > 1) {
+    return {
+      questions: [],
+      errors: [
+        "CSV option headers must use one scheme: lettered (option_a…option_f) or numbered (option_1…option_6).",
+      ],
+    }
+  }
+  if (optionColumns.length > 6) {
+    return {
+      questions: [],
+      errors: ["CSV can contain at most six option columns."],
+    }
+  }
+  const sortedOptions = optionColumns
+    .slice()
+    .sort((left, right) => left.ordinal - right.ordinal)
+  if (
+    new Set(sortedOptions.map(({ ordinal }) => ordinal)).size !==
+    sortedOptions.length
+  ) {
+    return {
+      questions: [],
+      errors: ["CSV option columns must have unique suffixes."],
+    }
+  }
+  if (sortedOptions.some(({ ordinal }, index) => ordinal !== index + 1)) {
+    return {
+      questions: [],
+      errors: [
+        "CSV option columns must be contiguous and start at option_a or option_1.",
       ],
     }
   }

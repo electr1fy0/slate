@@ -204,6 +204,54 @@ describe("teacher authoring helpers", () => {
         feedback: "Use the comma carefully",
       },
     ])
+    const reordered = parseQuestionImport(
+      "question,option_b,answer,option_a\nMapped answer,Second,A,First",
+      "csv"
+    )
+    expect(reordered.errors).toEqual([])
+    expect(reordered.questions).toEqual([
+      { question: "Mapped answer", options: ["First", "Second"], answer: 0 },
+    ])
+    const reorderedNumeric = parseQuestionImport(
+      "question,option_2,answer,option_1\nNumeric order,Second,0,First",
+      "csv"
+    )
+    expect(reorderedNumeric.errors).toEqual([])
+    expect(reorderedNumeric.questions[0]).toMatchObject({
+      question: "Numeric order",
+      options: ["First", "Second"],
+      answer: 0,
+    })
+    expect(
+      parseQuestionImport(
+        "question,option_a,choice_a,option_b,answer\nDuplicate,A,Alias,B,A",
+        "csv"
+      ).errors[0]
+    ).toContain("unique suffixes")
+    expect(
+      parseQuestionImport(
+        "question,option_1,option_1,answer\nDuplicate,A,Alias,A",
+        "csv"
+      ).errors[0]
+    ).toContain("unique suffixes")
+    expect(
+      parseQuestionImport(
+        "question,option_a,option_2,answer\nMixed,A,B,A",
+        "csv"
+      ).errors[0]
+    ).toContain("one scheme")
+    expect(
+      parseQuestionImport(
+        "question,option_a,option_c,answer\nLetter gap,A,C,A",
+        "csv"
+      ).errors[0]
+    ).toContain("contiguous")
+    expect(
+      parseQuestionImport(
+        "question,option_1,option_3,answer\nNumeric gap,A,C,0",
+        "csv"
+      ).errors[0]
+    ).toContain("contiguous")
     expect(
       parseQuestionImport(
         '[{"question":"Broken","options":["A","B"],"answer":4}]',
