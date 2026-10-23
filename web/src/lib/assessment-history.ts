@@ -15,13 +15,20 @@ export interface AssessmentHistoryFilters {
 export function assessmentAttemptStatus(
   exam: ExamMeta
 ): Exclude<AssessmentFilterStatus, "all"> {
-  return exam.attempt_status ?? "not_started"
+  return exam.attempt_status === "submitted" ||
+    exam.attempt_status === "in_progress"
+    ? exam.attempt_status
+    : "not_started"
 }
 
 export function filterAndSortAssessments(
   exams: ExamMeta[],
   filters: AssessmentHistoryFilters
 ): ExamMeta[] {
+  const timestamp = (value?: string): number =>
+    value && Number.isFinite(Date.parse(value))
+      ? Date.parse(value)
+      : Number.POSITIVE_INFINITY
   const search = filters.search.trim().toLocaleLowerCase()
   const filtered = exams.filter((exam) => {
     if (search && !exam.title.toLocaleLowerCase().includes(search)) return false
@@ -41,17 +48,17 @@ export function filterAndSortAssessments(
   return filtered.sort((left, right) => {
     if (filters.sort === "title") return left.title.localeCompare(right.title)
     if (filters.sort === "deadline") {
-      const leftTime = left.closes_at
-        ? Date.parse(left.closes_at)
-        : Number.POSITIVE_INFINITY
-      const rightTime = right.closes_at
-        ? Date.parse(right.closes_at)
-        : Number.POSITIVE_INFINITY
+      const leftTime = timestamp(left.closes_at)
+      const rightTime = timestamp(right.closes_at)
       return leftTime - rightTime || left.title.localeCompare(right.title)
     }
     return (
-      Date.parse(right.created_at) - Date.parse(left.created_at) ||
-      left.title.localeCompare(right.title)
+      (Number.isFinite(Date.parse(right.created_at))
+        ? Date.parse(right.created_at)
+        : 0) -
+        (Number.isFinite(Date.parse(left.created_at))
+          ? Date.parse(left.created_at)
+          : 0) || left.title.localeCompare(right.title)
     )
   })
 }
@@ -79,6 +86,13 @@ export function canRetakeAssessment(exam: ExamMeta, now = Date.now()): boolean {
   if (assessmentAttemptStatus(exam) !== "submitted") return false
   const attemptNumber = exam.attempt_number ?? 1
   const maxAttempts = exam.max_attempts ?? 1
+  if (
+    !Number.isSafeInteger(attemptNumber) ||
+    attemptNumber < 1 ||
+    !Number.isSafeInteger(maxAttempts) ||
+    maxAttempts < 0
+  )
+    return false
   if (maxAttempts !== 0 && attemptNumber >= maxAttempts) return false
 
   return isAssessmentWindowOpen(exam, now)

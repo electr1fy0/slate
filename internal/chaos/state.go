@@ -354,7 +354,7 @@ func (s *State) Delay(ctx context.Context) error {
 	}
 	ms := s.LatencyMS()
 	if ms <= 0 {
-		return nil
+		return ctx.Err()
 	}
 	timer := time.NewTimer(time.Duration(ms) * time.Millisecond)
 	defer timer.Stop()
@@ -373,7 +373,7 @@ func (s *State) Handler(next http.Handler) http.Handler {
 		next = http.NotFoundHandler()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.HasPrefix(r.URL.Path, "/ws/board/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -418,6 +418,8 @@ func isExamWrite(method, path string) bool {
 		return true
 	case method == http.MethodPost && len(parts) == 2 && parts[1] == "submit":
 		return true
+	case method == http.MethodPost && len(parts) == 2 && parts[1] == "retake":
+		return true
 	case method == http.MethodPost && len(parts) == 3 && parts[1] == "attempt" && parts[2] == "submit":
 		return true
 	default:
@@ -444,6 +446,10 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) WriteHeader(status int) {
+	if status >= 100 && status < 200 {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if w.status != 0 {
 		return
 	}
@@ -471,6 +477,9 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 func (w *statusWriter) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}

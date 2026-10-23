@@ -5,6 +5,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1776,7 +1778,7 @@ func (s *Server) currentUser(w http.ResponseWriter, r *http.Request) (*model.Use
 	return nil, false
 }
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if r.Header.Get("x-admin-token") != s.Settings.AdminToken {
+	if !auth.MatchAdminToken(r.Header.Get("x-admin-token"), s.Settings.AdminToken) {
 		detail(w, 403, "invalid admin token")
 		return false
 	}
@@ -1818,7 +1820,7 @@ func (s *Server) staffActor(w http.ResponseWriter, r *http.Request) (*model.User
 	}
 	adminToken := strings.TrimSpace(r.Header.Get("x-admin-token"))
 	if adminToken != "" {
-		if adminToken == s.Settings.AdminToken {
+		if auth.MatchAdminToken(adminToken, s.Settings.AdminToken) {
 			return nil, true, true
 		}
 		detail(w, http.StatusForbidden, "invalid admin token")
@@ -2065,7 +2067,7 @@ func (s *Server) writeExamError(w http.ResponseWriter, err error) bool {
 		detail(w, 404, "no saved attempt")
 	case errors.Is(err, store.ErrAttemptConflict), errors.Is(err, store.ErrAttemptSubmitted):
 		detail(w, 409, err.Error())
-	case errors.Is(err, store.ErrInvalidAnswer):
+	case errors.Is(err, store.ErrInvalidAnswer), errors.Is(err, exams.ErrInvalidRequest):
 		validation(w, err.Error())
 	default:
 		detail(w, 503, "data layer unavailable")
@@ -2086,12 +2088,12 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
+		w.Header().Add("Vary", "Origin")
 		if allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT")
-			w.Header().Set("Access-Control-Allow-Headers", "*")
-			w.Header().Set("Access-Control-Expose-Headers", "x-request-id")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Admin-Token, X-Request-ID")
+			w.Header().Set("Access-Control-Expose-Headers", "x-request-id, Retry-After")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(200)
@@ -2108,8 +2110,13 @@ func (s *Server) now() time.Time {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
+	var raw json.RawMessage
 	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(dst); err != nil {
+	if err := decoder.Decode(&raw); err != nil || len(raw) == 0 || raw[0] != '{' {
+		validation(w, "request body must be a JSON object")
+		return false
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
 		validation(w, "invalid request body")
 		return false
 	}
@@ -2224,11 +2231,17 @@ func slugify(value string) string {
 	}
 	return slug
 }
-func randomSuffix() string { return fmt.Sprintf("%08x", time.Now().UnixNano())[:8] }
+func randomSuffix() string {
+	var value [12]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return hex.EncodeToString(value[:])
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
 func queryInt(r *http.Request, key string, fallback int) int {
 	value := r.URL.Query().Get(key)
-	var parsed int
-	if _, err := fmt.Sscan(value, &parsed); err != nil {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
 		return fallback
 	}
 	return parsed
@@ -2247,6 +2260,6 @@ func submissionMaps(rows []model.Submission) []map[string]any {
 	for _, row := range rows {
 		out = append(out, map[string]any{"pk": row.PK, "sk": row.SK, "answers": row.Answers, "version": row.Version, "request_id": row.RequestID, "updated_at": row.UpdatedAt, "updated_at_iso": row.UpdatedAtISO, "written_by_region": row.WrittenByRegion, "student_name": row.StudentName, "attempt_number": row.AttemptNumber, "score": row.Score, "total": row.Total})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return fmt.Sprint(out[i]["updated_at"]) < fmt.Sprint(out[j]["updated_at"]) })
+	sort.SliceStable(out, func(i, j int) bool { return out[i]["updated_at"].(int64) < out[j]["updated_at"].(int64) })
 	return out
 }

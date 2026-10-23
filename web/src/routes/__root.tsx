@@ -23,6 +23,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "referrer", content: "no-referrer" },
       {
         title: "Continuum — Assessment continuity for timed exams",
       },
@@ -102,9 +103,21 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body className="antialiased">
         <Providers>
-          <ClientOnly>{children}</ClientOnly>
+          <ClientOnly
+            fallback={
+              <p role="status" className="p-6">
+                Loading Continuum…
+              </p>
+            }
+          >
+            {children}
+          </ClientOnly>
         </Providers>
         <Toaster position="bottom-right" />
+        <noscript>
+          Continuum needs JavaScript to open assessments and boards. Enable
+          JavaScript and reload this page.
+        </noscript>
         {import.meta.env.DEV && import.meta.env.CONTINUUM_DEMO !== "1" ? (
           <TanStackDevtools
             config={{ position: "bottom-right" }}

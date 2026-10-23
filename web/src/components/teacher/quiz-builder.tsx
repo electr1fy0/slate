@@ -338,6 +338,14 @@ export function QuizBuilder({
   function isValidForSync(draft: ExamDraft): boolean {
     return (
       Boolean(draft.title.trim()) &&
+      [
+        draft.duration_minutes,
+        draft.max_attempts,
+        draft.late_grace_minutes,
+      ].every(
+        (value) =>
+          value === undefined || (Number.isInteger(value) && value >= 0)
+      ) &&
       draft.questions.length > 0 &&
       draft.questions.every(
         (question) =>
@@ -348,7 +356,7 @@ export function QuizBuilder({
           question.answer >= 0 &&
           question.answer < question.options.length &&
           (question.points === undefined ||
-            (Number.isFinite(question.points) &&
+            (Number.isInteger(question.points) &&
               question.points >= 1 &&
               question.points <= 1000))
       )
@@ -480,6 +488,8 @@ export function QuizBuilder({
     nextServerDraftId?: string
   ): void {
     generationRef.current += 1
+    queuedSyncRef.current = null
+    if (localSaveTimerRef.current) clearTimeout(localSaveTimerRef.current)
     lastSyncFailureRef.current = null
     setTitle(draft.title)
     setCustomId(draft.id ?? "")
@@ -569,6 +579,7 @@ export function QuizBuilder({
   }
 
   function removeBuilderQuestion(question: BuilderQuestion): void {
+    const generation = generationRef.current
     const index = questions.findIndex((item) => item.key === question.key)
     if (index < 0 || questions.length <= 1) return
     setQuestions((current) =>
@@ -579,6 +590,7 @@ export function QuizBuilder({
         label: "Undo",
         onClick: () =>
           setQuestions((current) => {
+            if (generation !== generationRef.current) return current
             if (current.some((item) => item.key === question.key))
               return current
             const next = [...current]
@@ -611,7 +623,7 @@ export function QuizBuilder({
       !Number.isInteger(question.answer) ||
       question.answer < 0 ||
       question.answer >= options.length ||
-      !Number.isFinite(points) ||
+      !Number.isInteger(points) ||
       points < 1 ||
       points > 1000
     ) {
@@ -651,7 +663,7 @@ export function QuizBuilder({
       {
         ...question,
         options: [...question.options],
-        key: `bank-${question.id ?? "local"}-${Date.now()}`,
+        key: `bank-${++questionCounter}`,
       },
     ])
     toast.info("Question added to this quiz")
@@ -774,7 +786,7 @@ export function QuizBuilder({
         question.answer >= 0 &&
         question.answer < question.options.length &&
         (question.points === undefined ||
-          (Number.isFinite(question.points) &&
+          (Number.isInteger(question.points) &&
             question.points >= 1 &&
             question.points <= 1000))
     )
@@ -783,10 +795,20 @@ export function QuizBuilder({
   const validWindow =
     openInstant === null || closeInstant === null || closeInstant > openInstant
   const validDuration =
-    !duration || (Number(duration) > 0 && Number(duration) <= 1440)
+    !duration ||
+    (Number.isInteger(Number(duration)) &&
+      Number(duration) >= 0 &&
+      Number(duration) <= 1440)
   const validAttempts =
-    !maxAttempts || (Number(maxAttempts) >= 0 && Number(maxAttempts) <= 20)
-  const validGrace = !grace || (Number(grace) >= 0 && Number(grace) <= 10080)
+    !maxAttempts ||
+    (Number.isInteger(Number(maxAttempts)) &&
+      Number(maxAttempts) >= 0 &&
+      Number(maxAttempts) <= 20)
+  const validGrace =
+    !grace ||
+    (Number.isInteger(Number(grace)) &&
+      Number(grace) >= 0 &&
+      Number(grace) <= 10080)
   const canPublish =
     titleReady &&
     questionsReady &&
@@ -813,7 +835,13 @@ export function QuizBuilder({
   const bankItems = useMemo(() => {
     const remoteContent = new Set(
       remoteBank.map((item) =>
-        JSON.stringify([item.question, item.options, item.answer])
+        JSON.stringify([
+          item.question,
+          item.options,
+          item.answer,
+          item.points ?? 1,
+          item.feedback ?? "",
+        ])
       )
     )
     return [
@@ -821,7 +849,13 @@ export function QuizBuilder({
       ...localQuestionBank.filter(
         (item) =>
           !remoteContent.has(
-            JSON.stringify([item.question, item.options, item.answer])
+            JSON.stringify([
+              item.question,
+              item.options,
+              item.answer,
+              item.points ?? 1,
+              item.feedback ?? "",
+            ])
           )
       ),
     ]

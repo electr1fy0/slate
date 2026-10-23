@@ -27,7 +27,7 @@ func TestPasswordChangeAndResetRevokeSessionsAndEnforceSingleUseExpiry(t *testin
 	cfg := config.Defaults()
 	db := store.NewMemory(cfg.Region)
 	service := New(db, cfg)
-	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	service.Now = func() time.Time { return now }
 	mailer := &passwordResetMailerStub{}
 	service.ResetMailer = mailer
@@ -109,7 +109,7 @@ func TestPasswordUpdatesInvalidateEveryOutstandingResetToken(t *testing.T) {
 	cfg := config.Defaults()
 	db := store.NewMemory(cfg.Region)
 	service := New(db, cfg)
-	service.Now = func() time.Time { return time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC) }
+	service.Now = time.Now
 	mailer := &passwordResetMailerStub{}
 	service.ResetMailer = mailer
 	user, err := service.CreateUser(ctx, "student@example.com", "current-password", "Student", RoleStudent)

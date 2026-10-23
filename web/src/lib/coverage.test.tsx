@@ -74,9 +74,9 @@ describe("small frontend libraries", () => {
     const hook = renderHook(() => history.useBoardHistory())
     expect(hook.result.current).toHaveLength(20)
 
-    act(() => history.recordBoardVisit("room-1"))
-    expect(hook.result.current[0]?.room_id).toBe("room-1")
-    expect(hook.result.current[0]?.visits).toBe(3)
+    act(() => history.recordBoardVisit("room-3"))
+    expect(hook.result.current[0]?.room_id).toBe("room-3")
+    expect(hook.result.current[0]?.visits).toBe(5)
     act(() => history.recordBoardVisit("brand-new"))
     expect(hook.result.current[0]?.room_id).toBe("brand-new")
     act(() => history.forgetBoardHistory("room-1"))
@@ -101,10 +101,12 @@ describe("small frontend libraries", () => {
     ])
     expect(csv).toContain('"room,""quoted"""')
 
-    const anchor = { click: vi.fn(), href: "", download: "" }
+    vi.useFakeTimers()
+    const anchor = document.createElement("a")
+    const click = vi.spyOn(anchor, "click").mockImplementation(() => {})
     const createElement = vi
       .spyOn(document, "createElement")
-      .mockReturnValue(anchor as unknown as HTMLElement)
+      .mockReturnValue(anchor)
     const createObjectURL = vi.fn().mockReturnValue("blob:test")
     const revokeObjectURL = vi.fn()
     const urlConstructor = globalThis.URL
@@ -120,8 +122,11 @@ describe("small frontend libraries", () => {
     expect(createObjectURL).toHaveBeenCalledOnce()
     expect(anchor.download).toBe("history.csv")
     expect(anchor.href).toBe("blob:test")
-    expect(anchor.click).toHaveBeenCalledOnce()
+    expect(click).toHaveBeenCalledOnce()
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1000)
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test")
+    vi.useRealTimers()
     createElement.mockRestore()
 
     localStorage.setItem(
@@ -150,9 +155,9 @@ describe("small frontend libraries", () => {
       JSON.stringify([
         {
           id: "q1",
-          saved_at: "now",
+          saved_at: "2026-01-01T00:00:00Z",
           question: "ok",
-          options: ["a"],
+          options: ["a", "b"],
           answer: 0,
         },
         { bad: true },
@@ -221,7 +226,12 @@ describe("small frontend libraries", () => {
     localStorage.setItem(
       "slate.quiz-drafts.library-teacher",
       JSON.stringify([
-        { draft_id: "d1", title: "Existing", updated_at: "now", questions: [] },
+        {
+          draft_id: "d1",
+          title: "Existing",
+          updated_at: "2026-01-01T00:00:00Z",
+          questions: [],
+        },
         { bad: true },
         null,
       ])
@@ -379,7 +389,7 @@ describe("small frontend libraries", () => {
     vi.resetModules()
     const partialAuth = await import("./auth")
     expect(partialAuth.getAuth()).toMatchObject({
-      user: { user_id: "u", email: "", name: "", role: "student" },
+      user: null,
       accessToken: null,
       refreshToken: null,
     })
@@ -452,6 +462,9 @@ describe("classroom store", () => {
       classrooms.addClassroomMember(created.id, { name: "Lin" })?.members
     ).toHaveLength(2)
     expect(classrooms.joinClassroom("wrong", { id: "x", name: "X" })).toBeNull()
+    expect(classrooms.joinClassroom("", { id: "x", name: "X" })).toBeNull()
+    created.join_code = "ABC234"
+    classrooms.getClassroom(created.id)!.join_code = "ABC234"
     expect(
       classrooms.joinClassroom(created.join_code.toLowerCase(), {
         id: invited.members[1].id,
@@ -516,7 +529,7 @@ describe("classroom store", () => {
         name: "Student",
         email: "student@example.com",
         role: "student",
-        joined_at: "now",
+        joined_at: "2026-01-01T00:00:00Z",
       },
       {
         classroom_id: "remote-class",
@@ -524,7 +537,7 @@ describe("classroom store", () => {
         name: "Other teacher",
         email: "teacher2@example.com",
         role: "teacher",
-        joined_at: "now",
+        joined_at: "2026-01-01T00:00:00Z",
       },
     ])
     const removeClassroomMember = vi.fn().mockResolvedValue(undefined)
@@ -608,7 +621,7 @@ describe("classroom store", () => {
         email: "",
         role: "student",
         status: "active",
-        joined_at: "now",
+        joined_at: "2026-01-01T00:00:00Z",
       })
     ).toHaveLength(1)
     const matchedMember = {
@@ -617,7 +630,7 @@ describe("classroom store", () => {
       email: "matched@example.com",
       role: "student" as const,
       status: "invited" as const,
-      joined_at: "now",
+      joined_at: "2026-01-01T00:00:00Z",
     }
     const untouchedMember = {
       ...matchedMember,
@@ -674,7 +687,7 @@ describe("classroom store", () => {
         name: "X",
         role: "student",
         email: "x@example.test",
-        joined_at: "now",
+        joined_at: "2026-01-01T00:00:00Z",
       },
     ])
     expect(
@@ -732,7 +745,7 @@ describe("classroom store", () => {
           email: "",
           role: "student",
           status: "active",
-          joined_at: "now",
+          joined_at: "2026-01-01T00:00:00Z",
         },
       ],
     }
@@ -767,7 +780,7 @@ describe("classroom store", () => {
               email: "",
               role: "student",
               status: "invited",
-              joined_at: "now",
+              joined_at: "2026-01-01T00:00:00Z",
             },
           ],
         },

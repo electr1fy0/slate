@@ -1,0 +1,277 @@
+[
+  {
+    "probe": "timed_submission_without_start",
+    "observed": {
+      "body": {
+        "attempt_number": 1,
+        "committed_at": 1792770528585,
+        "request_id": "audit-direct",
+        "score": 1,
+        "status": "committed",
+        "total": 1,
+        "version": 1
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "noncanonical_question_index",
+    "observed": {
+      "body": {
+        "attempt_number": 1,
+        "committed_at": 1792770528585,
+        "request_id": "audit-alias",
+        "score": 0,
+        "status": "committed",
+        "total": 1,
+        "version": 1
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "invalid_answer_status",
+    "observed": {
+      "body": {
+        "detail": "data layer unavailable"
+      },
+      "http_status": 503
+    }
+  },
+  {
+    "probe": "teacher_submission",
+    "observed": {
+      "body": {
+        "attempt_number": 1,
+        "committed_at": 1792770528585,
+        "request_id": "audit-teacher",
+        "score": 1,
+        "status": "committed",
+        "total": 1,
+        "version": 1
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "running_deadline_changes",
+    "observed": {
+      "after": {
+        "attempt": {
+          "attempt_number": 1,
+          "started_at": 1792770528585,
+          "started_at_iso": "2026-10-23T15:48:48.585611Z",
+          "version": 0
+        },
+        "attempt_started_at": 1792770528585,
+        "created_at": "2026-10-23T15:48:48.585598Z",
+        "deadline_ms": 1792770588585,
+        "duration_minutes": 1,
+        "id": "mutable-clock",
+        "max_attempts": 0,
+        "question_count": 1,
+        "questions": [
+          {
+            "index": 0,
+            "options": [
+              "yes",
+              "no"
+            ],
+            "question": "One?"
+          }
+        ],
+        "title": "Audit assessment"
+      },
+      "before": {
+        "attempt": {
+          "attempt_number": 1,
+          "started_at": 1792770528585,
+          "started_at_iso": "2026-10-23T15:48:48.585611Z",
+          "version": 0
+        },
+        "attempt_started_at": 1792770528585,
+        "created_at": "2026-10-23T15:48:48.585598Z",
+        "deadline_ms": 1792771428585,
+        "duration_minutes": 15,
+        "id": "mutable-clock",
+        "max_attempts": 0,
+        "question_count": 1,
+        "questions": [
+          {
+            "index": 0,
+            "options": [
+              "yes",
+              "no"
+            ],
+            "question": "One?"
+          }
+        ],
+        "title": "Audit assessment"
+      }
+    }
+  },
+  {
+    "probe": "autosave_request_payload_mismatch",
+    "observed": {
+      "body": {
+        "answers": {
+          "0": 0
+        },
+        "attempt_number": 1,
+        "deadline_ms": 0,
+        "request_id": "audit-same-save",
+        "started_at": 1792770528585,
+        "status": "duplicate",
+        "version": 1
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "close_still_accepts_late_work",
+    "observed": {
+      "body": {
+        "allow_late": true,
+        "attempt": {
+          "attempt_number": 1,
+          "started_at": 1792770528585,
+          "started_at_iso": "2026-10-23T15:48:48.585814Z",
+          "version": 0
+        },
+        "attempt_started_at": 1792770528585,
+        "closes_at": "2026-10-23T15:48:48.585788Z",
+        "created_at": "2026-10-23T15:48:48.585782Z",
+        "id": "late-close",
+        "max_attempts": 0,
+        "question_count": 1,
+        "questions": [
+          {
+            "index": 0,
+            "options": [
+              "yes",
+              "no"
+            ],
+            "question": "One?"
+          }
+        ],
+        "title": "Audit assessment"
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "single_invalid_availability_boundary",
+    "observed": {
+      "body": {
+        "id": "invalid-date",
+        "max_attempts": 1,
+        "opens_at": "garbage",
+        "question_count": 1,
+        "title": "Date probe"
+      },
+      "http_status": 201
+    }
+  },
+  {
+    "probe": "registration_email_whitespace",
+    "observed": {
+      "body": {
+        "detail": "invalid email"
+      },
+      "http_status": 422
+    }
+  },
+  {
+    "probe": "registration_name_byte_limit",
+    "observed": {
+      "body": {
+        "detail": "name must contain at most 60 characters"
+      },
+      "http_status": 422
+    }
+  },
+  {
+    "probe": "unrelated_learner_board_export",
+    "observed": {
+      "body": {
+        "created_at": "2026-10-23T21:18:48.5859+05:30",
+        "elements": [
+          {
+            "id": "secret-shape",
+            "text": "other class content",
+            "type": "rectangle",
+            "version": 1
+          }
+        ],
+        "participant_count": 0,
+        "room_id": "private-audit-room",
+        "schema_version": 1,
+        "students_draw": false,
+        "updated_at": "2026-10-23T21:18:48.585901+05:30",
+        "version": 1
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "unrelated_learner_board_history",
+    "observed": {
+      "body": [
+        {
+          "created_at": "2026-10-23T21:18:48.5859+05:30",
+          "element_count": 1,
+          "room_id": "private-audit-room",
+          "saved_at": "2026-10-23T21:18:48.585901+05:30",
+          "updated_at": "2026-10-23T21:18:48.585901+05:30",
+          "version": 1
+        }
+      ],
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "unrelated_teacher_board_restore",
+    "observed": {
+      "body": {
+        "Elements": [
+          {
+            "id": "secret-shape",
+            "text": "other class content",
+            "type": "rectangle",
+            "version": 1
+          }
+        ],
+        "Peers": [],
+        "created_at": "2026-10-23T21:18:48.5859+05:30",
+        "participant_count": 0,
+        "room_id": "private-audit-room",
+        "students_draw": false,
+        "updated_at": "2026-10-23T21:18:48.586148+05:30",
+        "version": 2
+      },
+      "http_status": 200
+    }
+  },
+  {
+    "probe": "frontend_board_history_route",
+    "observed": {
+      "body": "404 page not found\n",
+      "http_status": 404
+    }
+  },
+  {
+    "probe": "zero_rate_limit_panic",
+    "observed": "runtime error: index out of range [0] with length 0"
+  },
+  {
+    "probe": "negative_rate_limit_configuration",
+    "observed": {
+      "accepted": true,
+      "login_limit": -1
+    }
+  },
+  {
+    "probe": "sensitive_response_cache_control",
+    "observed": ""
+  }
+]

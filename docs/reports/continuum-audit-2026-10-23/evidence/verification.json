@@ -1,0 +1,71 @@
+{
+  "baseline": "1ec26fb0b59cb4704ccce28b93fc4046da5a35f4",
+  "review_date": "2026-10-23",
+  "time_zone": "Asia/Kolkata",
+  "checks": [
+    {
+      "command": "go test -race -timeout 30m ./...",
+      "outcome": "failed",
+      "failed_tests": [
+        "TestPasswordChangeAndResetRevokeSessionsAndEnforceSingleUseExpiry",
+        "TestPasswordUpdatesInvalidateEveryOutstandingResetToken"
+      ],
+      "note": "All other reported package tests passed.",
+      "evidence": "go-tests.log"
+    },
+    {
+      "command": "go vet ./...",
+      "outcome": "passed",
+      "evidence": "go-vet.log"
+    },
+    {
+      "command": "bun run typecheck",
+      "cwd": "web",
+      "outcome": "passed",
+      "evidence": "Session tool output; this JSON is a summary, not a raw transcript."
+    },
+    {
+      "command": "bun run lint",
+      "cwd": "web",
+      "outcome": "passed"
+    },
+    {
+      "command": "bun run test",
+      "cwd": "web",
+      "outcome": "passed",
+      "test_files": 27,
+      "tests": 167
+    },
+    {
+      "command": "bun run build",
+      "cwd": "web",
+      "outcome": "passed",
+      "warnings": [
+        "Large chunks after minification",
+        "Route exports prevent some code splitting"
+      ]
+    },
+    {
+      "command": "bunx playwright test",
+      "cwd": "web",
+      "outcome": "passed",
+      "tests": 8,
+      "duration": "1.2m",
+      "evidence": "browser-tests.log"
+    },
+    {
+      "command": "go run ./docs/reports/continuum-audit-2026-10-23/probes",
+      "outcome": "completed",
+      "observation_cases": 17,
+      "evidence": "focused-probes.json"
+    }
+  ],
+  "not_run": [
+    "AWS resource inspection or mutation",
+    "Terraform apply/validate",
+    "SMTP end-to-end delivery",
+    "real DynamoDB probe execution",
+    "dependency vulnerability scan"
+  ],
+  "scope": "Audit artifacts and isolated synthetic probes. Application and deployment source not modified."
+}

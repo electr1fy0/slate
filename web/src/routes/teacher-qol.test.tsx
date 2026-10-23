@@ -276,7 +276,7 @@ describe("teacher authoring helpers", () => {
         '[{"question":"Zero points","options":["A","B"],"answer":0,"points":0}]',
         "json"
       ).errors[0]
-    ).toContain("points must be a number from 1 to 1000")
+    ).toContain("points must be a whole number from 1 to 1000")
     expect(
       parseQuestionImport("question,option_a,answer\nPrompt,A,A", "csv")
         .errors[0]

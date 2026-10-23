@@ -77,6 +77,7 @@ export function QuestionImport({
           </FieldLabel>
           <Textarea
             id="question-import-source"
+            spellCheck={false}
             className="min-h-32 font-mono text-xs"
             value={source}
             onChange={(event) => {
@@ -91,7 +92,7 @@ export function QuestionImport({
           />
         </Field>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={preview}>
+          <Button variant="outline" disabled={!source.trim()} onClick={preview}>
             Preview import
           </Button>
           {result &&

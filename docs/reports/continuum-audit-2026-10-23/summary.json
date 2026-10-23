@@ -1,0 +1,35 @@
+{
+  "total": 120,
+  "severity": {
+    "P1": 45,
+    "P2": 67,
+    "P3": 8
+  },
+  "categories": {
+    "Identity, security and HTTP boundaries": 12,
+    "Assessment API, grading and persistence": 23,
+    "Shared board correctness and collaboration": 28,
+    "Learner workflow, recovery and accessibility": 16,
+    "Teacher authoring and local data recovery": 16,
+    "Classroom coordination and invitation behavior": 10,
+    "Interface polish, operations, delivery and verification": 15
+  },
+  "kinds": {
+    "Hardening": 28,
+    "Defect": 68,
+    "Policy gap": 4,
+    "Missing capability": 7,
+    "Performance": 1,
+    "Accessibility": 2,
+    "Polish": 7,
+    "Demo limit": 1,
+    "Verification gap": 1,
+    "Documentation": 1
+  },
+  "evidence": {
+    "Source review": 102,
+    "Reproduced (isolated memory API)": 16,
+    "Observed in browser and source": 1,
+    "Reproduced (existing Go test suite)": 1
+  }
+}

@@ -18,7 +18,8 @@ import {
 import type { ExamQuestion, QuestionDraft } from "@/lib/types"
 import { Skeleton } from "@/components/ui/skeleton"
 
-type PreviewQuestion = Pick<ExamQuestion, "question" | "options"> & Partial<Pick<QuestionDraft, "answer">>
+type PreviewQuestion = Pick<ExamQuestion, "question" | "options"> &
+  Partial<Pick<QuestionDraft, "answer" | "points" | "feedback">>
 
 export function QuizPreviewDialog({
   open,
@@ -41,16 +42,26 @@ export function QuizPreviewDialog({
         <DialogHeader>
           <DialogTitle>{title || "Quiz preview"}</DialogTitle>
           <DialogDescription>
-            This is the learner-facing question flow. Correct answers stay visible only to the teacher preview.
+            This is the learner-facing question flow. Correct answers stay
+            visible only to the teacher preview.
           </DialogDescription>
         </DialogHeader>
         {loading ? (
-          <div className="flex flex-col gap-3" aria-label="Loading quiz preview">
+          <div
+            role="status"
+            className="flex flex-col gap-3"
+            aria-label="Loading quiz preview"
+          >
             <Skeleton className="h-20 rounded-lg" />
             <Skeleton className="h-20 rounded-lg" />
           </div>
         ) : error ? (
-          <div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">{error}</div>
+          <div
+            role="alert"
+            className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground"
+          >
+            {error}
+          </div>
         ) : questions.length === 0 ? (
           <div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">
             Add at least one question to preview this quiz.
@@ -60,8 +71,13 @@ export function QuizPreviewDialog({
             {questions.map((question, index) => (
               <Card key={`${index}-${question.question}`} size="sm">
                 <CardHeader>
-                  <CardTitle className="text-sm">Question {index + 1}</CardTitle>
-                  <CardDescription className="text-foreground">{question.question || "Untitled question"}</CardDescription>
+                  <CardTitle className="text-sm">
+                    Question {index + 1} · {question.points || 1} point
+                    {(question.points || 1) === 1 ? "" : "s"}
+                  </CardTitle>
+                  <CardDescription className="break-words whitespace-pre-wrap text-foreground">
+                    {question.question || "Untitled question"}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-2 sm:grid-cols-2">
                   {question.options.map((option, optionIndex) => (
@@ -69,22 +85,31 @@ export function QuizPreviewDialog({
                       key={`${optionIndex}-${option}`}
                       className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
                     >
-                      <span className="min-w-0 truncate">
+                      <span className="min-w-0 break-words whitespace-pre-wrap">
                         <span className="mr-2 font-mono text-xs text-muted-foreground">
                           {String.fromCharCode(65 + optionIndex)}
                         </span>
                         {option || "Empty option"}
                       </span>
-                      {question.answer === optionIndex ? <Badge variant="default">Correct</Badge> : null}
+                      {question.answer === optionIndex ? (
+                        <Badge variant="default">Correct</Badge>
+                      ) : null}
                     </div>
                   ))}
                 </CardContent>
+                {question.feedback ? (
+                  <p className="px-4 pb-4 text-sm break-words whitespace-pre-wrap">
+                    Feedback: {question.feedback}
+                  </p>
+                ) : null}
               </Card>
             ))}
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Close preview</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Close preview
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

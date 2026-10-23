@@ -17,6 +17,23 @@ const STORAGE_KEY = "slate.auth"
 
 const EMPTY: AuthState = { user: null, accessToken: null, refreshToken: null }
 
+export function validAuthUser(value: unknown): value is AuthUser {
+  if (!value || typeof value !== "object") return false
+  const user = value as Partial<AuthUser>
+  return (
+    typeof user.user_id === "string" &&
+    !!user.user_id.trim() &&
+    typeof user.email === "string" &&
+    typeof user.name === "string" &&
+    (user.role === "teacher" || user.role === "student")
+  )
+}
+
+function normalise(value: AuthState): AuthState {
+  if (!validAuthUser(value.user) || !value.accessToken?.trim()) return EMPTY
+  return Object.freeze({ ...value, user: Object.freeze({ ...value.user }) })
+}
+
 let cached: AuthState | null = null
 const listeners = new Set<() => void>()
 let storageListenerInstalled = false
@@ -28,24 +45,14 @@ function read(): AuthState {
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== "object") return EMPTY
     const record = parsed as Record<string, unknown>
-    let user: AuthUser | null = null
     const rawUser = record.user
-    if (rawUser && typeof rawUser === "object") {
-      const candidate = rawUser as Record<string, unknown>
-      if (typeof candidate.user_id === "string") {
-        user = {
-          user_id: candidate.user_id,
-          email: String(candidate.email ?? ""),
-          name: String(candidate.name ?? ""),
-          role: candidate.role === "teacher" ? "teacher" : "student",
-        }
-      }
-    }
-    return {
-      user,
-      accessToken: typeof record.accessToken === "string" ? record.accessToken : null,
-      refreshToken: typeof record.refreshToken === "string" ? record.refreshToken : null,
-    }
+    return normalise({
+      user: validAuthUser(rawUser) ? rawUser : null,
+      accessToken:
+        typeof record.accessToken === "string" ? record.accessToken : null,
+      refreshToken:
+        typeof record.refreshToken === "string" ? record.refreshToken : null,
+    })
   } catch {
     return EMPTY
   }
@@ -60,6 +67,7 @@ function getSnapshot(): AuthState {
   if (!storageListenerInstalled && typeof window !== "undefined") {
     storageListenerInstalled = true
     window.addEventListener("storage", (event) => {
+      if (event.storageArea && event.storageArea !== window.localStorage) return
       if (event.key !== STORAGE_KEY && event.key !== null) return
       cached = null
       for (const listener of listeners) listener()
@@ -91,9 +99,9 @@ export function isAuthenticated(): boolean {
 }
 
 function persist(next: AuthState): void {
-  cached = next
+  cached = normalise(next)
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cached))
   } catch {
     // storage unavailable — session lives in memory only
   }

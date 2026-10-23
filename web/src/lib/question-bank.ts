@@ -2,6 +2,12 @@ import { useSyncExternalStore } from "react"
 
 import { getAuth, useAuth } from "./auth"
 import type { QuestionDraft } from "./types"
+import {
+  nonEmpty,
+  nonNegativeInteger,
+  uniqueBy,
+  validDate,
+} from "./local-validation"
 
 export interface QuestionBankItem extends QuestionDraft {
   id: string
@@ -29,12 +35,20 @@ function isQuestionBankItem(value: unknown): value is QuestionBankItem {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<QuestionBankItem>
   return (
-    typeof candidate.id === "string" &&
-    typeof candidate.saved_at === "string" &&
-    typeof candidate.question === "string" &&
+    nonEmpty(candidate.id) &&
+    validDate(candidate.saved_at) &&
+    nonEmpty(candidate.question) &&
     Array.isArray(candidate.options) &&
-    candidate.options.every((option) => typeof option === "string") &&
-    typeof candidate.answer === "number"
+    candidate.options.length >= 2 &&
+    candidate.options.length <= 6 &&
+    candidate.options.every(nonEmpty) &&
+    nonNegativeInteger(candidate.answer) &&
+    candidate.answer < candidate.options.length &&
+    (candidate.points === undefined ||
+      (nonNegativeInteger(candidate.points) &&
+        candidate.points >= 1 &&
+        candidate.points <= 1000)) &&
+    (candidate.feedback === undefined || typeof candidate.feedback === "string")
   )
 }
 
@@ -42,7 +56,10 @@ function parseItems(raw: string | null): QuestionBankItem[] {
   try {
     const parsed: unknown = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed)
-      ? parsed.filter(isQuestionBankItem).slice(0, MAX_ITEMS)
+      ? uniqueBy(parsed.filter(isQuestionBankItem), (item) => item.id).slice(
+          0,
+          MAX_ITEMS
+        )
       : []
   } catch {
     return []

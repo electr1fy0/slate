@@ -8,7 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { toast } from "sonner"
 
 import { clearAuth, setAuth } from "@/lib/auth"
@@ -210,6 +210,7 @@ vi.mock("@tanstack/react-query", async () => {
       }
     },
     useQueryClient: () => ({
+      clear: vi.fn(),
       invalidateQueries: state.invalidateQueries,
       refetchQueries: state.refetchQueries,
       setQueryData: vi.fn(),
@@ -534,6 +535,8 @@ beforeEach(() => {
   for (const fn of Object.values(state.api)) fn.mockReset()
 })
 
+afterEach(() => vi.restoreAllMocks())
+
 describe("route components", () => {
   it("covers route metadata, guards, and the root document shell", () => {
     setAuth({ user: teacher, accessToken: "a", refreshToken: "r" })
@@ -699,6 +702,9 @@ describe("route components", () => {
     )
     fireEvent.keyDown(screen.getByLabelText("Password"), { key: "Enter" })
 
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Create account" })).toBeEnabled()
+    )
     fireEvent.click(screen.getByRole("tab", { name: "Create account" }))
     fireEvent.change(screen.getByLabelText("Display name"), {
       target: { value: "   " },
@@ -2626,7 +2632,7 @@ describe("route components", () => {
     expect(
       screen.getByText("Waiting for the first submission")
     ).toBeInTheDocument()
-    expect(screen.getAllByText("0%").length).toBeGreaterThan(0)
+    expect(screen.getByText("No submissions yet")).toBeInTheDocument()
 
     cleanup()
     localStorage.setItem("slate.admin-token", "admin")

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
@@ -11,7 +11,8 @@ import {
 } from "lucide-react"
 
 import { api, ApiError } from "@/lib/api"
-import { setAuth } from "@/lib/auth"
+import { clearAuth, setAuth, validAuthUser } from "@/lib/auth"
+import { safeRedirect } from "@/lib/navigation"
 import {
   isPasswordLengthValid,
   passwordLengthMessage,
@@ -53,12 +54,6 @@ export const Route = createFileRoute("/login")({
   head: () => ({ meta: [{ title: "Sign in · Continuum" }] }),
 })
 
-function safeRedirect(target: string | undefined): string {
-  return target && target.startsWith("/") && !target.startsWith("//")
-    ? target
-    : "/"
-}
-
 export function validateLoginInput(email: string, password: string): boolean {
   if (!email.trim() || !password) {
     toast.error("Email and password are required")
@@ -80,15 +75,27 @@ export function LoginPage() {
   const [showResetPassword, setShowResetPassword] = useState(false)
   const [name, setName] = useState("")
   const [pending, setPending] = useState(false)
+  const requestLock = useRef(false)
   const [recoveryMessage, setRecoveryMessage] = useState("")
 
+  useEffect(() => {
+    setPassword("")
+    setShowPassword(false)
+  }, [mode])
+
   function finish(tokens: Awaited<ReturnType<typeof api.login>>) {
+    if (
+      !validAuthUser(tokens.user) ||
+      !tokens.access_token ||
+      !tokens.refresh_token
+    )
+      throw new Error("The server returned an invalid sign-in response")
     setAuth({
       user: tokens.user,
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
     })
-    void queryClient.invalidateQueries()
+    queryClient.clear()
     toast.success(
       mode === "signin"
         ? `Welcome back, ${tokens.user.name}`
@@ -98,12 +105,14 @@ export function LoginPage() {
   }
 
   async function submit() {
+    if (requestLock.current) return
     /* c8 ignore next */
     if (!validateLoginInput(email, password)) return
     if (mode === "register" && !isPasswordLengthValid(password)) {
       toast.error(passwordLengthMessage(password) ?? "Choose a valid password")
       return
     }
+    requestLock.current = true
     setPending(true)
     try {
       const tokens =
@@ -120,15 +129,18 @@ export function LoginPage() {
         error instanceof ApiError ? error.message : "Authentication failed"
       )
     } finally {
+      requestLock.current = false
       setPending(false)
     }
   }
 
   async function requestResetLink() {
+    if (requestLock.current) return
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       toast.error("Enter a valid email address")
       return
     }
+    requestLock.current = true
     setPending(true)
     setRecoveryMessage("")
     try {
@@ -150,11 +162,13 @@ export function LoginPage() {
           : "We could not process that request right now. Please try again later."
       )
     } finally {
+      requestLock.current = false
       setPending(false)
     }
   }
 
   async function completePasswordReset() {
+    if (requestLock.current) return
     if (!resetToken || !isPasswordLengthValid(resetPassword)) {
       toast.error(
         !resetToken
@@ -163,12 +177,15 @@ export function LoginPage() {
       )
       return
     }
+    requestLock.current = true
     setPending(true)
     try {
       await api.resetPassword({ token: resetToken, password: resetPassword })
+      clearAuth()
+      queryClient.clear()
       toast.success("Password reset. You can sign in now.")
       setResetPassword("")
-      void navigate({ to: "/login" })
+      void navigate({ to: "/login", replace: true })
     } catch (error) {
       toast.error(
         error instanceof ApiError
@@ -176,6 +193,7 @@ export function LoginPage() {
           : "Could not reset the password"
       )
     } finally {
+      requestLock.current = false
       setPending(false)
     }
   }
@@ -313,10 +331,18 @@ export function LoginPage() {
                 }
               >
                 <TabsList className="w-full">
-                  <TabsTrigger value="signin" className="flex-1">
+                  <TabsTrigger
+                    value="signin"
+                    disabled={pending}
+                    className="flex-1"
+                  >
                     Sign in
                   </TabsTrigger>
-                  <TabsTrigger value="register" className="flex-1">
+                  <TabsTrigger
+                    value="register"
+                    disabled={pending}
+                    className="flex-1"
+                  >
                     Create account
                   </TabsTrigger>
                 </TabsList>

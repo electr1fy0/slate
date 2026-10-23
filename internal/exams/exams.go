@@ -17,6 +17,14 @@ import (
 
 var ErrExamNotFound = errors.New("exam not found")
 var ErrAttemptNotFound = errors.New("attempt not found")
+var ErrInvalidRequest = errors.New("invalid attempt request")
+
+func validateRequestID(requestID string) error {
+	if len(requestID) > 256 || strings.IndexFunc(requestID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+		return fmt.Errorf("%w: request_id must be at most 256 bytes and contain no control characters", ErrInvalidRequest)
+	}
+	return nil
+}
 
 type WindowError struct {
 	Code    string
@@ -131,6 +139,9 @@ func parseBoundary(raw string) (time.Time, bool) {
 }
 
 func (s *Service) Get(ctx context.Context, examID string, user *model.User) (*model.Exam, error) {
+	if user == nil {
+		return nil, fmt.Errorf("%w: user is required", ErrInvalidRequest)
+	}
 	exam, err := s.Store.GetExam(ctx, examID, false)
 	if err != nil {
 		return nil, err
@@ -172,6 +183,9 @@ func (s *Service) Submit(ctx context.Context, examID string, user *model.User, a
 // SubmitForAttempt binds the request to one attempt when the client supplies
 // an attempt number. The zero value retains the legacy attempt-one contract.
 func (s *Service) SubmitForAttempt(ctx context.Context, examID string, user *model.User, answers map[string]int, requestID string, attemptNumber int) (model.SubmissionResult, error) {
+	if err := validateRequestID(requestID); err != nil {
+		return model.SubmissionResult{}, err
+	}
 	if user == nil {
 		return model.SubmissionResult{}, fmt.Errorf("user is required")
 	}
@@ -246,6 +260,9 @@ func (s *Service) SubmitSaved(ctx context.Context, examID string, user *model.Us
 }
 
 func (s *Service) SubmitSavedForAttempt(ctx context.Context, examID string, user *model.User, requestID string, attemptNumber int) (model.SubmissionResult, error) {
+	if err := validateRequestID(requestID); err != nil {
+		return model.SubmissionResult{}, err
+	}
 	if user == nil {
 		return model.SubmissionResult{}, fmt.Errorf("user is required")
 	}
@@ -311,6 +328,9 @@ func (s *Service) Save(ctx context.Context, examID string, user *model.User, ans
 }
 
 func (s *Service) SaveForAttempt(ctx context.Context, examID string, user *model.User, answers map[string]int, expectedVersion int, requestID string, attemptNumber int) (model.AttemptSaveResult, error) {
+	if err := validateRequestID(requestID); err != nil {
+		return model.AttemptSaveResult{}, err
+	}
 	if user == nil {
 		return model.AttemptSaveResult{}, fmt.Errorf("user is required")
 	}
@@ -318,10 +338,10 @@ func (s *Service) SaveForAttempt(ctx context.Context, examID string, user *model
 		return model.AttemptSaveResult{}, fmt.Errorf("attempt_number must be positive")
 	}
 	if expectedVersion < 0 {
-		return model.AttemptSaveResult{}, fmt.Errorf("version must not be negative")
+		return model.AttemptSaveResult{}, fmt.Errorf("%w: version must not be negative", ErrInvalidRequest)
 	}
 	if strings.TrimSpace(requestID) == "" {
-		return model.AttemptSaveResult{}, fmt.Errorf("request_id is required")
+		return model.AttemptSaveResult{}, fmt.Errorf("%w: request_id is required", ErrInvalidRequest)
 	}
 	meta, err := s.Store.GetExamMeta(ctx, examID)
 	if err != nil {

@@ -1,12 +1,12 @@
 import type { PeerInfo } from "@/lib/types"
 
 const CURSOR_COLORS = [
-  "#0ea5e9",
-  "#8b5cf6",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#ec4899",
+  "#0369a1",
+  "#6d28d9",
+  "#92400e",
+  "#047857",
+  "#b91c1c",
+  "#be185d",
 ]
 
 function colorForPeer(peerId: string): string {
@@ -29,11 +29,14 @@ export function PeerCursors({ peers, selfId }: PeerCursorsProps) {
       peer.id !== selfId &&
       peer.cursor &&
       peer.cursor.x !== null &&
-      peer.cursor.y !== null,
+      peer.cursor.y !== null
   )
   if (visible.length === 0) return null
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden="true">
+    <div
+      className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+      aria-hidden="true"
+    >
       {visible.map((peer) => {
         const color = colorForPeer(peer.id)
         return (
@@ -53,7 +56,7 @@ export function PeerCursors({ peers, selfId }: PeerCursorsProps) {
               <path d="M5 3l14 7-6.5 1.5L9 18z" />
             </svg>
             <span
-              className="rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium text-white shadow"
+              className="max-w-40 truncate rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium text-white shadow"
               style={{ backgroundColor: color }}
             >
               {peer.name}

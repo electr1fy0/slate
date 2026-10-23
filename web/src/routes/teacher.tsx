@@ -627,6 +627,9 @@ export function AnalyticsOverview({ scopeId }: { scopeId: string }) {
             Load the exam API to build a class snapshot.
           </EmptyDescription>
         </EmptyHeader>
+        <Button variant="outline" onClick={() => void examsQuery.refetch()}>
+          Retry analytics
+        </Button>
       </Empty>
     )
   }
@@ -655,6 +658,22 @@ export function AnalyticsOverview({ scopeId }: { scopeId: string }) {
             unavailable on a standby node or without teacher access.
           </AlertDescription>
         </Alert>
+        <label htmlFor="analytics-error-exam">Choose another quiz</label>
+        <select
+          id="analytics-error-exam"
+          value={focusExam.id}
+          onChange={(event) => setSelectedExamId(event.target.value)}
+          className="h-9 rounded-lg border bg-background px-3 text-sm"
+        >
+          {examsQuery.data.map((exam) => (
+            <option key={exam.id} value={exam.id}>
+              {exam.title}
+            </option>
+          ))}
+        </select>
+        <Button variant="outline" onClick={() => void resultsQuery.refetch()}>
+          Retry results
+        </Button>
         <QuestionAnalytics stats={[]} />
       </div>
     )
@@ -678,7 +697,7 @@ export function AnalyticsOverview({ scopeId }: { scopeId: string }) {
         <AnalyticsMetric
           icon={<BarChart3Icon />}
           label="Selected average"
-          value={`${average}%`}
+          value={results.average_pct === null ? "—" : `${average}%`}
           detail={focusExam.title}
         />
         <AnalyticsMetric
@@ -735,10 +754,15 @@ export function AnalyticsOverview({ scopeId }: { scopeId: string }) {
             <div className="flex items-center justify-between gap-3">
               <p className="text-sm font-medium">Average score</p>
               <span className="text-sm text-muted-foreground tabular-nums">
-                {average}%
+                {results.average_pct === null
+                  ? "No submissions yet"
+                  : `${average}%`}
               </span>
             </div>
-            <Progress value={average} />
+            <Progress
+              aria-label="Average assessment score"
+              value={results.average_pct === null ? null : average}
+            />
           </div>
           {results.submissions.length === 0 ? (
             <Empty className="min-h-40 border border-dashed">
@@ -852,7 +876,10 @@ function QuestionAnalytics({ stats }: { stats: QuestionStats[] }) {
                 </span>
                 <span>{stat.answered} answered</span>
               </div>
-              <Progress value={stat.correct_pct ?? 0} />
+              <Progress
+                aria-label={`Question ${stat.index + 1} correct answers`}
+                value={stat.correct_pct}
+              />
             </div>
           ))
         )}

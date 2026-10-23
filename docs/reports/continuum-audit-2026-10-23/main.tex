@@ -1,0 +1,295 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{iftex}
+\ifPDFTeX\usepackage[utf8]{inputenc}\fi
+\usepackage{lmodern}
+\usepackage[a4paper,margin=21mm,headheight=15pt]{geometry}
+\usepackage{microtype,graphicx,xcolor,booktabs,tabularx,array,enumitem,fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{tcolorbox}
+\usepackage{xurl,hyperref,titlesec}
+\usepackage[font=small,labelfont=bf,justification=raggedright,singlelinecheck=false]{caption}
+\definecolor{navy}{HTML}{142B45}
+\definecolor{teal}{HTML}{147A78}
+\definecolor{pale}{HTML}{EEF5F5}
+\definecolor{muted}{HTML}{596878}
+\hypersetup{colorlinks=true,linkcolor=navy,urlcolor=teal,pdftitle={Continuum: Project and Quality Audit Report},pdfauthor={Ayush / Codex},pdfsubject={Architecture, verification and 120 actionable quality findings}}
+\titleformat{\section}{\Large\bfseries\color{navy}}{\thesection}{.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{navy}}{\thesubsection}{.6em}{}
+\titlespacing*{\section}{0pt}{12pt}{8pt}
+\titlespacing*{\subsection}{0pt}{10pt}{5pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=1.3em,itemsep=3pt,topsep=4pt}
+\setlist[enumerate]{leftmargin=1.5em,itemsep=3pt,topsep=4pt}
+\renewcommand{\arraystretch}{1.16}
+\renewcommand{\tabularxcolumn}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small\color{muted}CONTINUUM / PROJECT QUALITY}
+\fancyhead[R]{\small\color{muted}23 OCTOBER 2026}
+\fancyfoot[L]{\small\color{muted}Baseline \texttt{1ec26fb0b59c}}
+\fancyfoot[R]{\small\thepage}
+\renewcommand{\headrulewidth}{.3pt}
+\newtcolorbox{note}{colback=pale,colframe=teal,boxrule=.4pt,arc=1.5mm,left=3mm,right=3mm,top=2mm,bottom=2mm}
+\newenvironment{finding}[3]{\par\vspace{3pt}\begin{minipage}{\textwidth}\hypertarget{#1}{}%
+{\color{teal}\rule{\textwidth}{.6pt}}\par\vspace{2pt}%
+{\small\bfseries\color{teal}#1\quad #2}\par\vspace{1pt}%
+{\large\bfseries\color{navy}#3}\par\vspace{2pt}%
+\small\setlength{\parskip}{4pt}}{\end{minipage}\par\vspace{7pt}}
+\DeclareRobustCommand{\issue}[1]{\hyperlink{#1}{\texttt{#1}}}
+\newcommand{\src}[1]{{\small\path{#1}}}
+\begin{document}\hypersetup{pageanchor=false}
+\begin{titlepage}\thispagestyle{empty}
+{\small\bfseries\color{teal}ENGINEERING PROJECT REPORT}\par
+\vspace{20mm}
+{\fontsize{40}{44}\selectfont\bfseries\color{navy}Continuum}\par
+\vspace{4mm}
+{\LARGE\color{navy}Assessment continuity,\par collaboration and recovery}\par
+\vspace{12mm}
+{\Large Project analysis and quality audit}\par
+{\large Architecture, verification, risks and a prioritized fix backlog}\par
+\vspace{14mm}
+\begin{note}
+{\fontsize{30}{34}\selectfont\bfseries\color{teal}120}\quad actionable findings\par
+68 defects, with additional hardening, policy, accessibility,\par performance, documentation and polish work clearly labeled.
+\end{note}\vfill
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+Project & Continuum, in the Slate repository \\
+Repository maintainer & Ayush \\
+Analysis and preparation & Codex, with repository and local execution evidence \\
+Review date & 23 October 2026 (Asia/Kolkata) \\
+Source baseline & \texttt{1ec26fb0b59cb4704ccce28b93fc4046da5a35f4} \\
+Scope & Go API, React frontend, memory/DynamoDB stores, boards, local recovery demo and supported AWS configuration \\
+\end{tabularx}\vspace{8mm}
+{\small\color{muted}Engineering audit edition. Source-reviewed risks and product decisions are distinguished from reproduced defects.}
+\end{titlepage}
+\pagenumbering{roman}\hypersetup{pageanchor=true}
+
+\section*{Abstract}\addcontentsline{toc}{section}{Abstract}
+Continuum combines timed academic assessments with classroom coordination and a recovery demonstration. Its Go backend implements authentication, teacher authoring, learner attempts, grading, replayable submission receipts, membership and collaborative boards. A React frontend exposes the learner and teacher workflows. The supported cloud design uses two application instances across Availability Zones in one selected AWS Region, a regional DynamoDB table, an API Gateway/Lambda routing layer and a monitored Step Functions recovery workflow.
+
+The implementation contains meaningful safeguards: immutable final submission request identities, transactional writer fencing, optimistic attempt versions, incident leases, readiness verification and audit reconciliation. Local execution confirmed the real-HTTP integration package, all eight browser journeys, all 167 frontend unit tests, type checking, linting, the frontend production build and Go vet. The complete race-enabled Go test command failed because two authentication tests use a fixed historical service clock while related validation still uses current time.
+
+The review identifies 120 distinct actionable items. Of these, 68 are labeled defects; the remainder are explicitly classified improvements, hardening risks, policy gaps, accessibility issues or missing capabilities. Sixteen findings have isolated in-memory API probe evidence, one has direct browser observation and one has existing test-failure evidence. The remaining 102 are source-reviewed findings with a concrete trigger and acceptance criterion. These evidence labels describe verification depth; they do not claim that every item was reproduced in a browser or on AWS.
+
+\begin{note}\textbf{Recommended focus.} Fix assessment start/deadline integrity, loss-prone learner autosave, board route/response contracts, concurrent authoring writes and mobile access to essential controls first. Resolve classroom privacy and review-release policies explicitly before applying the associated authorization changes.\end{note}
+\textbf{Priority distribution:} 45 P1, 67 P2 and 8 P3. P1 means early attention because of integrity, access control, work-loss potential or a blocked core workflow. It is an engineering triage priority, not a security vulnerability score. No emergency P0 issue is asserted.
+\clearpage\tableofcontents\clearpage\pagenumbering{arabic}
+
+\section{Project purpose and current implementation}
+\subsection{Problem and objectives}
+Timed assessments depend on more than process availability. A healthy HTTP listener can still be unable to read questions or commit answers. A successful database write can also be followed by a lost response, leaving a learner unsure whether submission succeeded. Continuum addresses these conditions by retaining the learner's attempt timeline, identifying the final answer snapshot and recovering a matching receipt after disruption.
+
+The broader product connects delivery with teacher authoring, classes, invitation codes, question reuse, results and live drawing. These workflows share services but do not all have the same resilience guarantees. Boards are outside the bounded HTTP assessment failover claim in the project documentation.
+\subsection{Actors and implemented workflows}
+\begin{tabularx}{\textwidth}{@{}P{26mm}X@{}}\toprule Actor & Current capabilities \\\midrule
+Learner & Register/sign in, join classes, discover assigned exams, begin/resume a timed attempt, save partial answers, flag questions, submit, recover a matching receipt and review results. \\
+Teacher & Create/edit classes, manage members/invitations, author and duplicate quizzes, import questions, maintain a bank, publish and change assessment settings, inspect results and control student drawing. \\
+Operator & Inspect backend capability and epochs, inject bounded demonstration faults, verify recovery, request failback, reconcile work and pause/resume deployment through scripts. \\\bottomrule\end{tabularx}
+\subsection{Functional coverage}
+The API provides role-based identity, profile/password changes and email reset delivery. Membership and exam assignment are enforced in the assessment access path. Teacher drafts support local recovery and serialized in-component server autosave. Attempts use server-start timestamps and versioned answer snapshots; final writes return request-linked receipts. Results include weighted scores and per-question feedback. Retakes use distinct attempt numbers and archive earlier snapshots.
+
+Boards use Excalidraw with presence, cursors, teacher/student drawing permission, debounced persistence and history restoration. Their current room-code sharing contract lacks the classroom ownership model present for exams. The register distinguishes privacy/ownership hardening from violations of an already implemented private-room contract.
+
+\textbf{Evidence:} \src{README.md}; \src{docs/qol-features.md}; \src{internal/httpapi/server.go:133}; \src{internal/classrooms/service.go}; \src{web/src/routes/quiz.$examId.tsx}; \src{web/src/components/teacher/quiz-builder.tsx}.
+\clearpage
+
+\section{Architecture and technology}
+\subsection{Runtime components}
+\begin{tabularx}{\textwidth}{@{}P{29mm}X@{}}\toprule Layer & Implemented technologies and responsibilities \\\midrule
+Backend & Go; standard \texttt{net/http}; authentication, assessment and classroom domain services; Gorilla WebSocket board transport. \\
+Identity & bcrypt; HS256 access/refresh JWTs; session revocation versions; digest-indexed single-use password reset records. \\
+Frontend & TypeScript, React, TanStack Router/Start and Query, Vite, Tailwind CSS, Base UI, Excalidraw and Sonner. \\
+Persistence & Local memory store; AWS SDK for Go v2 and DynamoDB single-table records. Board history contains serialized snapshots. \\
+Cloud control & EC2, API Gateway HTTP API, Lambda router/verifier/control/monitor/reconciler, Step Functions, EventBridge, SSM, S3 and CloudFront. \\
+Verification & Go tests/race detector, Go vet, Vitest/Testing Library, TypeScript, ESLint, Playwright and Terraform validation commands. \\\bottomrule\end{tabularx}
+\subsection{Supported cloud topology}
+\begin{figure}[h!]\centering\begin{tikzpicture}[font=\small,box/.style={draw=teal,fill=pale,rounded corners=2mm,align=center,minimum height=11mm,text width=32mm},arrow/.style={-{Latex[length=2mm]},color=navy,thick}]
+\node[box] (browser) {Learner / teacher\\browser};
+\node[box,right=10mm of browser] (edge) {CloudFront + S3\\static app shell};
+\node[box,below=9mm of browser] (gateway) {API Gateway\\HTTP API};
+\node[box,right=10mm of gateway] (router) {Lambda router\\pointer + epoch};
+\node[box,right=10mm of router,yshift=7mm] (a) {EC2 backend A\\Zone A};
+\node[box,below=5mm of a] (b) {EC2 backend B\\Zone B};
+\node[box,below=15mm of router] (ddb) {Regional DynamoDB\\data + control state};
+\node[box,left=10mm of ddb] (monitor) {Scheduled monitor\\Step Functions};
+\draw[arrow] (browser)--(edge);\draw[arrow] (browser)--(gateway);
+\draw[arrow] (gateway)--(router);\draw[arrow] (router)--(a);
+\draw[arrow,dashed] (router)--(b);\draw[arrow] (router)--(ddb);
+\draw[arrow] (a.east)--++(4mm,0)|-(ddb.east);
+\draw[arrow] (b.south)--++(0,-4mm)-|(ddb.east);
+\draw[arrow] (monitor)--(ddb);
+\end{tikzpicture}
+\caption{Source-defined supported topology. The dashed route is the alternate selected backend after verified promotion. This diagram does not assert current cloud deployment or health.}
+\end{figure}
+
+The supported defaults target Sydney, \texttt{ap-southeast-2}. Regional resources must remain in the project's assigned selected Region. Archived cross-Region directories are not the supported deployment. No cloud resources were created, changed, inventoried or faulted during this audit.
+
+\textbf{Evidence:} \src{go.mod}; \src{web/package.json}; \src{infra/demo/network.tf}; \src{infra/demo/lambda.tf}; \src{infra/demo/workflow.tf}; \src{docs/architecture.md}.
+\clearpage
+
+\section{Data model and integrity mechanisms}
+\subsection{Single-table entities}
+\begin{tabularx}{\textwidth}{@{}P{36mm}X@{}}\toprule Entity family & Purpose and relationships \\\midrule
+User / email index & Profile, hash, role and session version; unique email lookup. \\
+Exam / questions & Teacher/class assignment, availability, duration, attempt limits and weighted questions. \\
+Draft / bank & Teacher-owned authoring material, reusable questions and publish state. \\
+Attempt & Answers, start time, optimistic version and attempt number; earlier attempts archived on retake. \\
+Submission / receipt & Canonical grade and final map; request-linked replay record and earlier attempt snapshots. \\
+Outbox / audit & Reconciliation records and deduplicated audit summaries. \\
+Classroom / member & Owner, shared code, roster, lookup records and email-bound invitations. \\
+Board current / history & Latest scene pointer and versioned serialized snapshots. \\
+Control / events & Active backend, monotonic epoch, paused/incident state and recovery evidence. \\\bottomrule\end{tabularx}
+\subsection{Attempt and submission lifecycle}
+\begin{enumerate}
+\item The learner inspects read-only metadata. Begin/resume requests question delivery and records the server start when necessary.
+\item The browser updates a user/exam/attempt-scoped local map and sends version-checked autosaves. Gaps remain around empty maps, overlapping requests and merge semantics (\issue{CQ-064}--\issue{CQ-069}).
+\item Final submission creates or reloads a stored immutable request ID and answer snapshot. Retries retain the pair and transient failures preserve the pending intent.
+\item The store commits a canonical submission with supporting receipt/outbox records. Routed writes include the active-backend/epoch condition in the transaction.
+\item The browser confirms completion only after a matching receipt reference. Replay can recover that receipt even after the exam window closes.
+\end{enumerate}
+\subsection{Strengths and remaining boundaries}
+Writer fencing is atomic with application mutation. Retakes carry explicit attempt identity, and tests cover replay and stale-attempt conditions. Membership writes use conditional transactions. These are implemented mechanisms, not future work.
+
+Remaining work includes start/deadline integrity, mutable duration, draft revisions and cross-manager board ordering. DynamoDB limits a transaction to 100 unique items and an item to 400 KB, making question-count and scene-size contracts material concerns [1].
+
+\textbf{Evidence:} \src{internal/model/model.go}; \src{internal/store/retakes.go}; \src{internal/store/store.go:182}; \src{internal/clusterstate/contract.go}; \src{internal/boards/persistence.go}.
+\clearpage
+
+\section{Recovery behavior and operational scope}
+\subsection{Normal and degraded service}
+The router loads the active pointer for each request and forwards writer metadata to that backend. It does not silently try the standby after a failed upstream request. Promotion depends on repeated capability observations and standby verification. Liveness and readiness are separate: a process can remain alive while its database capability is faulted.
+
+An epoch change prevents the previously active writer from committing after promotion. Recovery includes public-route verification; rollback and failback retain monotonic control state. Submission retry identity stays stable across the disruption. Reconciliation can be repeated without intentionally duplicating downstream audit work.
+\subsection{Local and cloud differences}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{30mm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}\toprule Aspect & Local rehearsal & Supported cloud definition \\\midrule
+Application failure & Separate HTTP listeners in one process & Two EC2 nodes in different Availability Zones \\
+Data durability & Shared process memory & Regional DynamoDB \\
+Monitoring & Local controller/probe loop & EventBridge plus Lambda/Step Functions \\
+Frontend transport & Vite API/socket proxy & CloudFront shell, separate HTTPS HTTP API \\
+Boards & Standalone API WebSocket collaboration & No promised board/WebSocket failover in the bounded HTTP demo \\\bottomrule\end{tabularx}
+
+Complete selected-Region failure, a regional DynamoDB outage and an entire local process exit are outside the demonstrated boundary. The one-minute cloud schedule can add detection delay before the measured probe-to-public-verification duration; the cockpit already explains that distinction. Small throttling limits and retained paused resources also make this a faculty demonstration, not a classroom capacity claim.
+\subsection{Operational improvements}
+Preserve fencing and receipt behavior while adding observation freshness, scoped fault controls, backups and a verified restore procedure. Before private classroom board use, decide the sharing model and apply it consistently to sockets, history and export. Before expanding load, test simultaneous start, autosave and control traffic within approved project capacity and spend constraints.
+
+\textbf{Evidence:} \src{internal/continuum/router.go}; \src{internal/continuum/supervisor.go}; \src{internal/continuum/verifier.go}; \src{statemachine/demo-failover.asl.json}; \src{infra/demo/workflow.tf:8}; \src{README.md}.
+\clearpage
+
+\section{Interface observations}
+\begin{figure}[h!]\centering
+\includegraphics[width=\textwidth]{screenshots/teacher-home.png}
+\caption{Teacher dashboard in an isolated local session. Closed filter triggers show internal values ``all'' and ``recent'' (\issue{CQ-107}). The identity is the synthetic local bootstrap teacher.}
+\end{figure}
+\begin{figure}[h!]\centering
+\includegraphics[width=\textwidth]{screenshots/teacher-studio.png}
+\caption{Desktop teacher studio with an empty authoring form. Create/Manage/Analytics/Submissions are AppShell actions; source review shows those controls are hidden on narrow screens (\issue{CQ-106}). The screenshot itself is a desktop view.}
+\end{figure}
+\clearpage
+
+\section{Verification results and audit method}
+\subsection{Executed checks}
+\begin{tabularx}{\textwidth}{@{}P{57mm}P{20mm}X@{}}\toprule Check & Outcome & Interpretation \\\midrule
+\texttt{go test -race -timeout 30m ./...} & Failed & Two authentication clock tests failed. All other reported packages passed, including HTTP API, store, recovery and integration. \\
+\texttt{go vet ./...} & Passed & No vet diagnostics. \\
+\texttt{bun run typecheck} & Passed & TypeScript check completed. \\
+\texttt{bun run lint} & Passed & ESLint completed. \\
+\texttt{bun run test} & Passed & 27 test files, 167 tests. \\
+\texttt{bun run build} & Passed & Client/server build and prerender completed, with large-chunk and route-export splitting warnings. \\
+\texttt{bunx playwright test} & Passed & All 8 existing journeys; about 1.2 minutes. \\
+Focused memory API probes & Completed & 17 observation cases; 16 register entries supported by probe evidence, with shared evidence for some entries. \\
+Terraform / live AWS exercise & Not run & Configuration review only; no live cloud reproduction or capacity result is asserted. \\\bottomrule\end{tabularx}
+\subsection{Method and evidence levels}
+The review traced entrypoints through transport, domain rules, persistence and frontend state. It examined source, current guides, tests, supported Terraform and release scripts. Existing checks ran unchanged. Focused probes used \texttt{httptest} and an isolated memory store, with synthetic data and no AWS access. A browser session inspected the dashboard and teacher studio.
+
+Every entry supplies a checked file/line, a trigger, consequence, fix and acceptance check. \texttt{findings.json} also preserves evidence labels, source lines and file SHA-256 values. Source-reviewed races and failure scenarios are reasoned findings, not executed concurrency/load tests. Hardening recommendations do not assert exploitation.
+\subsection{Verification limits}
+This is not a formal security assessment, full accessibility conformance review or benchmark. SMTP delivery, real DynamoDB behavior, live IAM permissions, backup restoration, multiple real devices and every browser/viewport were not exercised. No dependency vulnerability scan was run. Existing \texttt{docs/evidence} screenshots were treated as historical material, not new runtime proof.
+\clearpage
+
+\section{Selected reproduction evidence}
+\begin{tabularx}{\textwidth}{@{}P{22mm}P{51mm}X@{}}\toprule Finding & Local probe & Actual outcome \\\midrule
+\issue{CQ-018} & Submit to a one-minute exam before start & HTTP 200 committed receipt; score 1/1. \\
+\issue{CQ-016} & Correct option under question key \texttt{00} & HTTP 200 receipt; score 0/1. \\
+\issue{CQ-017} & Choice 99 for two-option question & HTTP 503: data layer unavailable. \\
+\issue{CQ-020} & Change duration 15 to 1 after start & Same start; deadline moved earlier by 840,000 ms. \\
+\issue{CQ-013} & Create with only \texttt{opens\_at=garbage} & HTTP 201; invalid boundary persisted. \\
+\issue{CQ-021} & Close with late work enabled & Close succeeds; subsequent delivery returns 200. \\
+\issue{CQ-030} & Reuse save ID with changed answers & HTTP 200 duplicate, earlier answer map returned. \\
+\issue{CQ-036} & Frontend-equivalent board history path & HTTP 404 from isolated API. \\
+\issue{CQ-038} & Restore by unrelated teacher & HTTP 200; no room-owner check. Hardening of the current shared-code model. \\
+\issue{CQ-040} & Inspect restore response & Capitalized \texttt{Elements}/\texttt{Peers}; client expects \texttt{elements}. \\
+\issue{CQ-008} & Zero-hit rate limit & Recovered index-out-of-range panic. \\\bottomrule\end{tabularx}
+\subsection{Existing Go test failures}
+\path{TestPasswordChangeAndResetRevokeSessionsAndEnforceSingleUseExpiry} failed at \src{internal/auth/qol_test.go:48} with ``invalid or expired session.'' Token issuance used 11 October while parsing used current time. \path{TestPasswordUpdatesInvalidateEveryOutstandingResetToken} failed at line 135 with ``invalid password reset record'' because the store clock was not advanced with the service clock. Both belong to \issue{CQ-119}; neither by itself proves a production reset regression.
+\subsection{Reproduction command}
+From the repository root:
+\begin{quote}\small\ttfamily go run ./docs/reports/continuum-audit-2026-10-23/probes\end{quote}
+The helper prints synthetic observation JSON and creates no external resources. Saved output is \src{evidence/focused-probes.json} relative to the report project.
+\clearpage
+
+\section{Prioritized implementation plan}
+\subsection{First batch: core correctness}
+\begin{tabularx}{\textwidth}{@{}P{25mm}Xp{38mm}@{}}\toprule Batch & Concrete outcome & References \\\midrule
+Attempt integrity & Require a start, preserve deadlines, canonicalize answer keys and define hard close. & \issue{CQ-016}, \issue{CQ-018}, \issue{CQ-020}, \issue{CQ-021} \\
+Learner saves & Serialize saves, persist empty maps, track saved generations and retain clear/merge intent. & \issue{CQ-064}--\issue{CQ-069} \\
+Board contracts & Align resource prefixes and response DTOs before relying on history/export. & \issue{CQ-036}, \issue{CQ-040} \\
+Authoring integrity & Version saves/publish and condition exam creation/updates. & \issue{CQ-026}--\issue{CQ-028}, \issue{CQ-033} \\
+Usable surfaces & Restore essential mobile actions and deterministic clock tests. & \issue{CQ-106}, \issue{CQ-119} \\\bottomrule\end{tabularx}
+\subsection{Second batch: identity and collaboration}
+Resolve whether class boards are private, code-accessible or deliberately public to signed-in users. Encode that decision using stable identity and ownership across read, restore and drawing controls. Address operator-token persistence, email verification, refresh resilience and trusted-client rate limiting. Preserve epoch fencing while adding monotonic board persistence and bounded peer queues.
+\subsection{Third batch: recovery and authoring quality}
+Add acknowledged board revisions and recoverable outgoing mutations. Make storage failures honest, link local drafts to server identity and expose bank/invitation retries. Retrieve earlier receipts, define timeout finalization and improve keyboard, countdown and printing behavior.
+\subsection{Fourth batch: delivery and operational readiness}
+Add browser checks to CI, retain old frontend assets, separate web releases from runtime changes and implement a tested backup/restore policy. Expand capacity after representative load tests; current limits can remain suitable for a small rehearsal when that boundary is explicit.
+
+\textbf{Completion rule.} Close an issue when its acceptance check passes on relevant persistence paths, with browser verification for visible behavior. Existing tests alone do not establish that a newly uncovered edge case is fixed. Effort estimates depend on product policy, production scope and migration choices and are not invented here.
+\clearpage
+
+\section{Finding classification and navigation}
+\input{summary-tables.tex}
+\subsection{Priority definitions}
+\begin{tabularx}{\textwidth}{@{}P{16mm}P{16mm}X@{}}\toprule Priority & Count & Meaning \\\midrule
+P1 & 45 & Early repair: integrity, lost work, core blockage, significant authorization boundary or failed verification gate. \\
+P2 & 67 & Planned repair: reliability, recovery clarity, hardening, performance, accessibility or workflow inconsistency. \\
+P3 & 8 & Presentation, documentation or lower-impact refinement. \\\bottomrule\end{tabularx}
+\subsection{Kinds and interpretation}
+\textbf{Defect} identifies an implementation inconsistency with a concrete undesired result. \textbf{Hardening} strengthens a defensive boundary for broader use. \textbf{Policy gap} needs a product decision. \textbf{Missing capability} names an absent recovery/workflow path. Other kinds are labeled directly.
+
+The register has 68 defects, 28 hardening items, 4 policy gaps, 7 missing capabilities, 2 accessibility items, 7 polish items, and one each for performance, demo capacity, CI verification and documentation. These are not 120 independently reproduced runtime bugs.
+\subsection{Evidence package}
+\begin{itemize}
+\item \texttt{BACKLOG.md} and \texttt{findings.csv}: readable/sortable planning register.
+\item \texttt{findings.json}: structured entries, evidence labels and source hashes.
+\item \texttt{probes/main.go}: repeatable isolated observations.
+\item \texttt{evidence/}: Go, vet, browser and focused-probe results plus verification summary.
+\item \texttt{main.tex}, \texttt{findings.tex}, \texttt{summary-tables.tex}: editable report source.
+\end{itemize}
+\section{Detailed issue register}
+The following pages contain all 120 entries. Source locators refer to the reviewed baseline; later implementation changes may move those lines. Stable issue IDs match the CSV and JSON.
+\input{findings.tex}
+\clearpage
+
+\section{References and reproducibility}
+\begin{enumerate}[label={[\arabic*]}]
+\item Amazon Web Services. \emph{Constraints in Amazon DynamoDB}. Transaction item counts and item sizes. Accessed 23 October 2026.\newline\href{https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Constraints.html}{\texttt{docs.aws.amazon.com / DynamoDB / Constraints}}
+\item Mozilla. \emph{WebSocket: readyState property}. OPEN is transport readiness; application initialization is part of this project's protocol. Accessed 23 October 2026.\newline\url{https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/readyState}
+\item Continuum repository. README, architecture, feature guide and source baseline:\par
+\path{1ec26fb0b59cb4704ccce28b93fc4046da5a35f4}\par
+Repository-local locators appear throughout this report.
+\end{enumerate}
+\subsection{Rebuild}
+From the repository root, run the generator, then compile the dedicated project:
+\begin{quote}\small\raggedright
+\texttt{python3 }\path{docs/reports/continuum-audit-2026-10-23/build_report.py}\par
+\texttt{mkdir -p }\path{output/pdf/continuum-audit-build}\par
+\texttt{cd }\path{docs/reports/continuum-audit-2026-10-23}\par
+\texttt{tectonic --outdir }\path{../../../../output/pdf/continuum-audit-build}\texttt{ main.tex}
+\end{quote}
+The generator validates source locators and enforces the 120-item register. The PDF was compiled, text-checked and rendered for page-by-page layout inspection. Screenshots are stored within the project so compilation does not depend on transient paths.
+\subsection{Review boundary}
+This work produced analysis and review artifacts. Application source, deployment resources and existing tests were not repaired. Subsequent implementation should preserve the tested receipt/fencing behavior and add regression coverage for selected findings.
+\end{document}

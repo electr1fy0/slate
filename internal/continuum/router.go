@@ -41,6 +41,18 @@ type Router struct {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	originalRequest := req
+	if r.Control == nil {
+		http.Error(w, "continuum routing state unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultRouterTimeout
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 	state, err := r.Control.Get(req.Context())
 	if err != nil {
 		http.Error(w, "continuum routing state unavailable", http.StatusServiceUnavailable)
@@ -57,14 +69,18 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if isWebSocketUpgrade(req) {
-		r.serveWebSocket(w, req, base, state)
+		r.serveWebSocket(w, originalRequest, base, state)
 		return
 	}
 	maxRequest := r.MaxRequestBytes
 	if maxRequest <= 0 {
 		maxRequest = DefaultMaxRequestBytes
 	}
-	body, err := io.ReadAll(io.LimitReader(req.Body, maxRequest+1))
+	requestBody := req.Body
+	if requestBody == nil {
+		requestBody = http.NoBody
+	}
+	body, err := io.ReadAll(io.LimitReader(requestBody, maxRequest+1))
 	if err != nil {
 		http.Error(w, "could not read request body", http.StatusBadRequest)
 		return
@@ -82,12 +98,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	upstreamURL.RawQuery = req.URL.RawQuery
 	upstreamURL.Fragment = ""
 
-	timeout := r.Timeout
-	if timeout <= 0 {
-		timeout = DefaultRouterTimeout
-	}
-	ctx, cancel := context.WithTimeout(req.Context(), timeout)
-	defer cancel()
 	upstreamReq, err := http.NewRequestWithContext(ctx, req.Method, upstreamURL.String(), strings.NewReader(string(body)))
 	if err != nil {
 		http.Error(w, "invalid upstream request", http.StatusBadRequest)
@@ -105,6 +115,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = &clientCopy
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -275,7 +288,7 @@ func EncodeBody(body string, isBase64 bool, limit int64) ([]byte, error) {
 		}
 		return []byte(body), nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(body)
+	decoded, err := io.ReadAll(io.LimitReader(base64.NewDecoder(base64.StdEncoding, strings.NewReader(body)), limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("decode base64 request body: %w", err)
 	}

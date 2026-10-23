@@ -11,6 +11,8 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,7 +39,7 @@ func RequestID(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("x-request-id")
-		if id == "" {
+		if id == "" || len(id) > 128 || strings.IndexFunc(id, func(r rune) bool { return r < 33 || r > 126 }) >= 0 {
 			id = newRequestID()
 		}
 		wrapped := &requestIDWriter{ResponseWriter: w, id: id}
@@ -71,6 +73,7 @@ func (w *requestIDWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 func (w *requestIDWriter) Flush() {
+	w.Header().Set("x-request-id", w.id)
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -103,14 +106,15 @@ func LogJSON(event string, fields map[string]any) {
 	record["ts"] = float64(time.Now().UnixMilli()) / 1000
 	record["event"] = event
 	for key, value := range fields {
-		if value != nil {
+		if value != nil && key != "ts" && key != "event" {
 			record[key] = value
 		}
 	}
 	encoded, err := json.Marshal(record)
-	if err == nil {
-		fmt.Println(string(encoded))
+	if err != nil {
+		encoded, _ = json.Marshal(map[string]any{"ts": record["ts"], "event": event, "serialization_error": err.Error()})
 	}
+	fmt.Println(string(encoded))
 }
 
 // Limit describes a sliding-window request limit.
@@ -122,10 +126,11 @@ type Limit struct {
 // RateLimiter is an in-memory per-process sliding-window limiter. Rules are
 // keyed by "METHOD /path" and buckets by that rule plus client host.
 type RateLimiter struct {
-	mu     sync.Mutex
-	limits map[string]Limit
-	hits   map[string][]time.Time
-	now    func() time.Time
+	mu        sync.Mutex
+	limits    map[string]Limit
+	hits      map[string][]time.Time
+	now       func() time.Time
+	nextSweep time.Time
 }
 
 func NewRateLimiter(limits map[string]Limit) *RateLimiter {
@@ -165,6 +170,20 @@ func (l *RateLimiter) Allow(method, path, client string) (allowed bool, retryAft
 		now = time.Now
 	}
 	nowValue := now()
+	if !nowValue.Before(l.nextSweep) {
+		longestWindow := limit.Window
+		for _, rule := range l.limits {
+			if rule.Window > longestWindow {
+				longestWindow = rule.Window
+			}
+		}
+		for key, values := range l.hits {
+			if len(values) == 0 || !values[len(values)-1].After(nowValue.Add(-longestWindow)) {
+				delete(l.hits, key)
+			}
+		}
+		l.nextSweep = nowValue.Add(limit.Window)
+	}
 	bucketKey := ruleKey + "#" + client
 	hits := l.hits[bucketKey]
 	horizon := nowValue.Add(-limit.Window)
@@ -177,7 +196,7 @@ func (l *RateLimiter) Allow(method, path, client string) (allowed bool, retryAft
 	hits = kept
 	if len(hits) >= limit.MaxHits {
 		remaining := limit.Window - nowValue.Sub(hits[0])
-		retryAfter = int(remaining.Seconds())
+		retryAfter = int(math.Ceil(remaining.Seconds()))
 		if retryAfter < 1 {
 			retryAfter = 1
 		}
@@ -249,31 +268,13 @@ func formatSeconds(seconds int) string {
 
 // Avoid pulling a formatting package into hot middleware paths.
 func strconvItoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	var digits [32]byte
-	i := len(digits)
-	for value > 0 {
-		i--
-		digits[i] = byte('0' + value%10)
-		value /= 10
-	}
-	if negative {
-		i--
-		digits[i] = '-'
-	}
-	return string(digits[i:])
+	return strconv.Itoa(value)
 }
 
-// RetryAfterSeconds is exposed for clients that need the same truncation
+// RetryAfterSeconds is exposed for clients that need the same rounding-up
 // policy without constructing an HTTP handler.
 func RetryAfterSeconds(window, elapsed time.Duration) int {
-	seconds := int(math.Floor((window - elapsed).Seconds()))
+	seconds := int(math.Ceil((window - elapsed).Seconds()))
 	if seconds < 1 {
 		return 1
 	}

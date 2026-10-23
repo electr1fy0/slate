@@ -1,0 +1,1206 @@
+{
+  "baseline": "1ec26fb0b59cb4704ccce28b93fc4046da5a35f4",
+  "count": 200,
+  "findings": [
+    {
+      "id": "QF-001",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Blank persisted user IDs created an authenticated session"
+    },
+    {
+      "id": "QF-002",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Unknown persisted roles were silently changed to student"
+    },
+    {
+      "id": "QF-003",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Non-text profile fields were coerced into misleading display strings"
+    },
+    {
+      "id": "QF-004",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Partial token records produced authenticated pages without a usable session"
+    },
+    {
+      "id": "QF-005",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Caller mutations silently changed the auth snapshot"
+    },
+    {
+      "id": "QF-006",
+      "status": "fixed",
+      "file": "web/src/lib/auth.ts",
+      "title": "Unrelated session-storage events reloaded local auth"
+    },
+    {
+      "id": "QF-007",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Trailing slashes and whitespace in API origins produced malformed URLs"
+    },
+    {
+      "id": "QF-008",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Headers objects and tuple headers lost their contents"
+    },
+    {
+      "id": "QF-009",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Lowercase authorization headers were overwritten"
+    },
+    {
+      "id": "QF-010",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Public authentication requests carried the previous user's bearer token"
+    },
+    {
+      "id": "QF-011",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "A rejected login retried through the old account's refresh token"
+    },
+    {
+      "id": "QF-012",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Malformed refresh responses replaced valid credentials"
+    },
+    {
+      "id": "QF-013",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Top-level API error codes disappeared"
+    },
+    {
+      "id": "QF-014",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Error-string responses lost their actionable message"
+    },
+    {
+      "id": "QF-015",
+      "status": "fixed",
+      "file": "web/src/lib/api.ts",
+      "title": "Successful 205 responses failed JSON parsing"
+    },
+    {
+      "id": "QF-016",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Array-shaped pending answers passed object validation"
+    },
+    {
+      "id": "QF-017",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Noncanonical saved question keys changed answer identity on reload"
+    },
+    {
+      "id": "QF-018",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Fractional or negative saved choices survived restoration"
+    },
+    {
+      "id": "QF-019",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Invalid pending attempt numbers escaped scope checks"
+    },
+    {
+      "id": "QF-020",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Blank generated request IDs created unusable retry records"
+    },
+    {
+      "id": "QF-021",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Invalid pending timestamps corrupted recovery ordering"
+    },
+    {
+      "id": "QF-022",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Pending records stored under a different attempt key were recovered"
+    },
+    {
+      "id": "QF-023",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "An older attempt with a later timestamp hid a newer pending attempt"
+    },
+    {
+      "id": "QF-024",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Invalid retry counts ended without the expected final error"
+    },
+    {
+      "id": "QF-025",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "Invalid retry delays overflowed browser timers"
+    },
+    {
+      "id": "QF-026",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "A submit callback could mutate the next retry's payload"
+    },
+    {
+      "id": "QF-027",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "HTTP 408 submission failures were not retried"
+    },
+    {
+      "id": "QF-028",
+      "status": "fixed",
+      "file": "web/src/lib/pending-submission.ts",
+      "title": "HTTP 500 submission failures were not retried"
+    },
+    {
+      "id": "QF-029",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-drafts.ts",
+      "title": "Malformed nested draft questions crashed the builder"
+    },
+    {
+      "id": "QF-030",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-drafts.ts",
+      "title": "Malformed optional draft settings reached rendering and API requests"
+    },
+    {
+      "id": "QF-031",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-drafts.ts",
+      "title": "Duplicate stored draft IDs rendered duplicate controls"
+    },
+    {
+      "id": "QF-032",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-drafts.ts",
+      "title": "Drafts saved in the same millisecond overwrote each other"
+    },
+    {
+      "id": "QF-033",
+      "status": "fixed",
+      "file": "web/src/lib/question-bank.ts",
+      "title": "Blank bank identities made items impossible to target reliably"
+    },
+    {
+      "id": "QF-034",
+      "status": "fixed",
+      "file": "web/src/lib/question-bank.ts",
+      "title": "Invalid bank timestamps rendered invalid dates"
+    },
+    {
+      "id": "QF-035",
+      "status": "fixed",
+      "file": "web/src/lib/question-bank.ts",
+      "title": "Malformed option lists reached the question builder"
+    },
+    {
+      "id": "QF-036",
+      "status": "fixed",
+      "file": "web/src/lib/question-bank.ts",
+      "title": "Out-of-range saved correct answers could be inserted"
+    },
+    {
+      "id": "QF-037",
+      "status": "fixed",
+      "file": "web/src/lib/question-bank.ts",
+      "title": "Malformed saved scoring or feedback fields broke authoring"
+    },
+    {
+      "id": "QF-038",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Blank room identities appeared in board history"
+    },
+    {
+      "id": "QF-039",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Invalid history timestamps broke sorting and date display"
+    },
+    {
+      "id": "QF-040",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Invalid visit counts rendered nonsensical history"
+    },
+    {
+      "id": "QF-041",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Duplicate saved board rows produced duplicate controls"
+    },
+    {
+      "id": "QF-042",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "History was truncated before selecting the most recent visits"
+    },
+    {
+      "id": "QF-043",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Board history stayed stale when another tab changed it"
+    },
+    {
+      "id": "QF-044",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Visit counters could overflow safe integer precision"
+    },
+    {
+      "id": "QF-045",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "History merge sorted timezone strings instead of instants"
+    },
+    {
+      "id": "QF-046",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Equal-time board rows had unstable ordering"
+    },
+    {
+      "id": "QF-047",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Downloads clicked a detached anchor"
+    },
+    {
+      "id": "QF-048",
+      "status": "fixed",
+      "file": "web/src/lib/board-history.ts",
+      "title": "Downloads revoked their blob before the browser consumed it"
+    },
+    {
+      "id": "QF-049",
+      "status": "fixed",
+      "file": "web/src/lib/recent-rooms.ts",
+      "title": "Empty recent-room entries created broken navigation"
+    },
+    {
+      "id": "QF-050",
+      "status": "fixed",
+      "file": "web/src/lib/recent-rooms.ts",
+      "title": "Duplicate recent rooms displaced usable history"
+    },
+    {
+      "id": "QF-051",
+      "status": "fixed",
+      "file": "web/src/lib/recent-rooms.ts",
+      "title": "Recent-room changes in another tab were not reflected"
+    },
+    {
+      "id": "QF-052",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-progress.ts",
+      "title": "Invalid question counts produced invalid restored positions or unbounded arrays"
+    },
+    {
+      "id": "QF-053",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-progress.ts",
+      "title": "Invalid progress records were reported as successfully persisted"
+    },
+    {
+      "id": "QF-054",
+      "status": "fixed",
+      "file": "web/src/lib/quiz-progress.ts",
+      "title": "Invalid flag targets polluted question navigation"
+    },
+    {
+      "id": "QF-055",
+      "status": "fixed",
+      "file": "web/src/lib/assessment-history.ts",
+      "title": "Unknown attempt statuses bypassed coherent status filtering"
+    },
+    {
+      "id": "QF-056",
+      "status": "fixed",
+      "file": "web/src/lib/assessment-history.ts",
+      "title": "Invalid assessment dates destabilized sorting"
+    },
+    {
+      "id": "QF-057",
+      "status": "fixed",
+      "file": "web/src/lib/assessment-history.ts",
+      "title": "Invalid retake counters enabled impossible retakes"
+    },
+    {
+      "id": "QF-058",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Email local parts with repeated or boundary dots were accepted"
+    },
+    {
+      "id": "QF-059",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Invalid DNS labels were accepted as email domains"
+    },
+    {
+      "id": "QF-060",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Overlength emails bypassed validation outside HTTP registration"
+    },
+    {
+      "id": "QF-061",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "The auth service itself allowed invalid email identities"
+    },
+    {
+      "id": "QF-062",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Missing profile updates returned a successful null user"
+    },
+    {
+      "id": "QF-063",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Token issuance panicked on a missing user"
+    },
+    {
+      "id": "QF-064",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Unknown token types could be minted"
+    },
+    {
+      "id": "QF-065",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Subsecond token lifetimes minted already expired credentials"
+    },
+    {
+      "id": "QF-066",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Signed JWTs without expiration were accepted"
+    },
+    {
+      "id": "QF-067",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "JWTs issued in the future were accepted"
+    },
+    {
+      "id": "QF-068",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Nil decoded tokens panicked"
+    },
+    {
+      "id": "QF-069",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Whitespace-only JWT subjects passed subject validation"
+    },
+    {
+      "id": "QF-070",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Fractional, negative or overflowing session versions were accepted"
+    },
+    {
+      "id": "QF-071",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Bearer headers with valid tab separators failed parsing"
+    },
+    {
+      "id": "QF-072",
+      "status": "fixed",
+      "file": "internal/auth/auth.go",
+      "title": "Admin token comparison used variable-time equality"
+    },
+    {
+      "id": "QF-073",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Generated fallback quiz IDs shared the high-order clock prefix"
+    },
+    {
+      "id": "QF-074",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Integer query parameters accepted trailing junk"
+    },
+    {
+      "id": "QF-075",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Submission timestamps were sorted lexicographically"
+    },
+    {
+      "id": "QF-076",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Unbounded caller request IDs were echoed into responses"
+    },
+    {
+      "id": "QF-077",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Flushed responses could lose their correlation ID"
+    },
+    {
+      "id": "QF-078",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Log fields could overwrite the event identity and timestamp"
+    },
+    {
+      "id": "QF-079",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "An unserializable log field silently erased the whole event"
+    },
+    {
+      "id": "QF-080",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Expired rate-limit clients accumulated indefinitely"
+    },
+    {
+      "id": "QF-081",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Retry-After rounded down and invited premature retry"
+    },
+    {
+      "id": "QF-082",
+      "status": "fixed",
+      "file": "internal/middleware/middleware.go",
+      "title": "Integer formatting corrupted the minimum integer"
+    },
+    {
+      "id": "QF-083",
+      "status": "fixed",
+      "file": "internal/health/deep.go",
+      "title": "Invalid error-rate measurements broke health JSON or reported healthy"
+    },
+    {
+      "id": "QF-084",
+      "status": "fixed",
+      "file": "internal/health/deep.go",
+      "title": "Impossible used-disk values were accepted"
+    },
+    {
+      "id": "QF-085",
+      "status": "fixed",
+      "file": "internal/health/deep.go",
+      "title": "Invalid load measurements broke health JSON or reported healthy"
+    },
+    {
+      "id": "QF-086",
+      "status": "fixed",
+      "file": "internal/health/deep.go",
+      "title": "Cancellation during the final health probe still reported healthy"
+    },
+    {
+      "id": "QF-087",
+      "status": "fixed",
+      "file": "internal/health/deep.go",
+      "title": "The standard load parser accepted nonfinite and negative readings"
+    },
+    {
+      "id": "QF-088",
+      "status": "fixed",
+      "file": "internal/chaos/state.go",
+      "title": "A canceled zero-latency request still reached the handler"
+    },
+    {
+      "id": "QF-089",
+      "status": "fixed",
+      "file": "internal/chaos/state.go",
+      "title": "An arbitrary Upgrade header bypassed injected faults"
+    },
+    {
+      "id": "QF-090",
+      "status": "fixed",
+      "file": "internal/chaos/state.go",
+      "title": "Database-stall simulation omitted retake writes"
+    },
+    {
+      "id": "QF-091",
+      "status": "fixed",
+      "file": "internal/chaos/state.go",
+      "title": "Informational HTTP statuses hid the final response status"
+    },
+    {
+      "id": "QF-092",
+      "status": "fixed",
+      "file": "internal/chaos/state.go",
+      "title": "Flushing before writing recorded a different final status"
+    },
+    {
+      "id": "QF-093",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Loading previews had no status announcement"
+    },
+    {
+      "id": "QF-094",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Preview failures were not announced"
+    },
+    {
+      "id": "QF-095",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Preview options truncated the text teachers needed to check"
+    },
+    {
+      "id": "QF-096",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Preview prompts collapsed intentional line breaks"
+    },
+    {
+      "id": "QF-097",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Preview omitted question weights"
+    },
+    {
+      "id": "QF-098",
+      "status": "fixed",
+      "file": "web/src/components/quiz-preview-dialog.tsx",
+      "title": "Preview omitted feedback teachers needed to verify"
+    },
+    {
+      "id": "QF-099",
+      "status": "fixed",
+      "file": "web/src/components/board/presence-panel.tsx",
+      "title": "Participant initials split Unicode surrogate pairs"
+    },
+    {
+      "id": "QF-100",
+      "status": "fixed",
+      "file": "web/src/components/board/presence-panel.tsx",
+      "title": "Large participant lists extended beyond the viewport"
+    },
+    {
+      "id": "QF-101",
+      "status": "fixed",
+      "file": "web/src/components/board/presence-panel.tsx",
+      "title": "Whitespace participant names appeared blank"
+    },
+    {
+      "id": "QF-102",
+      "status": "fixed",
+      "file": "web/src/components/board/presence-panel.tsx",
+      "title": "The participant list contained invalid separator markup"
+    },
+    {
+      "id": "QF-103",
+      "status": "fixed",
+      "file": "web/src/components/board/presence-panel.tsx",
+      "title": "Truncated participant names could not be inspected"
+    },
+    {
+      "id": "QF-104",
+      "status": "fixed",
+      "file": "web/src/components/board/peer-cursors.tsx",
+      "title": "White cursor labels had poor contrast on bright backgrounds"
+    },
+    {
+      "id": "QF-105",
+      "status": "fixed",
+      "file": "web/src/components/board/peer-cursors.tsx",
+      "title": "Long cursor names could cover the canvas"
+    },
+    {
+      "id": "QF-106",
+      "status": "fixed",
+      "file": "web/src/hooks/use-mobile.ts",
+      "title": "Mobile layout disagreed with the media query at viewport boundaries"
+    },
+    {
+      "id": "QF-107",
+      "status": "fixed",
+      "file": "web/src/hooks/use-online-status.ts",
+      "title": "Connectivity changes between render and effect were missed"
+    },
+    {
+      "id": "QF-108",
+      "status": "fixed",
+      "file": "web/src/hooks/use-online-status.ts",
+      "title": "Restored pages kept stale connectivity state"
+    },
+    {
+      "id": "QF-109",
+      "status": "fixed",
+      "file": "web/src/components/layout/app-shell.tsx",
+      "title": "Keyboard users had no way to skip repeated navigation"
+    },
+    {
+      "id": "QF-110",
+      "status": "fixed",
+      "file": "web/src/components/layout/app-sidebar.tsx",
+      "title": "Account avatars split Unicode surrogate pairs"
+    },
+    {
+      "id": "QF-111",
+      "status": "fixed",
+      "file": "web/src/components/layout/app-sidebar.tsx",
+      "title": "Sign-out retained private query results in memory"
+    },
+    {
+      "id": "QF-112",
+      "status": "fixed",
+      "file": "web/src/components/layout/app-sidebar.tsx",
+      "title": "Active navigation lacked an accessible current-page indicator"
+    },
+    {
+      "id": "QF-113",
+      "status": "fixed",
+      "file": "web/src/components/layout/app-sidebar.tsx",
+      "title": "Mobile navigation stayed open after choosing a page"
+    },
+    {
+      "id": "QF-114",
+      "status": "fixed",
+      "file": "web/src/routes/__root.tsx",
+      "title": "Initial client startup displayed a blank page"
+    },
+    {
+      "id": "QF-115",
+      "status": "fixed",
+      "file": "web/src/routes/__root.tsx",
+      "title": "Users with JavaScript disabled received no explanation"
+    },
+    {
+      "id": "QF-116",
+      "status": "fixed",
+      "file": "web/src/styles.css",
+      "title": "Application animations ignored reduced-motion preferences"
+    },
+    {
+      "id": "QF-117",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Malformed cached invitation metadata crashed roster rendering"
+    },
+    {
+      "id": "QF-118",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Invalid cached class timestamps reached date rendering"
+    },
+    {
+      "id": "QF-119",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Invalid cached member timestamps broke roster ordering"
+    },
+    {
+      "id": "QF-120",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Classroom caches ignored changes made in other tabs"
+    },
+    {
+      "id": "QF-121",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Accepting a cached invitation retained the invitation's identity instead of the learner's"
+    },
+    {
+      "id": "QF-122",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "An older classroom-list response could replace a newer list"
+    },
+    {
+      "id": "QF-123",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "An older roster response could replace a newer roster"
+    },
+    {
+      "id": "QF-124",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "An in-flight roster fetch undid a local membership mutation"
+    },
+    {
+      "id": "QF-125",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Saving class details overwrote concurrently refreshed members"
+    },
+    {
+      "id": "QF-126",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "A late class update recreated a locally removed class"
+    },
+    {
+      "id": "QF-127",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "A sign-in change between preflight and mutation sent the mutation as the new user"
+    },
+    {
+      "id": "QF-128",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Deleting a synced class missing from a limited catalog only deleted its local copy"
+    },
+    {
+      "id": "QF-129",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Leaving a synced class missing from a limited catalog only removed it locally"
+    },
+    {
+      "id": "QF-130",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "An empty local join code matched an unsynced class"
+    },
+    {
+      "id": "QF-131",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Imperative selection returned IDs of missing classes"
+    },
+    {
+      "id": "QF-132",
+      "status": "fixed",
+      "file": "web/src/lib/classrooms.ts",
+      "title": "Classroom hooks did not subscribe directly to identity changes"
+    },
+    {
+      "id": "QF-133",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Invitation links had duplicate slashes for origins ending in a slash"
+    },
+    {
+      "id": "QF-134",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Roster initials split Unicode surrogate pairs"
+    },
+    {
+      "id": "QF-135",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Repeated class write clicks could create overlapping operations"
+    },
+    {
+      "id": "QF-136",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "The join dialog promised invitation URLs but submitted the entire URL as a code"
+    },
+    {
+      "id": "QF-137",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Joining a class removed unrelated query parameters and router history state"
+    },
+    {
+      "id": "QF-138",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Class dialogs could close while a write was still pending"
+    },
+    {
+      "id": "QF-139",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "The create-class dialog did not submit with Enter"
+    },
+    {
+      "id": "QF-140",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "The edit-class dialog did not submit with Enter"
+    },
+    {
+      "id": "QF-141",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "The join-class dialog did not submit with Enter"
+    },
+    {
+      "id": "QF-142",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "The invitation dialog did not submit with Enter"
+    },
+    {
+      "id": "QF-143",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Class-name fields allowed values beyond the server contract"
+    },
+    {
+      "id": "QF-144",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Subject fields allowed values beyond the server contract"
+    },
+    {
+      "id": "QF-145",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Invitation names allowed values beyond the server contract"
+    },
+    {
+      "id": "QF-146",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Invitation emails allowed values beyond the server contract"
+    },
+    {
+      "id": "QF-147",
+      "status": "fixed",
+      "file": "web/src/components/classroom-dashboard-real.tsx",
+      "title": "Teacher accounts attempted learner-only joins without an explanation"
+    },
+    {
+      "id": "QF-148",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "Catalog refreshes reset edits in an open settings dialog"
+    },
+    {
+      "id": "QF-149",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "Repeated save clicks could overlap quiz-setting writes"
+    },
+    {
+      "id": "QF-150",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "Invalid local datetimes silently cleared saved boundaries"
+    },
+    {
+      "id": "QF-151",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "A late save response closed a different quiz's dialog"
+    },
+    {
+      "id": "QF-152",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "Quiz settings could close through Escape while saving"
+    },
+    {
+      "id": "QF-153",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "Quiz settings could not save through Enter"
+    },
+    {
+      "id": "QF-154",
+      "status": "fixed",
+      "file": "web/src/components/teacher/edit-exam-dialog.tsx",
+      "title": "A missing classroom option concealed the current assignment"
+    },
+    {
+      "id": "QF-155",
+      "status": "fixed",
+      "file": "web/src/components/confirm-action.tsx",
+      "title": "Repeated confirmation events could run a destructive action twice"
+    },
+    {
+      "id": "QF-156",
+      "status": "fixed",
+      "file": "web/src/lib/teacher-authoring.ts",
+      "title": "Duplicate CSV metadata headers silently selected the first value"
+    },
+    {
+      "id": "QF-157",
+      "status": "fixed",
+      "file": "web/src/lib/teacher-authoring.ts",
+      "title": "Extra CSV cells were silently discarded"
+    },
+    {
+      "id": "QF-158",
+      "status": "fixed",
+      "file": "web/src/lib/teacher-authoring.ts",
+      "title": "CSV scoring accepted hexadecimal and other unexpected number syntax"
+    },
+    {
+      "id": "QF-159",
+      "status": "fixed",
+      "file": "web/src/lib/teacher-authoring.ts",
+      "title": "A UTF-8 BOM prevented otherwise valid JSON imports"
+    },
+    {
+      "id": "QF-160",
+      "status": "fixed",
+      "file": "web/src/lib/teacher-authoring.ts",
+      "title": "Unbounded import text could freeze parsing and preview"
+    },
+    {
+      "id": "QF-161",
+      "status": "fixed",
+      "file": "web/src/components/teacher/question-import.tsx",
+      "title": "Spellcheck altered the presentation of pasted import data"
+    },
+    {
+      "id": "QF-162",
+      "status": "fixed",
+      "file": "web/src/components/teacher/question-import.tsx",
+      "title": "Empty imports offered an action that could only fail"
+    },
+    {
+      "id": "QF-163",
+      "status": "fixed",
+      "file": "web/src/components/teacher/quiz-builder.tsx",
+      "title": "Loading another draft left obsolete server work queued"
+    },
+    {
+      "id": "QF-164",
+      "status": "fixed",
+      "file": "web/src/components/teacher/quiz-builder.tsx",
+      "title": "Undoing question removal could inject the question into a different draft"
+    },
+    {
+      "id": "QF-165",
+      "status": "fixed",
+      "file": "web/src/components/teacher/quiz-builder.tsx",
+      "title": "Rapidly inserting the same bank question produced duplicate React keys"
+    },
+    {
+      "id": "QF-166",
+      "status": "fixed",
+      "file": "web/src/components/teacher/quiz-builder.tsx",
+      "title": "Bank deduplication hid questions with distinct weights or feedback"
+    },
+    {
+      "id": "QF-167",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Redirect targets containing backslashes or control characters passed the local-path check"
+    },
+    {
+      "id": "QF-168",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Account-mode switches carried a visible password into the other mode"
+    },
+    {
+      "id": "QF-169",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Malformed login responses were treated as successful authentication"
+    },
+    {
+      "id": "QF-170",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Repeated authentication actions could overlap before React disabled them"
+    },
+    {
+      "id": "QF-171",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Successful password resets retained the revoked browser session"
+    },
+    {
+      "id": "QF-172",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Successful reset navigation left the used reset token in back history"
+    },
+    {
+      "id": "QF-173",
+      "status": "fixed",
+      "file": "web/src/routes/login.tsx",
+      "title": "Authentication tabs could change while a request was in flight"
+    },
+    {
+      "id": "QF-174",
+      "status": "fixed",
+      "file": "web/src/routes/settings.tsx",
+      "title": "Repeated profile-save events could overlap updates"
+    },
+    {
+      "id": "QF-175",
+      "status": "fixed",
+      "file": "web/src/routes/settings.tsx",
+      "title": "Repeated password-change events could overlap updates"
+    },
+    {
+      "id": "QF-176",
+      "status": "fixed",
+      "file": "web/src/routes/settings.tsx",
+      "title": "Password changes retained private query results after sign-out"
+    },
+    {
+      "id": "QF-177",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "CORS preflights did not explicitly allow bearer authorization"
+    },
+    {
+      "id": "QF-178",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Responses without an allowed Origin omitted the cache Vary key"
+    },
+    {
+      "id": "QF-179",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Cross-origin clients could not read Retry-After"
+    },
+    {
+      "id": "QF-180",
+      "status": "fixed",
+      "file": "internal/httpapi/server.go",
+      "title": "Null and non-object JSON bodies were accepted by object endpoints"
+    },
+    {
+      "id": "QF-181",
+      "status": "fixed",
+      "file": "internal/exams/exams.go",
+      "title": "Oversized or control-bearing request IDs reached persistence"
+    },
+    {
+      "id": "QF-182",
+      "status": "fixed",
+      "file": "internal/exams/exams.go",
+      "title": "A missing service user could retrieve an exam"
+    },
+    {
+      "id": "QF-183",
+      "status": "fixed",
+      "file": "internal/exams/exams.go",
+      "title": "Negative autosave versions were reported as storage outages"
+    },
+    {
+      "id": "QF-184",
+      "status": "fixed",
+      "file": "internal/exams/exams.go",
+      "title": "Missing autosave request IDs were reported as storage outages"
+    },
+    {
+      "id": "QF-185",
+      "status": "fixed",
+      "file": "web/src/routes/__root.tsx",
+      "title": "Reset-link query tokens could be sent in resource referrers"
+    },
+    {
+      "id": "QF-186",
+      "status": "fixed",
+      "file": "internal/continuum/router.go",
+      "title": "An unconfigured router panicked instead of returning unavailable"
+    },
+    {
+      "id": "QF-187",
+      "status": "fixed",
+      "file": "internal/continuum/router.go",
+      "title": "Routing-state reads were outside the request timeout"
+    },
+    {
+      "id": "QF-188",
+      "status": "fixed",
+      "file": "internal/continuum/router.go",
+      "title": "Backend redirects bypassed the selected routing target"
+    },
+    {
+      "id": "QF-189",
+      "status": "fixed",
+      "file": "internal/continuum/router.go",
+      "title": "Requests with a nil body panicked in the router"
+    },
+    {
+      "id": "QF-190",
+      "status": "fixed",
+      "file": "internal/continuum/router.go",
+      "title": "Base64 request decoding allocated the entire oversized payload before checking its limit"
+    },
+    {
+      "id": "QF-191",
+      "status": "fixed",
+      "file": "internal/continuum/probe.go",
+      "title": "Health probes followed redirects to unrelated destinations"
+    },
+    {
+      "id": "QF-192",
+      "status": "fixed",
+      "file": "internal/continuum/probe.go",
+      "title": "Health probes accepted trailing JSON documents or garbage"
+    },
+    {
+      "id": "QF-193",
+      "status": "fixed",
+      "file": "internal/continuum/local.go",
+      "title": "Timed-out local-demo shutdown returned before closing its listeners"
+    },
+    {
+      "id": "QF-194",
+      "status": "fixed",
+      "file": "internal/emaildelivery/smtp.go",
+      "title": "Display-name sender addresses were sent as invalid SMTP envelopes"
+    },
+    {
+      "id": "QF-195",
+      "status": "fixed",
+      "file": "internal/emaildelivery/smtp.go",
+      "title": "Unicode invitation subjects were sent without MIME encoding"
+    },
+    {
+      "id": "QF-196",
+      "status": "fixed",
+      "file": "internal/emaildelivery/smtp.go",
+      "title": "Unicode email bodies relied on unadvertised eight-bit transport support"
+    },
+    {
+      "id": "QF-197",
+      "status": "fixed",
+      "file": "web/src/routes/teacher.tsx",
+      "title": "A failed analytics catalog had no retry action"
+    },
+    {
+      "id": "QF-198",
+      "status": "fixed",
+      "file": "web/src/routes/teacher.tsx",
+      "title": "A failed selected quiz trapped analytics without a selector or retry"
+    },
+    {
+      "id": "QF-199",
+      "status": "fixed",
+      "file": "web/src/routes/teacher.tsx",
+      "title": "An assessment with no submissions displayed a misleading zero-percent average"
+    },
+    {
+      "id": "QF-200",
+      "status": "fixed",
+      "file": "web/src/routes/teacher.tsx",
+      "title": "Assessment progress bars lacked accessible names"
+    }
+  ]
+}

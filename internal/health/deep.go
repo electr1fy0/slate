@@ -89,8 +89,13 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 	if probe.ErrorRate != nil {
 		errRate = probe.ErrorRate()
 	}
-	errCheck := map[string]any{"value": round(errRate, 3), "threshold": config.ErrorRateThreshold,
-		"ok": errRate < config.ErrorRateThreshold}
+	validRate := !math.IsNaN(errRate) && !math.IsInf(errRate, 0) && errRate >= 0 && errRate <= 1
+	errCheck := map[string]any{"threshold": config.ErrorRateThreshold, "ok": validRate && errRate < config.ErrorRateThreshold}
+	if validRate {
+		errCheck["value"] = round(errRate, 3)
+	} else {
+		errCheck["reason"] = "invalid error rate"
+	}
 	report.Checks["error_rate"] = errCheck
 	if !errCheck["ok"].(bool) {
 		report.Healthy = false
@@ -106,7 +111,7 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 		}
 	}
 	used, total, err := diskUsage(ctx)
-	if err != nil || total == 0 {
+	if err != nil || total == 0 || used > total {
 		reason := "disk probe unavailable"
 		if err != nil {
 			reason = trimReason(err)
@@ -132,8 +137,12 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 		}
 	}
 	load1, err := load1Probe(ctx)
-	if err != nil {
-		report.Checks["load"] = map[string]any{"ok": false, "reason": trimReason(err)}
+	if err != nil || math.IsNaN(load1) || math.IsInf(load1, 0) || load1 < 0 {
+		reason := "invalid load measurement"
+		if err != nil {
+			reason = trimReason(err)
+		}
+		report.Checks["load"] = map[string]any{"ok": false, "reason": reason}
 		report.Healthy = false
 	} else {
 		loadCheck := map[string]any{"loadavg": round(load1, 2), "ok": load1 < config.LoadThreshold}
@@ -143,6 +152,9 @@ func Deep(ctx context.Context, config Config, probe Probe, chaos ChaosSnapshot) 
 		}
 	}
 
+	if !contextAlive(ctx) {
+		return canceledReport(report, ctx)
+	}
 	if report.Healthy {
 		return report, http.StatusOK
 	}
@@ -240,6 +252,9 @@ func StandardLoad1(ctx context.Context, path string) (float64, error) {
 	value, err := strconv.ParseFloat(fields[0], 64)
 	if err != nil {
 		return 0, err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, fmt.Errorf("invalid loadavg value")
 	}
 	return value, nil
 }

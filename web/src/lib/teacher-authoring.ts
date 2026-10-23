@@ -60,11 +60,13 @@ function normaliseQuestion(
   if (
     points !== undefined &&
     (typeof points !== "number" ||
-      !Number.isFinite(points) ||
+      !Number.isInteger(points) ||
       points < 1 ||
       points > 1000)
   ) {
-    return { error: `${rowLabel}: points must be a number from 1 to 1000.` }
+    return {
+      error: `${rowLabel}: points must be a whole number from 1 to 1000.`,
+    }
   }
   if (feedback !== undefined && typeof feedback !== "string") {
     return { error: `${rowLabel}: feedback must be text.` }
@@ -171,6 +173,21 @@ function parseCsvQuestions(source: string): ImportResult {
   const headers = rows[0].map((header) =>
     header.trim().toLowerCase().replace(/[ -]+/g, "_")
   )
+  const fieldFamilies = [
+    ["question", "prompt"],
+    ["answer", "correct", "correct_answer"],
+    ["points"],
+    ["feedback"],
+  ]
+  if (
+    fieldFamilies.some(
+      (names) => headers.filter((header) => names.includes(header)).length > 1
+    )
+  )
+    return {
+      questions: [],
+      errors: ["CSV contains duplicate or ambiguous field headers."],
+    }
   const column = (...names: string[]): number =>
     headers.findIndex((header) => names.includes(header))
   const questionIndex = column("question", "prompt")
@@ -252,6 +269,12 @@ function parseCsvQuestions(source: string): ImportResult {
   const questions: QuestionDraft[] = []
   const errors: string[] = []
   rows.slice(1).forEach((row, rowIndex) => {
+    if (row.length > headers.length) {
+      errors.push(
+        `Row ${rowIndex + 2}: too many cells; quote text containing commas.`
+      )
+      return
+    }
     const prompt = row[questionIndex]?.trim() ?? ""
     const options = optionIndexes.map((index) => row[index]?.trim() ?? "")
     while (options.length > 0 && options[options.length - 1] === "")
@@ -266,6 +289,10 @@ function parseCsvQuestions(source: string): ImportResult {
         ? letterAnswer
         : numericAnswer
     const rawPoints = pointsIndex < 0 ? "" : (row[pointsIndex]?.trim() ?? "")
+    if (rawPoints && !/^\d+(?:\.\d+)?$/.test(rawPoints)) {
+      errors.push(`Row ${rowIndex + 2}: points must be a decimal number.`)
+      return
+    }
     const points = rawPoints ? Number(rawPoints) : undefined
     const candidate = {
       question: prompt,
@@ -285,6 +312,14 @@ export function parseQuestionImport(
   source: string,
   format: "json" | "csv"
 ): ImportResult {
+  source = source.replace(/^\uFEFF/, "")
+  if (source.length > 1_000_000)
+    return {
+      questions: [],
+      errors: [
+        "Import data must be at most 1,000,000 characters. Split it into smaller batches.",
+      ],
+    }
   if (!source.trim())
     return { questions: [], errors: ["Paste JSON or CSV question data first."] }
   return format === "json"

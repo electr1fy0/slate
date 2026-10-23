@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { api, ApiError } from "@/lib/api"
@@ -49,6 +49,9 @@ export function EditExamDialog({
   const [grace, setGrace] = useState("")
   const [classroomId, setClassroomId] = useState("")
   const [saving, setSaving] = useState(false)
+  const saveLock = useRef(false)
+  const activeId = useRef(exam?.id)
+  activeId.current = exam?.id
 
   useEffect(() => {
     setTitle(exam?.title ?? "")
@@ -62,16 +65,20 @@ export function EditExamDialog({
     setAllowLate(Boolean(exam?.allow_late))
     setGrace(exam?.late_grace_minutes ? String(exam.late_grace_minutes) : "")
     setClassroomId(exam?.classroom_id ?? "")
-  }, [exam])
+  }, [exam?.id])
 
   async function save(): Promise<void> {
-    if (!exam) return
+    if (!exam || saveLock.current) return
     if (!title.trim()) {
       toast.error("Add a title before saving")
       return
     }
     const opens = fromLocalDateTime(opensAt)
     const closes = fromLocalDateTime(closesAt)
+    if ((opensAt && !opens) || (closesAt && !closes)) {
+      toast.error("Enter valid opening and closing times")
+      return
+    }
     if (opens && closes && Date.parse(closes) <= Date.parse(opens)) {
       toast.error("The closing time must be after the opening time")
       return
@@ -116,6 +123,8 @@ export function EditExamDialog({
       toast.error("Late grace must be between 0 and 10,080 minutes")
       return
     }
+    const requestedId = exam.id
+    saveLock.current = true
     setSaving(true)
     try {
       const updated = await api.patchExam(exam.id, {
@@ -129,23 +138,44 @@ export function EditExamDialog({
         late_grace_minutes: parsedGrace,
         classroom_id: classroomId,
       })
+      if (activeId.current !== requestedId) return
       onSaved(updated)
       onOpenChange(false)
       toast.success("Quiz settings updated")
     } catch (error) {
+      if (activeId.current !== requestedId) return
       toast.error(
         error instanceof ApiError
           ? error.message
           : "Could not update quiz settings"
       )
     } finally {
+      saveLock.current = false
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={exam !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(44rem,calc(100vh-2rem))] max-w-2xl overflow-y-auto">
+    <Dialog
+      open={exam !== null}
+      onOpenChange={(open) => {
+        if (!saveLock.current) onOpenChange(open)
+      }}
+    >
+      <DialogContent
+        aria-busy={saving}
+        onKeyDown={(event) => {
+          if (
+            event.key === "Enter" &&
+            !event.nativeEvent.isComposing &&
+            event.target instanceof HTMLInputElement
+          ) {
+            event.preventDefault()
+            void save()
+          }
+        }}
+        className="max-h-[min(44rem,calc(100vh-2rem))] max-w-2xl overflow-y-auto"
+      >
         <DialogHeader>
           <DialogTitle>Edit published quiz</DialogTitle>
           <DialogDescription>
@@ -183,6 +213,12 @@ export function EditExamDialog({
               onChange={(event) => setClassroomId(event.target.value)}
             >
               <option value="">No classroom assignment</option>
+              {classroomId &&
+              !classrooms.some((classroom) => classroom.id === classroomId) ? (
+                <option value={classroomId}>
+                  Assigned classroom unavailable
+                </option>
+              ) : null}
               {classrooms.map((classroom) => (
                 <option key={classroom.id} value={classroom.id}>
                   {classroom.name}

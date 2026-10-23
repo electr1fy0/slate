@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -95,7 +97,21 @@ func (s *Service) now() time.Time {
 }
 
 func NormalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
-func ValidEmail(email string) bool       { return EmailPattern.MatchString(email) }
+func ValidEmail(email string) bool {
+	if len(email) > 120 || !EmailPattern.MatchString(email) {
+		return false
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 || strings.HasPrefix(parts[0], ".") || strings.HasSuffix(parts[0], ".") || strings.Contains(parts[0], "..") {
+		return false
+	}
+	for _, label := range strings.Split(parts[1], ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+	}
+	return true
+}
 
 // HashPassword emits the standard modular bcrypt format accepted by the
 // bcrypt package (and by other bcrypt implementations).
@@ -141,6 +157,9 @@ func (s *Service) CreateUser(ctx context.Context, email, password, name, role st
 		return nil, fmt.Errorf("unknown role %q", role)
 	}
 	normalized := NormalizeEmail(email)
+	if !ValidEmail(normalized) {
+		return nil, fmt.Errorf("invalid email")
+	}
 	if name = strings.TrimSpace(name); name == "" {
 		if parts := strings.SplitN(normalized, "@", 2); len(parts) > 0 {
 			name = parts[0]
@@ -204,8 +223,11 @@ func (s *Service) UpdateName(ctx context.Context, userID, name string) (*model.U
 		return nil, fmt.Errorf("profile updates are unavailable")
 	}
 	user, err := profiles.UpdateUserName(ctx, userID, name)
-	if err != nil || user == nil {
+	if err != nil {
 		return nil, err
+	}
+	if user == nil {
+		return nil, ErrAccountDeleted
 	}
 	return safeUser(user), nil
 }
@@ -329,6 +351,15 @@ type Claims struct {
 }
 
 func (s *Service) EncodeToken(user *model.User, typ string, ttl time.Duration) (string, error) {
+	if user == nil || strings.TrimSpace(user.UserID) == "" {
+		return "", ErrInvalidSession
+	}
+	if typ != "access" && typ != "refresh" {
+		return "", fmt.Errorf("invalid token type")
+	}
+	if ttl < time.Second {
+		return "", fmt.Errorf("token lifetime must be at least one second")
+	}
 	now := s.now().Unix()
 	claims := jwt.MapClaims{"sub": user.UserID, "role": user.Role, "name": user.Name, "typ": typ, "iat": now, "exp": now + int64(ttl/time.Second), "jti": randomHexID(), "sv": user.SessionVersion}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -363,7 +394,7 @@ func (s *Service) IssueTokens(user *model.User) (map[string]any, error) {
 func (s *Service) DecodeToken(raw, expectedType string) (jwt.MapClaims, error) {
 	parsed, err := jwt.ParseWithClaims(raw, jwt.MapClaims{}, func(t *jwt.Token) (any, error) {
 		return s.tokenKey(t.Method)
-	}, jwt.WithValidMethods([]string{s.Settings.JWTAlgorithm}))
+	}, jwt.WithValidMethods([]string{s.Settings.JWTAlgorithm}), jwt.WithTimeFunc(s.now), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 	if err != nil {
 		return nil, err
 	}
@@ -371,6 +402,9 @@ func (s *Service) DecodeToken(raw, expectedType string) (jwt.MapClaims, error) {
 }
 
 func decodeClaims(parsed *jwt.Token, expectedType string) (jwt.MapClaims, error) {
+	if parsed == nil {
+		return nil, ErrInvalidSession
+	}
 	claims, ok := parsed.Claims.(jwt.MapClaims)
 	if !ok || !parsed.Valid {
 		return nil, ErrInvalidSession
@@ -384,7 +418,7 @@ func decodeClaims(parsed *jwt.Token, expectedType string) (jwt.MapClaims, error)
 
 func claimSubject(claims jwt.MapClaims) (string, bool) {
 	sub, ok := claims["sub"].(string)
-	return sub, ok && sub != ""
+	return sub, ok && strings.TrimSpace(sub) != ""
 }
 
 func (s *Service) CurrentUser(ctx context.Context, authorization string) (*model.User, error) {
@@ -422,6 +456,9 @@ func SessionValid(claims jwt.MapClaims, user *model.User) bool {
 	version := int64(0)
 	switch value := claims["sv"].(type) {
 	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= math.Exp2(63) || math.Trunc(value) != value {
+			return false
+		}
 		version = int64(value)
 	case int64:
 		version = value
@@ -437,11 +474,11 @@ func SessionValid(claims jwt.MapClaims, user *model.User) bool {
 	default:
 		return false
 	}
-	return version == user.SessionVersion
+	return version >= 0 && version == user.SessionVersion
 }
 
 func ParseBearer(header string) (scheme, token string, ok bool) {
-	parts := strings.SplitN(strings.TrimSpace(header), " ", 2)
+	parts := strings.Fields(header)
 	if len(parts) != 2 || parts[0] == "" || strings.TrimSpace(parts[1]) == "" {
 		return "", "", false
 	}
@@ -481,9 +518,13 @@ func RequireTeacher(user *model.User) error {
 	return nil
 }
 
+func MatchAdminToken(candidate, secret string) bool {
+	return candidate != "" && secret != "" && subtle.ConstantTimeCompare([]byte(candidate), []byte(secret)) == 1
+}
+
 func (s *Service) TeacherOrAdmin(ctx context.Context, user *model.User, adminToken string) (*model.User, error) {
 	if adminToken != "" {
-		if adminToken == s.Settings.AdminToken {
+		if MatchAdminToken(adminToken, s.Settings.AdminToken) {
 			return &model.User{UserID: "admin", Name: "admin", Role: "admin"}, nil
 		}
 		if user == nil {

@@ -5,6 +5,7 @@ const MAX_ROOMS = 8
 const SERVER_SNAPSHOT: string[] = []
 
 let cached: string[] | null = null
+let listening = false
 const listeners = new Set<() => void>()
 
 function read(): string[] {
@@ -13,7 +14,13 @@ function read(): string[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((room): room is string => typeof room === "string").slice(0, MAX_ROOMS)
+    return [
+      ...new Set(
+        parsed.filter(
+          (room): room is string => typeof room === "string" && !!room.trim()
+        )
+      ),
+    ].slice(0, MAX_ROOMS)
   } catch {
     return []
   }
@@ -25,6 +32,14 @@ function subscribe(listener: () => void): () => void {
 }
 
 function getSnapshot(): string[] {
+  if (!listening && typeof window !== "undefined") {
+    listening = true
+    window.addEventListener("storage", (event) => {
+      if (event.key !== STORAGE_KEY && event.key !== null) return
+      cached = null
+      for (const listener of listeners) listener()
+    })
+  }
   cached ??= read()
   return cached
 }
@@ -34,7 +49,11 @@ function getServerSnapshot(): string[] {
 }
 
 export function rememberRoom(roomId: string): void {
-  const next = [roomId, ...getSnapshot().filter((room) => room !== roomId)].slice(0, MAX_ROOMS)
+  if (!roomId.trim()) return
+  const next = [
+    roomId,
+    ...getSnapshot().filter((room) => room !== roomId),
+  ].slice(0, MAX_ROOMS)
   cached = next
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))

@@ -26,6 +26,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
 const NAV_ITEMS = [
@@ -39,17 +40,20 @@ const NAV_ITEMS = [
 function initials(name: string): string {
   const trimmed = name.trim()
   if (!trimmed) return "??"
-  return trimmed.slice(0, 2).toUpperCase()
+  return Array.from(trimmed).slice(0, 2).join("").toUpperCase()
 }
 
 export function AppSidebar() {
-  const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const { setOpenMobile } = useSidebar()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const auth = useAuth()
   const queryClient = useQueryClient()
 
   function signOut() {
     clearAuth()
-    void queryClient.invalidateQueries()
+    queryClient.clear()
     toast.info("Signed out")
   }
 
@@ -64,7 +68,9 @@ export function AppSidebar() {
               </span>
               <span className="flex flex-col gap-0.5 leading-tight">
                 <span className="font-semibold">Continuum</span>
-                <span className="text-xs text-muted-foreground">assessment continuity</span>
+                <span className="text-xs text-muted-foreground">
+                  assessment continuity
+                </span>
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -75,24 +81,36 @@ export function AppSidebar() {
           <SidebarGroupLabel>Assessment continuity</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.filter((item) => auth.user?.role === "teacher" || (item.to !== "/teacher" && item.to !== "/ops")).filter((item) => item.to !== "/settings" || auth.user).map((item) => {
-                const active =
-                  item.to === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.to)
-                return (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton
-                      isActive={active}
-                      tooltip={item.label}
-                      render={<Link to={item.to} />}
-                    >
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )
-              })}
+              {NAV_ITEMS.filter(
+                (item) =>
+                  auth.user?.role === "teacher" ||
+                  (item.to !== "/teacher" && item.to !== "/ops")
+              )
+                .filter((item) => item.to !== "/settings" || auth.user)
+                .map((item) => {
+                  const active =
+                    item.to === "/"
+                      ? pathname === "/"
+                      : pathname.startsWith(item.to)
+                  return (
+                    <SidebarMenuItem key={item.to}>
+                      <SidebarMenuButton
+                        isActive={active}
+                        tooltip={item.label}
+                        render={
+                          <Link
+                            to={item.to}
+                            aria-current={active ? "page" : undefined}
+                            onClick={() => setOpenMobile(false)}
+                          />
+                        }
+                      >
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -106,12 +124,18 @@ export function AppSidebar() {
                   <AvatarFallback>{initials(auth.user.name)}</AvatarFallback>
                 </Avatar>
                 <div className="flex min-w-0 flex-1 flex-col leading-tight">
-                  <span className="truncate text-sm font-medium">{auth.user.name}</span>
+                  <span className="truncate text-sm font-medium">
+                    {auth.user.name}
+                  </span>
                   <span className="truncate text-xs text-muted-foreground">
                     {auth.user.email}
                   </span>
                 </div>
-                <Badge variant={auth.user.role === "teacher" ? "default" : "secondary"}>
+                <Badge
+                  variant={
+                    auth.user.role === "teacher" ? "default" : "secondary"
+                  }
+                >
                   {auth.user.role === "teacher" ? "Staff" : "Learner"}
                 </Badge>
                 <Button

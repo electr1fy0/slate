@@ -153,6 +153,7 @@ func StartLocalDemo(parent context.Context, settings config.Settings, options Lo
 }
 
 func (d *LocalDemo) Close(ctx context.Context) error {
+	var errs []error
 	if d.stop != nil {
 		d.stop()
 	}
@@ -160,12 +161,12 @@ func (d *LocalDemo) Close(ctx context.Context) error {
 		select {
 		case <-d.done:
 		case <-ctx.Done():
-			return ctx.Err()
+			errs = append(errs, ctx.Err())
 		}
 	}
-	var errs []error
 	if d.public != nil {
 		if err := d.public.Shutdown(ctx); err != nil {
+			_ = d.public.Close()
 			errs = append(errs, err)
 		}
 	}
@@ -238,7 +239,11 @@ func (b *localBackend) close(ctx context.Context) error {
 		shutdownCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 	}
-	return server.Shutdown(shutdownCtx)
+	err := server.Shutdown(shutdownCtx)
+	if err != nil {
+		_ = server.Close()
+	}
+	return err
 }
 
 func (d *LocalDemo) BackendURLs() map[string]string {

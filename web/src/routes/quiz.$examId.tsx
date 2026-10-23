@@ -1232,7 +1232,10 @@ export function ExamRunner({
             </AlertDescription>
           </Alert>
         ) : null}
-        <Progress value={(answeredCount / total) * 100} />
+        <Progress
+          aria-label="Questions answered"
+          value={total > 0 ? (answeredCount / total) * 100 : 0}
+        />
 
         <Card>
           <CardHeader>

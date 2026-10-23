@@ -1,4 +1,10 @@
 import { useSyncExternalStore } from "react"
+import {
+  nonEmpty,
+  nonNegativeInteger,
+  uniqueBy,
+  validDate,
+} from "./local-validation"
 
 export interface BoardHistoryEntry {
   room_id: string
@@ -13,16 +19,20 @@ const MAX_ENTRIES = 20
 const SERVER_SNAPSHOT: BoardHistoryEntry[] = []
 
 let cache: BoardHistoryEntry[] | null = null
+let listening = false
 const listeners = new Set<() => void>()
 
 function isEntry(value: unknown): value is BoardHistoryEntry {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<BoardHistoryEntry>
   return (
-    typeof candidate.room_id === "string" &&
-    typeof candidate.first_opened_at === "string" &&
-    typeof candidate.last_opened_at === "string" &&
-    typeof candidate.visits === "number" &&
+    nonEmpty(candidate.room_id) &&
+    validDate(candidate.first_opened_at) &&
+    validDate(candidate.last_opened_at) &&
+    Date.parse(candidate.first_opened_at) <=
+      Date.parse(candidate.last_opened_at) &&
+    nonNegativeInteger(candidate.visits) &&
+    candidate.visits > 0 &&
     candidate.source === "local-history"
   )
 }
@@ -33,13 +43,31 @@ function read(): BoardHistoryEntry[] {
     const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter(isEntry).slice(0, MAX_ENTRIES) : []
+    return Array.isArray(parsed)
+      ? uniqueBy(
+          parsed
+            .filter(isEntry)
+            .sort(
+              (a, b) =>
+                Date.parse(b.last_opened_at) - Date.parse(a.last_opened_at)
+            ),
+          (entry) => entry.room_id
+        ).slice(0, MAX_ENTRIES)
+      : []
   } catch {
     return []
   }
 }
 
 function getSnapshot(): BoardHistoryEntry[] {
+  if (!listening && typeof window !== "undefined") {
+    listening = true
+    window.addEventListener("storage", (event) => {
+      if (event.key !== STORAGE_KEY && event.key !== null) return
+      cache = null
+      notify()
+    })
+  }
   cache ??= read()
   return cache
 }
@@ -68,11 +96,22 @@ function persist(next: BoardHistoryEntry[]): void {
 }
 
 export function recordBoardVisit(roomId: string): void {
+  if (!roomId.trim()) return
   const now = new Date().toISOString()
   const previous = getSnapshot().find((entry) => entry.room_id === roomId)
   const next: BoardHistoryEntry = previous
-    ? { ...previous, last_opened_at: now, visits: previous.visits + 1 }
-    : { room_id: roomId, first_opened_at: now, last_opened_at: now, visits: 1, source: "local-history" }
+    ? {
+        ...previous,
+        last_opened_at: now,
+        visits: Math.min(Number.MAX_SAFE_INTEGER, previous.visits + 1),
+      }
+    : {
+        room_id: roomId,
+        first_opened_at: now,
+        last_opened_at: now,
+        visits: 1,
+        source: "local-history",
+      }
   persist([next, ...getSnapshot().filter((entry) => entry.room_id !== roomId)])
 }
 
@@ -86,7 +125,7 @@ export function useBoardHistory(): BoardHistoryEntry[] {
 
 export function mergeBoardHistory(
   recentRooms: string[],
-  history: BoardHistoryEntry[],
+  history: BoardHistoryEntry[]
 ): BoardHistoryEntry[] {
   const known = new Map(history.map((entry) => [entry.room_id, entry]))
   const fallbackTime = new Date(0).toISOString()
@@ -101,24 +140,45 @@ export function mergeBoardHistory(
       })
     }
   }
-  return [...known.values()].sort((a, b) => b.last_opened_at.localeCompare(a.last_opened_at))
+  return [...known.values()]
+    .filter(isEntry)
+    .sort(
+      (a, b) =>
+        Date.parse(b.last_opened_at) - Date.parse(a.last_opened_at) ||
+        a.room_id.localeCompare(b.room_id)
+    )
 }
 
 export function boardHistoryCsv(entries: BoardHistoryEntry[]): string {
   const escape = (value: string): string => `"${value.replace(/"/g, '""')}"`
   const rows = [
     ["room_id", "last_opened_at", "visits", "source"],
-    ...entries.map((entry) => [entry.room_id, entry.last_opened_at, String(entry.visits), entry.source]),
+    ...entries.map((entry) => [
+      entry.room_id,
+      entry.last_opened_at,
+      String(entry.visits),
+      entry.source,
+    ]),
   ]
   return rows.map((row) => row.map(escape).join(",")).join("\n")
 }
 
-export function downloadTextFile(filename: string, contents: string, type: string): void {
+export function downloadTextFile(
+  filename: string,
+  contents: string,
+  type: string
+): void {
   const blob = new Blob([contents], { type })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")
   anchor.href = url
   anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
+  anchor.hidden = true
+  document.body.appendChild(anchor)
+  try {
+    anchor.click()
+  } finally {
+    anchor.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 }

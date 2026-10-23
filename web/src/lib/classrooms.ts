@@ -1,12 +1,13 @@
 import { useSyncExternalStore } from "react"
 
-import { api } from "./api"
+import { api, ApiError } from "./api"
 import type {
   ClassroomInvitation,
   ClassroomMemberRecord,
   ClassroomRecord,
 } from "./api"
-import { getAuth } from "./auth"
+import { getAuth, useAuth } from "./auth"
+import { validDate } from "./local-validation"
 import type { Role } from "./types"
 
 export type ClassroomMemberStatus = "active" | "invited" | "pending"
@@ -48,6 +49,14 @@ const SERVER_SNAPSHOT: Classroom[] = []
 const classroomCache = new Map<string, Classroom[]>()
 const selectedClassroomCache = new Map<string, string | null>()
 const listeners = new Set<() => void>()
+let storageListening = false
+const listRequests = new Map<string, number>()
+const rosterRequests = new Map<string, number>()
+
+function assertAccount(account: string): void {
+  if (accountScope() !== account)
+    throw new Error("Your sign-in changed before the operation finished")
+}
 
 function accountScope(): string {
   return getAuth().user?.user_id ?? "anonymous"
@@ -93,9 +102,27 @@ function isClassroom(value: unknown): value is Classroom {
     typeof candidate.name === "string" &&
     typeof candidate.subject === "string" &&
     typeof candidate.join_code === "string" &&
-    typeof candidate.created_at === "string" &&
+    validDate(candidate.created_at) &&
     Array.isArray(candidate.members) &&
-    candidate.members.every(isMember)
+    candidate.members.every(isMember) &&
+    (candidate.active_room_id === undefined ||
+      typeof candidate.active_room_id === "string") &&
+    (candidate.sync_state === undefined ||
+      ["pending", "synced", "error"].includes(candidate.sync_state)) &&
+    (candidate.invitations === undefined ||
+      (Array.isArray(candidate.invitations) &&
+        candidate.invitations.every((invite: unknown) => {
+          if (!invite || typeof invite !== "object") return false
+          const row = invite as Partial<ClassroomInvitation>
+          return (
+            typeof row.id === "string" &&
+            typeof row.email === "string" &&
+            typeof row.name === "string" &&
+            typeof row.join_code === "string" &&
+            validDate(row.created_at) &&
+            (row.status === "pending" || row.status === "accepted")
+          )
+        })))
   )
 }
 
@@ -110,7 +137,7 @@ function isMember(value: unknown): value is ClassroomMember {
     (candidate.status === "active" ||
       candidate.status === "invited" ||
       candidate.status === "pending") &&
-    typeof candidate.joined_at === "string"
+    validDate(candidate.joined_at)
   )
 }
 
@@ -130,6 +157,20 @@ function classroomSnapshot(account: string): Classroom[] {
 }
 
 function getClassroomSnapshot(): Classroom[] {
+  if (!storageListening && typeof window !== "undefined") {
+    storageListening = true
+    window.addEventListener("storage", (event) => {
+      if (
+        event.key !== null &&
+        !event.key.startsWith(STORAGE_KEY) &&
+        !event.key.startsWith(SELECTED_KEY)
+      )
+        return
+      classroomCache.clear()
+      selectedClassroomCache.clear()
+      notify()
+    })
+  }
   return classroomSnapshot(accountScope())
 }
 
@@ -254,7 +295,7 @@ export function mergeJoinedMember(
   )
     ? members.map((item) =>
         item.id === nextMember.id || (email && item.email === email)
-          ? { ...item, status: "active" as const }
+          ? { ...item, ...nextMember, status: "active" as const }
           : item
       )
     : [...members, nextMember]
@@ -282,9 +323,12 @@ function replaceClassroom(
 
 export async function syncClassroomsFromApi(): Promise<boolean> {
   const account = accountScope()
+  const request = (listRequests.get(account) ?? 0) + 1
+  listRequests.set(account, request)
   try {
     const records = await api.listClassrooms()
-    if (accountScope() !== account) return false
+    if (accountScope() !== account || listRequests.get(account) !== request)
+      return false
     const local = classroomSnapshot(account)
     const remoteIds = new Set(records.map((record) => record.id))
     const adoptedLocalIds = new Set<string>()
@@ -397,6 +441,12 @@ export async function syncClassroomRosterFromApi(
   classroomId: string
 ): Promise<Classroom | null> {
   const account = accountScope()
+  const requestKey = JSON.stringify([account, classroomId])
+  const request = (rosterRequests.get(requestKey) ?? 0) + 1
+  rosterRequests.set(requestKey, request)
+  const previous = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
   try {
     const [rows, invitations] = await Promise.all([
       api.classroomRoster(classroomId),
@@ -404,10 +454,15 @@ export async function syncClassroomRosterFromApi(
         ? api.classroomInvitations(classroomId)
         : Promise.resolve([]),
     ])
-    if (accountScope() !== account) return null
+    if (
+      accountScope() !== account ||
+      rosterRequests.get(requestKey) !== request
+    )
+      return null
     const classroom =
       classroomSnapshot(account).find((item) => item.id === classroomId) ?? null
     if (!classroom) return null
+    if (classroom !== previous) return classroom
     const next = {
       ...classroom,
       invitations,
@@ -439,7 +494,12 @@ export async function updateClassroomOnServer(
     throw new Error(
       "The active account changed before the class update finished"
     )
-  const next = fromServer(remote, classroom)
+  const current = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (!current)
+    throw new Error("The class was removed before the update finished")
+  const next = fromServer(remote, current)
   persistClassrooms(
     classroomSnapshot(account).map((item) =>
       item.id === classroomId ? next : item
@@ -453,9 +513,22 @@ export async function deleteClassroomOnServer(
   classroomId: string
 ): Promise<void> {
   const account = accountScope()
+  const cached = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (!cached) return
   const remote = await api.listClassrooms()
-  if (remote.some((item) => item.id === classroomId))
-    await api.deleteClassroom(classroomId)
+  assertAccount(account)
+  if (
+    cached.sync_state === "synced" ||
+    remote.some((item) => item.id === classroomId)
+  ) {
+    try {
+      await api.deleteClassroom(classroomId)
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error
+    }
+  }
   if (accountScope() !== account) return
   const remaining = classroomSnapshot(account).filter(
     (item) => item.id !== classroomId
@@ -469,9 +542,22 @@ export async function leaveClassroomOnServer(
   classroomId: string
 ): Promise<void> {
   const account = accountScope()
+  const cached = classroomSnapshot(account).find(
+    (item) => item.id === classroomId
+  )
+  if (!cached) return
   const remote = await api.listClassrooms()
-  if (remote.some((item) => item.id === classroomId))
-    await api.leaveClassroom(classroomId)
+  assertAccount(account)
+  if (
+    cached.sync_state === "synced" ||
+    remote.some((item) => item.id === classroomId)
+  ) {
+    try {
+      await api.leaveClassroom(classroomId)
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 404) throw error
+    }
+  }
   if (accountScope() !== account) return
   const remaining = classroomSnapshot(account).filter(
     (item) => item.id !== classroomId
@@ -497,6 +583,7 @@ export async function inviteClassroomMemberOnServer(
       item.email.trim().toLocaleLowerCase() === email &&
       item.status === "pending"
   )
+  assertAccount(account)
   if (!invitation)
     invitation = await api.inviteClassroomMember(classroomId, {
       name: input.name.trim(),
@@ -558,6 +645,7 @@ export async function removeClassroomInvitationOnServer(
     typeof api.classroomInvitations === "function"
       ? await api.classroomInvitations(classroomId)
       : []
+  assertAccount(account)
   if (
     rows.some((item) => item.id === invitationId && item.status === "pending")
   ) {
@@ -590,6 +678,7 @@ export async function removeClassroomMemberOnServer(
   const account = accountScope()
   try {
     const rows = await api.classroomRoster(classroomId)
+    assertAccount(account)
     if (rows.some((member) => member.user_id === memberId)) {
       await api.removeClassroomMember(classroomId, memberId)
     }
@@ -703,6 +792,7 @@ export function joinClassroom(
   member: MemberInput
 ): Classroom | null {
   const normalised = code.trim().toUpperCase()
+  if (!normalised) return null
   const classroom = getClassroomSnapshot().find(
     (item) => item.join_code === normalised
   )
@@ -788,10 +878,14 @@ export function getClassroom(classroomId: string): Classroom | null {
 
 /** Imperative selection read for non-React consumers such as hydration helpers. */
 export function getSelectedClassroomId(): string | null {
-  return getSelectedSnapshot()
+  const id = getSelectedSnapshot()
+  return getClassroomSnapshot().some((classroom) => classroom.id === id)
+    ? id
+    : null
 }
 
 export function useClassrooms(): Classroom[] {
+  useAuth()
   return useSyncExternalStore(
     subscribe,
     getClassroomSnapshot,

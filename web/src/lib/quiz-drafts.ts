@@ -2,6 +2,14 @@ import { useSyncExternalStore } from "react"
 
 import { getAuth, useAuth } from "./auth"
 import type { ExamDraft } from "./types"
+import {
+  isRecord,
+  localId,
+  nonEmpty,
+  nonNegativeInteger,
+  uniqueBy,
+  validDate,
+} from "./local-validation"
 
 export interface SavedQuizDraft extends ExamDraft {
   draft_id: string
@@ -29,10 +37,43 @@ function isDraft(value: unknown): value is SavedQuizDraft {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<SavedQuizDraft>
   return (
-    typeof candidate.draft_id === "string" &&
+    nonEmpty(candidate.draft_id) &&
     typeof candidate.title === "string" &&
-    typeof candidate.updated_at === "string" &&
-    Array.isArray(candidate.questions)
+    validDate(candidate.updated_at) &&
+    Array.isArray(candidate.questions) &&
+    candidate.questions.every(
+      (question) =>
+        isRecord(question) &&
+        typeof question.question === "string" &&
+        Array.isArray(question.options) &&
+        question.options.every((option) => typeof option === "string") &&
+        nonNegativeInteger(question.answer) &&
+        (question.points === undefined ||
+          (typeof question.points === "number" &&
+            Number.isFinite(question.points))) &&
+        (question.feedback === undefined ||
+          typeof question.feedback === "string")
+    ) &&
+    [
+      candidate.duration_minutes,
+      candidate.max_attempts,
+      candidate.late_grace_minutes,
+    ].every(
+      (setting) =>
+        setting === undefined ||
+        (typeof setting === "number" && Number.isFinite(setting))
+    ) &&
+    [
+      candidate.opens_at,
+      candidate.closes_at,
+      candidate.classroom_id,
+      candidate.instructions,
+      candidate.id,
+    ].every(
+      (setting) => setting === undefined || typeof setting === "string"
+    ) &&
+    (candidate.allow_late === undefined ||
+      typeof candidate.allow_late === "boolean")
   )
 }
 
@@ -40,7 +81,10 @@ function parseDrafts(raw: string | null): SavedQuizDraft[] {
   try {
     const parsed: unknown = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed)
-      ? parsed.filter(isDraft).slice(0, MAX_DRAFTS)
+      ? uniqueBy(parsed.filter(isDraft), (draft) => draft.draft_id).slice(
+          0,
+          MAX_DRAFTS
+        )
       : []
   } catch {
     return []
@@ -118,7 +162,7 @@ export function saveQuizDraft(
   const userId = currentUserId()
   const saved: SavedQuizDraft = {
     ...draft,
-    draft_id: draftId ?? `draft-${Date.now().toString(36)}`,
+    draft_id: draftId ?? localId("draft"),
     updated_at: new Date().toISOString(),
     questions: draft.questions.map((question) => ({
       ...question,

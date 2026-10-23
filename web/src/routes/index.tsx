@@ -129,7 +129,7 @@ function HomePage() {
 
   function signOut(): void {
     clearAuth()
-    void queryClient.invalidateQueries()
+    queryClient.clear()
     toast.info("Signed out")
   }
 

@@ -27,6 +27,11 @@ func HTTPBackendProbe(client HTTPDoer, urls map[string]string, timeout time.Dura
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
+	if httpClient, ok := client.(*http.Client); ok {
+		copyClient := *httpClient
+		copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copyClient
+	}
 	return func(ctx context.Context, backend string) ProbeResult {
 		base := strings.TrimRight(strings.TrimSpace(urls[backend]), "/")
 		if base == "" {
@@ -81,8 +86,13 @@ func probeWithBackend(ctx context.Context, client HTTPDoer, timeout time.Duratio
 	}
 	defer resp.Body.Close()
 	if decode != nil {
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(decode); err != nil {
+		decoder := json.NewDecoder(io.LimitReader(resp.Body, (1<<20)+1))
+		if err := decoder.Decode(decode); err != nil {
 			return resp.StatusCode, err
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return resp.StatusCode, fmt.Errorf("invalid trailing health data")
 		}
 	} else {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

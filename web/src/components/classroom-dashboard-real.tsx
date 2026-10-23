@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   BookOpenIcon,
@@ -118,7 +118,18 @@ export function filterRoster(
 }
 
 export function classInviteUrl(code: string, origin: string): string {
-  return `${origin}/?join_class=${encodeURIComponent(code)}`
+  return `${origin.replace(/\/+$/, "")}/?join_class=${encodeURIComponent(code)}`
+}
+
+export function classCodeFromInput(input: string): string {
+  const value = input.trim()
+  try {
+    return (new URL(value).searchParams.get("join_class") ?? value)
+      .trim()
+      .toUpperCase()
+  } catch {
+    return value.toUpperCase()
+  }
 }
 
 function initials(name: string): string {
@@ -127,7 +138,7 @@ function initials(name: string): string {
     ? "?"
     : words
         .slice(0, 2)
-        .map((word) => word[0])
+        .map((word) => Array.from(word)[0])
         .join("")
         .toUpperCase()
 }
@@ -161,6 +172,7 @@ export function ClassroomDashboard({
     "ready"
   )
   const [writePending, setWritePending] = useState(false)
+  const writeLock = useRef(false)
   const [pendingCreateId, setPendingCreateId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -230,6 +242,7 @@ export function ClassroomDashboard({
   }
 
   async function createClass(): Promise<void> {
+    if (writeLock.current) return
     if (!isTeacher || !auth.user) return
     if (!className.trim()) {
       toast.error("Give your class a name first")
@@ -250,6 +263,7 @@ export function ClassroomDashboard({
       })
       setPendingCreateId(draft.id)
     }
+    writeLock.current = true
     setWritePending(true)
     try {
       const created = await createClassroomOnServer(draft)
@@ -263,11 +277,14 @@ export function ClassroomDashboard({
       toast.success(`${created.name} created`)
       resetDialog()
     } finally {
+      writeLock.current = false
       setWritePending(false)
     }
   }
 
   async function retryCreate(classroom: Classroom): Promise<void> {
+    if (writeLock.current) return
+    writeLock.current = true
     setWritePending(true)
     try {
       const synced = await createClassroomOnServer(classroom)
@@ -284,11 +301,17 @@ export function ClassroomDashboard({
         error instanceof Error ? error.message : "Could not sync the class"
       )
     } finally {
+      writeLock.current = false
       setWritePending(false)
     }
   }
 
   async function joinClass(): Promise<void> {
+    if (writeLock.current) return
+    if (isTeacher) {
+      toast.error("Sign in with a learner account to join a class")
+      return
+    }
     if (!auth.user) {
       const target = `/?join_class=${encodeURIComponent(joinCode.trim().toUpperCase())}`
       window.location.assign(`/login?redirect=${encodeURIComponent(target)}`)
@@ -298,9 +321,10 @@ export function ClassroomDashboard({
       toast.error("Enter the class code")
       return
     }
+    writeLock.current = true
     setWritePending(true)
     try {
-      const joined = await joinClassroomOnServer(joinCode.trim(), {
+      const joined = await joinClassroomOnServer(classCodeFromInput(joinCode), {
         id: auth.user.user_id,
         name: auth.user.name,
         email: auth.user.email,
@@ -311,15 +335,19 @@ export function ClassroomDashboard({
         )
         return
       }
-      window.history.replaceState({}, "", window.location.pathname)
+      const location = new URL(window.location.href)
+      location.searchParams.delete("join_class")
+      window.history.replaceState(window.history.state, "", location.href)
       resetDialog()
       toast.success(`Joined ${joined.name}`)
     } finally {
+      writeLock.current = false
       setWritePending(false)
     }
   }
 
   async function inviteMember(): Promise<void> {
+    if (writeLock.current) return
     if (!selected || !isTeacher) return
     if (
       !memberName.trim() ||
@@ -328,6 +356,7 @@ export function ClassroomDashboard({
       toast.error("Enter the learner's name and a valid email")
       return
     }
+    writeLock.current = true
     setWritePending(true)
     try {
       const invitation = await inviteClassroomMemberOnServer(selected.id, {
@@ -355,16 +384,19 @@ export function ClassroomDashboard({
           : "Could not create the invitation. Retry to check the server first."
       )
     } finally {
+      writeLock.current = false
       setWritePending(false)
     }
   }
 
   async function saveClassDetails(): Promise<void> {
+    if (writeLock.current) return
     if (!selected || !isTeacher) return
     if (!editName.trim()) {
       toast.error("Give the class a name")
       return
     }
+    writeLock.current = true
     setWritePending(true)
     try {
       await updateClassroomOnServer(selected.id, {
@@ -378,6 +410,7 @@ export function ClassroomDashboard({
         error instanceof Error ? error.message : "Could not update the class"
       )
     } finally {
+      writeLock.current = false
       setWritePending(false)
     }
   }
@@ -883,9 +916,21 @@ export function ClassroomDashboard({
 
       <Dialog
         open={dialog === "create"}
-        onOpenChange={(open) => !open && resetDialog()}
+        onOpenChange={(open) => !open && !writePending && resetDialog()}
       >
-        <DialogContent>
+        <DialogContent
+          aria-busy={writePending}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.nativeEvent.isComposing &&
+              event.target instanceof HTMLInputElement
+            ) {
+              event.preventDefault()
+              if (!writePending) void createClass()
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Create a class</DialogTitle>
             <DialogDescription>
@@ -897,6 +942,7 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="class-name">Class name</FieldLabel>
               <Input
                 id="class-name"
+                maxLength={100}
                 value={className}
                 onChange={(event) => setClassName(event.target.value)}
                 placeholder="Systems 101"
@@ -906,6 +952,7 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="class-subject">Subject</FieldLabel>
               <Input
                 id="class-subject"
+                maxLength={1000}
                 value={subject}
                 onChange={(event) => setSubject(event.target.value)}
                 placeholder="Distributed systems"
@@ -916,7 +963,11 @@ export function ClassroomDashboard({
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button variant="outline" onClick={resetDialog}>
+            <Button
+              variant="outline"
+              disabled={writePending}
+              onClick={resetDialog}
+            >
               Cancel
             </Button>
             <Button
@@ -935,9 +986,21 @@ export function ClassroomDashboard({
 
       <Dialog
         open={dialog === "edit"}
-        onOpenChange={(open) => !open && setDialog(null)}
+        onOpenChange={(open) => !open && !writePending && setDialog(null)}
       >
-        <DialogContent>
+        <DialogContent
+          aria-busy={writePending}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.nativeEvent.isComposing &&
+              event.target instanceof HTMLInputElement
+            ) {
+              event.preventDefault()
+              if (!writePending) void saveClassDetails()
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Edit class</DialogTitle>
             <DialogDescription>
@@ -949,6 +1012,7 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="edit-class-name">Class name</FieldLabel>
               <Input
                 id="edit-class-name"
+                maxLength={100}
                 value={editName}
                 onChange={(event) => setEditName(event.target.value)}
               />
@@ -957,13 +1021,18 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="edit-class-subject">Subject</FieldLabel>
               <Input
                 id="edit-class-subject"
+                maxLength={1000}
                 value={editSubject}
                 onChange={(event) => setEditSubject(event.target.value)}
               />
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialog(null)}>
+            <Button
+              variant="outline"
+              disabled={writePending}
+              onClick={() => setDialog(null)}
+            >
               Cancel
             </Button>
             <Button
@@ -978,9 +1047,21 @@ export function ClassroomDashboard({
 
       <Dialog
         open={dialog === "join"}
-        onOpenChange={(open) => !open && resetDialog()}
+        onOpenChange={(open) => !open && !writePending && resetDialog()}
       >
-        <DialogContent>
+        <DialogContent
+          aria-busy={writePending}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.nativeEvent.isComposing &&
+              event.target instanceof HTMLInputElement
+            ) {
+              event.preventDefault()
+              if (!writePending) void joinClass()
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Join a class</DialogTitle>
             <DialogDescription>
@@ -996,9 +1077,7 @@ export function ClassroomDashboard({
                 <Input
                   id="join-class-code"
                   value={joinCode}
-                  onChange={(event) =>
-                    setJoinCode(event.target.value.toUpperCase())
-                  }
+                  onChange={(event) => setJoinCode(event.target.value)}
                   placeholder="ABC123"
                   autoCapitalize="characters"
                   spellCheck={false}
@@ -1023,7 +1102,11 @@ export function ClassroomDashboard({
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={resetDialog}>
+            <Button
+              variant="outline"
+              disabled={writePending}
+              onClick={resetDialog}
+            >
               Cancel
             </Button>
             {auth.user ? (
@@ -1040,9 +1123,21 @@ export function ClassroomDashboard({
 
       <Dialog
         open={dialog === "invite"}
-        onOpenChange={(open) => !open && resetDialog()}
+        onOpenChange={(open) => !open && !writePending && resetDialog()}
       >
-        <DialogContent>
+        <DialogContent
+          aria-busy={writePending}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.nativeEvent.isComposing &&
+              event.target instanceof HTMLInputElement
+            ) {
+              event.preventDefault()
+              if (!writePending) void inviteMember()
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Invite a learner</DialogTitle>
             <DialogDescription>
@@ -1055,6 +1150,7 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="member-name">Learner name</FieldLabel>
               <Input
                 id="member-name"
+                maxLength={80}
                 value={memberName}
                 onChange={(event) => setMemberName(event.target.value)}
                 placeholder="Lin Chen"
@@ -1064,6 +1160,7 @@ export function ClassroomDashboard({
               <FieldLabel htmlFor="member-email">Learner email</FieldLabel>
               <Input
                 id="member-email"
+                maxLength={120}
                 type="email"
                 value={memberEmail}
                 onChange={(event) => setMemberEmail(event.target.value)}
@@ -1072,7 +1169,11 @@ export function ClassroomDashboard({
             </Field>
           </FieldGroup>
           <DialogFooter>
-            <Button variant="outline" onClick={resetDialog}>
+            <Button
+              variant="outline"
+              disabled={writePending}
+              onClick={resetDialog}
+            >
               Cancel
             </Button>
             <Button disabled={writePending} onClick={() => void inviteMember()}>

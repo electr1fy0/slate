@@ -1,0 +1,33 @@
+ok  	github.com/ayush/slate/cmd/api	3.381s
+?   	github.com/ayush/slate/cmd/demo	[no test files]
+?   	github.com/ayush/slate/cmd/demo-control	[no test files]
+?   	github.com/ayush/slate/cmd/demo-monitor	[no test files]
+ok  	github.com/ayush/slate/cmd/demo-reconciler	1.616s
+?   	github.com/ayush/slate/cmd/demo-verifier	[no test files]
+ok  	github.com/ayush/slate/cmd/failover-ops	1.785s
+ok  	github.com/ayush/slate/cmd/health-verifier	1.702s
+ok  	github.com/ayush/slate/cmd/reconciler	1.700s
+?   	github.com/ayush/slate/cmd/router	[no test files]
+ok  	github.com/ayush/slate/integration	5.036s
+--- FAIL: TestPasswordChangeAndResetRevokeSessionsAndEnforceSingleUseExpiry (3.19s)
+    qol_test.go:48: profile patch response/session = (*model.User)(nil), invalid or expired session
+--- FAIL: TestPasswordUpdatesInvalidateEveryOutstandingResetToken (3.53s)
+    qol_test.go:135: invalid password reset record
+FAIL
+FAIL	github.com/ayush/slate/internal/auth	82.594s
+ok  	github.com/ayush/slate/internal/boards	1.654s
+ok  	github.com/ayush/slate/internal/chaos	1.560s
+ok  	github.com/ayush/slate/internal/classrooms	1.514s
+?   	github.com/ayush/slate/internal/clusterstate	[no test files]
+ok  	github.com/ayush/slate/internal/config	1.402s
+ok  	github.com/ayush/slate/internal/continuum	1.953s
+ok  	github.com/ayush/slate/internal/control	1.446s
+ok  	github.com/ayush/slate/internal/emaildelivery	1.379s
+ok  	github.com/ayush/slate/internal/exams	1.445s
+ok  	github.com/ayush/slate/internal/health	1.352s
+ok  	github.com/ayush/slate/internal/httpapi	259.915s
+ok  	github.com/ayush/slate/internal/middleware	1.526s
+?   	github.com/ayush/slate/internal/model	[no test files]
+ok  	github.com/ayush/slate/internal/store	1.668s
+?   	github.com/ayush/slate/web/node_modules/flatted/golang/pkg/flatted	[no test files]
+FAIL

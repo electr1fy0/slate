@@ -13,6 +13,8 @@ export function readQuizProgress(
   scope: ExamScope,
   questionCount: number
 ): QuizProgress {
+  questionCount =
+    Number.isSafeInteger(questionCount) && questionCount > 0 ? questionCount : 0
   try {
     if (typeof window === "undefined")
       return { position: 0, flaggedIndices: [] }
@@ -49,6 +51,14 @@ export function writeQuizProgress(
   scope: ExamScope,
   progress: QuizProgress
 ): boolean {
+  if (
+    !Number.isSafeInteger(progress.position) ||
+    progress.position < 0 ||
+    !progress.flaggedIndices.every(
+      (index) => Number.isSafeInteger(index) && index >= 0
+    )
+  )
+    return false
   try {
     if (typeof window === "undefined") return false
     window.localStorage.setItem(key(scope), JSON.stringify(progress))
@@ -62,6 +72,7 @@ export function toggleFlaggedQuestion(
   indices: number[],
   index: number
 ): number[] {
+  if (!Number.isSafeInteger(index) || index < 0) return indices
   return indices.includes(index)
     ? indices.filter((item) => item !== index)
     : [...indices, index].sort((a, b) => a - b)
@@ -73,6 +84,12 @@ export function visibleQuestionPositions(
   flaggedIndices: number[],
   answers: Partial<Record<number, number>>
 ): number[] {
+  if (
+    !Number.isSafeInteger(questionCount) ||
+    questionCount < 0 ||
+    questionCount > 10_000
+  )
+    return []
   const positions = Array.from({ length: questionCount }, (_, index) => index)
   if (filter === "flagged")
     return positions.filter((index) => flaggedIndices.includes(index))

@@ -3,11 +3,15 @@
 package emaildelivery
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
+	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strconv"
 	"strings"
@@ -34,6 +38,14 @@ func (s SMTP) send(ctx context.Context, to, subject, body string) error {
 	from := strings.TrimSpace(s.Settings.SMTPFrom)
 	if host == "" || from == "" {
 		return fmt.Errorf("SMTP delivery is not configured")
+	}
+	fromAddress, err := mail.ParseAddress(from)
+	if err != nil {
+		return fmt.Errorf("invalid SMTP sender: %w", err)
+	}
+	toAddress, err := mail.ParseAddress(to)
+	if err != nil {
+		return fmt.Errorf("invalid SMTP recipient: %w", err)
 	}
 	port := s.Settings.SMTPPort
 	if port <= 0 {
@@ -72,14 +84,27 @@ func (s SMTP) send(ctx context.Context, to, subject, body string) error {
 			return fmt.Errorf("SMTP authentication failed: %w", err)
 		}
 	}
-	message := "From: " + safeHeader(from) + "\r\n" +
+	transferEncoding := "7bit"
+	if strings.IndexFunc(body, func(r rune) bool { return r > 127 }) >= 0 {
+		var encoded bytes.Buffer
+		writer := quotedprintable.NewWriter(&encoded)
+		if _, err := writer.Write([]byte(body)); err != nil {
+			return err
+		}
+		if err := writer.Close(); err != nil {
+			return err
+		}
+		body = encoded.String()
+		transferEncoding = "quoted-printable"
+	}
+	message := "From: " + fromAddress.String() + "\r\n" +
 		"To: " + safeHeader(to) + "\r\n" +
-		"Subject: " + safeHeader(subject) + "\r\n" +
-		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body
-	if err := client.Mail(from); err != nil {
+		"Subject: " + mime.QEncoding.Encode("UTF-8", safeHeader(subject)) + "\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: " + transferEncoding + "\r\n\r\n" + body
+	if err := client.Mail(fromAddress.Address); err != nil {
 		return err
 	}
-	if err := client.Rcpt(to); err != nil {
+	if err := client.Rcpt(toAddress.Address); err != nil {
 		return err
 	}
 	writer, err := client.Data()

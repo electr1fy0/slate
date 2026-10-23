@@ -1,0 +1,341 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[margin=22mm,headheight=14pt]{geometry}
+\usepackage{booktabs,longtable,array,xcolor,hyperref,fancyhdr}
+\definecolor{accent}{HTML}{155E75}
+\definecolor{ink}{HTML}{172B3A}
+\hypersetup{hypertexnames=false,colorlinks=true,linkcolor=accent,urlcolor=accent,pdftitle={Continuum: 200 Quality Fixes},pdfauthor={Continuum project}}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{accent}CONTINUUM}
+\fancyhead[R]{\small Quality fixes}
+\fancyfoot[C]{\thepage}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{2em}
+\begin{document}
+\begin{titlepage}
+\color{ink}
+{\large\color{accent}PROJECT ENGINEERING REPORT\par}
+\vspace{20mm}
+{\Huge\bfseries Continuum\par}
+\vspace{5mm}
+{\LARGE Quality fixes and verification\par}
+\vspace{8mm}
+{\large 200 additional corrections\par}
+\vspace{8mm}
+\noindent\rule{\textwidth}{0.8pt}
+\vspace{8mm}
+Timed assessments and collaborative learning.\par
+Classroom management, teacher authoring, and application recovery.
+\vfill
+{\large 23 October 2026\par}
+Baseline revision\par
+{\footnotesize\texttt{1ec26fb0b59cb4704ccce28b93fc4046da5a35f4}\par}
+\vspace{6mm}
+Technical supplement to the project and quality audit.
+\end{titlepage}
+\section{Project context}
+Continuum uses a Go backend and a React/TypeScript frontend. The backend separates HTTP transport, authentication, assessment rules, classroom operations, collaborative boards, storage, health checks, and recovery coordination. DynamoDB and in-memory stores provide the persistence interfaces. The frontend uses TanStack Router and Query, Base UI components, and Excalidraw for collaborative canvases.
+
+The correction batch concentrates on browser state, asynchronous operations, validation, telemetry, and interaction quality. The deployment configuration and live AWS resources are outside this change.
+
+\section{Scope and outcomes}
+The register contains 200 additional correction entries covering behavioral defects, invalid-data contracts, recovery edge cases, accessibility, and polish. Related entries can share a code path while having different triggers or visible outcomes. The total does not represent 200 production incidents or 200 independent root causes.
+
+The earlier 120-item audit remains a historical baseline. Its findings are not all marked resolved by this batch. The fixed-calendar authentication tests identified as CQ-119 were also repaired as a verification prerequisite; that repair is excluded from the 200-entry count.
+
+\begin{center}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Area & Corrections\\
+\midrule
+Identity and API & 41\\
+Navigation, assessment UX and access & 49\\
+Authoring & 33\\
+Boards and history & 21\\
+Recovery and telemetry & 25\\
+Classrooms & 31\\
+\midrule
+Total & 200\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Material behavior changes}
+Browser restoration checks the shape and identity of saved records before using them. Pending submissions preserve answer snapshots across retries, and recovery selects the latest attempt. Draft identities remain distinct when saves happen in the same millisecond.
+
+Classroom operations reject account changes between preflight and mutation. Sequence checks prevent older list and roster responses from overwriting newer state. Details updates preserve concurrently changed membership.
+
+Quiz settings retain unsaved edits during catalog refreshes. Pending dialogs prevent overlapping actions and accidental dismissal. Teacher previews show complete options, weights, feedback, and deliberate line breaks.
+
+HTTP and recovery checks reject malformed measurements and responses without producing invalid JSON. Routing applies a deadline to control-state reads, and proxies and health checks stop following redirects automatically. SMTP messages use valid envelopes and MIME encoding for international text.
+
+\section{Verification}
+The full Go package suite passes with the race detector and a 30-minute test timeout. Go vet passes. The frontend passes type checking, lint, the production build, 238 unit/component tests across 30 files, and eight Playwright journeys.
+
+New regression coverage exercises corrupted storage, identity changes during requests, response ordering, retry payload stability, imported data, JWT boundaries, request parsing, telemetry values, HTTP status capture, redirect handling, Unicode email delivery, previews, dialogs, and navigation inputs.
+
+The automated journeys run against isolated local services. These checks do not establish production deployment behavior, live email-provider interoperability, or exhaustive assistive-technology coverage. Existing production-build warnings about large chunks and route exports remain.
+
+\section{Correction register}
+The numbered entries correspond to the machine-readable JSON and Markdown registers in the repository. File headers identify the relevant implementation. Source and regression tests are included in the commit.
+
+\begingroup
+\small
+\setlength{\tabcolsep}{0pt}
+\begin{longtable}{@{}p{0.15\textwidth}p{0.85\textwidth}@{}}
+\toprule
+ID & Corrected behavior\\
+\midrule
+\endfirsthead
+\toprule
+ID & Corrected behavior (continued)\\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/auth.ts}}\\*[3pt]
+\texttt{QF-001} & Blank persisted user IDs created an authenticated session\\[5pt]
+\texttt{QF-002} & Unknown persisted roles were silently changed to student\\[5pt]
+\texttt{QF-003} & Non-text profile fields were coerced into misleading display strings\\[5pt]
+\texttt{QF-004} & Partial token records produced authenticated pages without a usable session\\[5pt]
+\texttt{QF-005} & Caller mutations silently changed the auth snapshot\\[5pt]
+\texttt{QF-006} & Unrelated session-storage events reloaded local auth\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/api.ts}}\\*[3pt]
+\texttt{QF-007} & Trailing slashes and whitespace in API origins produced malformed URLs\\[5pt]
+\texttt{QF-008} & Headers objects and tuple headers lost their contents\\[5pt]
+\texttt{QF-009} & Lowercase authorization headers were overwritten\\[5pt]
+\texttt{QF-010} & Public authentication requests carried the previous user's bearer token\\[5pt]
+\texttt{QF-011} & A rejected login retried through the old account's refresh token\\[5pt]
+\texttt{QF-012} & Malformed refresh responses replaced valid credentials\\[5pt]
+\texttt{QF-013} & Top-level API error codes disappeared\\[5pt]
+\texttt{QF-014} & Error-string responses lost their actionable message\\[5pt]
+\texttt{QF-015} & Successful 205 responses failed JSON parsing\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/pending-submission.ts}}\\*[3pt]
+\texttt{QF-016} & Array-shaped pending answers passed object validation\\[5pt]
+\texttt{QF-017} & Noncanonical saved question keys changed answer identity on reload\\[5pt]
+\texttt{QF-018} & Fractional or negative saved choices survived restoration\\[5pt]
+\texttt{QF-019} & Invalid pending attempt numbers escaped scope checks\\[5pt]
+\texttt{QF-020} & Blank generated request IDs created unusable retry records\\[5pt]
+\texttt{QF-021} & Invalid pending timestamps corrupted recovery ordering\\[5pt]
+\texttt{QF-022} & Pending records stored under a different attempt key were recovered\\[5pt]
+\texttt{QF-023} & An older attempt with a later timestamp hid a newer pending attempt\\[5pt]
+\texttt{QF-024} & Invalid retry counts ended without the expected final error\\[5pt]
+\texttt{QF-025} & Invalid retry delays overflowed browser timers\\[5pt]
+\texttt{QF-026} & A submit callback could mutate the next retry's payload\\[5pt]
+\texttt{QF-027} & HTTP 408 submission failures were not retried\\[5pt]
+\texttt{QF-028} & HTTP 500 submission failures were not retried\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/quiz-drafts.ts}}\\*[3pt]
+\texttt{QF-029} & Malformed nested draft questions crashed the builder\\[5pt]
+\texttt{QF-030} & Malformed optional draft settings reached rendering and API requests\\[5pt]
+\texttt{QF-031} & Duplicate stored draft IDs rendered duplicate controls\\[5pt]
+\texttt{QF-032} & Drafts saved in the same millisecond overwrote each other\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/question-bank.ts}}\\*[3pt]
+\texttt{QF-033} & Blank bank identities made items impossible to target reliably\\[5pt]
+\texttt{QF-034} & Invalid bank timestamps rendered invalid dates\\[5pt]
+\texttt{QF-035} & Malformed option lists reached the question builder\\[5pt]
+\texttt{QF-036} & Out-of-range saved correct answers could be inserted\\[5pt]
+\texttt{QF-037} & Malformed saved scoring or feedback fields broke authoring\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/board-history.ts}}\\*[3pt]
+\texttt{QF-038} & Blank room identities appeared in board history\\[5pt]
+\texttt{QF-039} & Invalid history timestamps broke sorting and date display\\[5pt]
+\texttt{QF-040} & Invalid visit counts rendered nonsensical history\\[5pt]
+\texttt{QF-041} & Duplicate saved board rows produced duplicate controls\\[5pt]
+\texttt{QF-042} & History was truncated before selecting the most recent visits\\[5pt]
+\texttt{QF-043} & Board history stayed stale when another tab changed it\\[5pt]
+\texttt{QF-044} & Visit counters could overflow safe integer precision\\[5pt]
+\texttt{QF-045} & History merge sorted timezone strings instead of instants\\[5pt]
+\texttt{QF-046} & Equal-time board rows had unstable ordering\\[5pt]
+\texttt{QF-047} & Downloads clicked a detached anchor\\[5pt]
+\texttt{QF-048} & Downloads revoked their blob before the browser consumed it\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/recent-rooms.ts}}\\*[3pt]
+\texttt{QF-049} & Empty recent-room entries created broken navigation\\[5pt]
+\texttt{QF-050} & Duplicate recent rooms displaced usable history\\[5pt]
+\texttt{QF-051} & Recent-room changes in another tab were not reflected\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/quiz-progress.ts}}\\*[3pt]
+\texttt{QF-052} & Invalid question counts produced invalid restored positions or unbounded arrays\\[5pt]
+\texttt{QF-053} & Invalid progress records were reported as successfully persisted\\[5pt]
+\texttt{QF-054} & Invalid flag targets polluted question navigation\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/assessment-history.ts}}\\*[3pt]
+\texttt{QF-055} & Unknown attempt statuses bypassed coherent status filtering\\[5pt]
+\texttt{QF-056} & Invalid assessment dates destabilized sorting\\[5pt]
+\texttt{QF-057} & Invalid retake counters enabled impossible retakes\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/auth/auth.go}}\\*[3pt]
+\texttt{QF-058} & Email local parts with repeated or boundary dots were accepted\\[5pt]
+\texttt{QF-059} & Invalid DNS labels were accepted as email domains\\[5pt]
+\texttt{QF-060} & Overlength emails bypassed validation outside HTTP registration\\[5pt]
+\texttt{QF-061} & The auth service itself allowed invalid email identities\\[5pt]
+\texttt{QF-062} & Missing profile updates returned a successful null user\\[5pt]
+\texttt{QF-063} & Token issuance panicked on a missing user\\[5pt]
+\texttt{QF-064} & Unknown token types could be minted\\[5pt]
+\texttt{QF-065} & Subsecond token lifetimes minted already expired credentials\\[5pt]
+\texttt{QF-066} & Signed JWTs without expiration were accepted\\[5pt]
+\texttt{QF-067} & JWTs issued in the future were accepted\\[5pt]
+\texttt{QF-068} & Nil decoded tokens panicked\\[5pt]
+\texttt{QF-069} & Whitespace-only JWT subjects passed subject validation\\[5pt]
+\texttt{QF-070} & Fractional, negative or overflowing session versions were accepted\\[5pt]
+\texttt{QF-071} & Bearer headers with valid tab separators failed parsing\\[5pt]
+\texttt{QF-072} & Admin token comparison used variable-time equality\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/httpapi/server.go}}\\*[3pt]
+\texttt{QF-073} & Generated fallback quiz IDs shared the high-order clock prefix\\[5pt]
+\texttt{QF-074} & Integer query parameters accepted trailing junk\\[5pt]
+\texttt{QF-075} & Submission timestamps were sorted lexicographically\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/middleware/middleware.go}}\\*[3pt]
+\texttt{QF-076} & Unbounded caller request IDs were echoed into responses\\[5pt]
+\texttt{QF-077} & Flushed responses could lose their correlation ID\\[5pt]
+\texttt{QF-078} & Log fields could overwrite the event identity and timestamp\\[5pt]
+\texttt{QF-079} & An unserializable log field silently erased the whole event\\[5pt]
+\texttt{QF-080} & Expired rate-limit clients accumulated indefinitely\\[5pt]
+\texttt{QF-081} & Retry-After rounded down and invited premature retry\\[5pt]
+\texttt{QF-082} & Integer formatting corrupted the minimum integer\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/health/deep.go}}\\*[3pt]
+\texttt{QF-083} & Invalid error-rate measurements broke health JSON or reported healthy\\[5pt]
+\texttt{QF-084} & Impossible used-disk values were accepted\\[5pt]
+\texttt{QF-085} & Invalid load measurements broke health JSON or reported healthy\\[5pt]
+\texttt{QF-086} & Cancellation during the final health probe still reported healthy\\[5pt]
+\texttt{QF-087} & The standard load parser accepted nonfinite and negative readings\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/chaos/state.go}}\\*[3pt]
+\texttt{QF-088} & A canceled zero-latency request still reached the handler\\[5pt]
+\texttt{QF-089} & An arbitrary Upgrade header bypassed injected faults\\[5pt]
+\texttt{QF-090} & Database-stall simulation omitted retake writes\\[5pt]
+\texttt{QF-091} & Informational HTTP statuses hid the final response status\\[5pt]
+\texttt{QF-092} & Flushing before writing recorded a different final status\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/quiz-preview-dialog.tsx}}\\*[3pt]
+\texttt{QF-093} & Loading previews had no status announcement\\[5pt]
+\texttt{QF-094} & Preview failures were not announced\\[5pt]
+\texttt{QF-095} & Preview options truncated the text teachers needed to check\\[5pt]
+\texttt{QF-096} & Preview prompts collapsed intentional line breaks\\[5pt]
+\texttt{QF-097} & Preview omitted question weights\\[5pt]
+\texttt{QF-098} & Preview omitted feedback teachers needed to verify\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/board/presence-panel.tsx}}\\*[3pt]
+\texttt{QF-099} & Participant initials split Unicode surrogate pairs\\[5pt]
+\texttt{QF-100} & Large participant lists extended beyond the viewport\\[5pt]
+\texttt{QF-101} & Whitespace participant names appeared blank\\[5pt]
+\texttt{QF-102} & The participant list contained invalid separator markup\\[5pt]
+\texttt{QF-103} & Truncated participant names could not be inspected\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/board/peer-cursors.tsx}}\\*[3pt]
+\texttt{QF-104} & White cursor labels had poor contrast on bright backgrounds\\[5pt]
+\texttt{QF-105} & Long cursor names could cover the canvas\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/hooks/use-mobile.ts}}\\*[3pt]
+\texttt{QF-106} & Mobile layout disagreed with the media query at viewport boundaries\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/hooks/use-online-status.ts}}\\*[3pt]
+\texttt{QF-107} & Connectivity changes between render and effect were missed\\[5pt]
+\texttt{QF-108} & Restored pages kept stale connectivity state\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/layout/app-shell.tsx}}\\*[3pt]
+\texttt{QF-109} & Keyboard users had no way to skip repeated navigation\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/layout/app-sidebar.tsx}}\\*[3pt]
+\texttt{QF-110} & Account avatars split Unicode surrogate pairs\\[5pt]
+\texttt{QF-111} & Sign-out retained private query results in memory\\[5pt]
+\texttt{QF-112} & Active navigation lacked an accessible current-page indicator\\[5pt]
+\texttt{QF-113} & Mobile navigation stayed open after choosing a page\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/routes/__root.tsx}}\\*[3pt]
+\texttt{QF-114} & Initial client startup displayed a blank page\\[5pt]
+\texttt{QF-115} & Users with JavaScript disabled received no explanation\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/styles.css}}\\*[3pt]
+\texttt{QF-116} & Application animations ignored reduced-motion preferences\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/classrooms.ts}}\\*[3pt]
+\texttt{QF-117} & Malformed cached invitation metadata crashed roster rendering\\[5pt]
+\texttt{QF-118} & Invalid cached class timestamps reached date rendering\\[5pt]
+\texttt{QF-119} & Invalid cached member timestamps broke roster ordering\\[5pt]
+\texttt{QF-120} & Classroom caches ignored changes made in other tabs\\[5pt]
+\texttt{QF-121} & Accepting a cached invitation retained the invitation's identity instead of the learner's\\[5pt]
+\texttt{QF-122} & An older classroom-list response could replace a newer list\\[5pt]
+\texttt{QF-123} & An older roster response could replace a newer roster\\[5pt]
+\texttt{QF-124} & An in-flight roster fetch undid a local membership mutation\\[5pt]
+\texttt{QF-125} & Saving class details overwrote concurrently refreshed members\\[5pt]
+\texttt{QF-126} & A late class update recreated a locally removed class\\[5pt]
+\texttt{QF-127} & A sign-in change between preflight and mutation sent the mutation as the new user\\[5pt]
+\texttt{QF-128} & Deleting a synced class missing from a limited catalog only deleted its local copy\\[5pt]
+\texttt{QF-129} & Leaving a synced class missing from a limited catalog only removed it locally\\[5pt]
+\texttt{QF-130} & An empty local join code matched an unsynced class\\[5pt]
+\texttt{QF-131} & Imperative selection returned IDs of missing classes\\[5pt]
+\texttt{QF-132} & Classroom hooks did not subscribe directly to identity changes\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/classroom-dashboard-real.tsx}}\\*[3pt]
+\texttt{QF-133} & Invitation links had duplicate slashes for origins ending in a slash\\[5pt]
+\texttt{QF-134} & Roster initials split Unicode surrogate pairs\\[5pt]
+\texttt{QF-135} & Repeated class write clicks could create overlapping operations\\[5pt]
+\texttt{QF-136} & The join dialog promised invitation URLs but submitted the entire URL as a code\\[5pt]
+\texttt{QF-137} & Joining a class removed unrelated query parameters and router history state\\[5pt]
+\texttt{QF-138} & Class dialogs could close while a write was still pending\\[5pt]
+\texttt{QF-139} & The create-class dialog did not submit with Enter\\[5pt]
+\texttt{QF-140} & The edit-class dialog did not submit with Enter\\[5pt]
+\texttt{QF-141} & The join-class dialog did not submit with Enter\\[5pt]
+\texttt{QF-142} & The invitation dialog did not submit with Enter\\[5pt]
+\texttt{QF-143} & Class-name fields allowed values beyond the server contract\\[5pt]
+\texttt{QF-144} & Subject fields allowed values beyond the server contract\\[5pt]
+\texttt{QF-145} & Invitation names allowed values beyond the server contract\\[5pt]
+\texttt{QF-146} & Invitation emails allowed values beyond the server contract\\[5pt]
+\texttt{QF-147} & Teacher accounts attempted learner-only joins without an explanation\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/teacher/edit-exam-dialog.tsx}}\\*[3pt]
+\texttt{QF-148} & Catalog refreshes reset edits in an open settings dialog\\[5pt]
+\texttt{QF-149} & Repeated save clicks could overlap quiz-setting writes\\[5pt]
+\texttt{QF-150} & Invalid local datetimes silently cleared saved boundaries\\[5pt]
+\texttt{QF-151} & A late save response closed a different quiz's dialog\\[5pt]
+\texttt{QF-152} & Quiz settings could close through Escape while saving\\[5pt]
+\texttt{QF-153} & Quiz settings could not save through Enter\\[5pt]
+\texttt{QF-154} & A missing classroom option concealed the current assignment\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/confirm-action.tsx}}\\*[3pt]
+\texttt{QF-155} & Repeated confirmation events could run a destructive action twice\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/lib/teacher-authoring.ts}}\\*[3pt]
+\texttt{QF-156} & Duplicate CSV metadata headers silently selected the first value\\[5pt]
+\texttt{QF-157} & Extra CSV cells were silently discarded\\[5pt]
+\texttt{QF-158} & CSV scoring accepted hexadecimal and other unexpected number syntax\\[5pt]
+\texttt{QF-159} & A UTF-8 BOM prevented otherwise valid JSON imports\\[5pt]
+\texttt{QF-160} & Unbounded import text could freeze parsing and preview\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/teacher/question-import.tsx}}\\*[3pt]
+\texttt{QF-161} & Spellcheck altered the presentation of pasted import data\\[5pt]
+\texttt{QF-162} & Empty imports offered an action that could only fail\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/components/teacher/quiz-builder.tsx}}\\*[3pt]
+\texttt{QF-163} & Loading another draft left obsolete server work queued\\[5pt]
+\texttt{QF-164} & Undoing question removal could inject the question into a different draft\\[5pt]
+\texttt{QF-165} & Rapidly inserting the same bank question produced duplicate React keys\\[5pt]
+\texttt{QF-166} & Bank deduplication hid questions with distinct weights or feedback\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/routes/login.tsx}}\\*[3pt]
+\texttt{QF-167} & Redirect targets containing backslashes or control characters passed the local-path check\\[5pt]
+\texttt{QF-168} & Account-mode switches carried a visible password into the other mode\\[5pt]
+\texttt{QF-169} & Malformed login responses were treated as successful authentication\\[5pt]
+\texttt{QF-170} & Repeated authentication actions could overlap before React disabled them\\[5pt]
+\texttt{QF-171} & Successful password resets retained the revoked browser session\\[5pt]
+\texttt{QF-172} & Successful reset navigation left the used reset token in back history\\[5pt]
+\texttt{QF-173} & Authentication tabs could change while a request was in flight\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/routes/settings.tsx}}\\*[3pt]
+\texttt{QF-174} & Repeated profile-save events could overlap updates\\[5pt]
+\texttt{QF-175} & Repeated password-change events could overlap updates\\[5pt]
+\texttt{QF-176} & Password changes retained private query results after sign-out\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/httpapi/server.go}}\\*[3pt]
+\texttt{QF-177} & CORS preflights did not explicitly allow bearer authorization\\[5pt]
+\texttt{QF-178} & Responses without an allowed Origin omitted the cache Vary key\\[5pt]
+\texttt{QF-179} & Cross-origin clients could not read Retry-After\\[5pt]
+\texttt{QF-180} & Null and non-object JSON bodies were accepted by object endpoints\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/exams/exams.go}}\\*[3pt]
+\texttt{QF-181} & Oversized or control-bearing request IDs reached persistence\\[5pt]
+\texttt{QF-182} & A missing service user could retrieve an exam\\[5pt]
+\texttt{QF-183} & Negative autosave versions were reported as storage outages\\[5pt]
+\texttt{QF-184} & Missing autosave request IDs were reported as storage outages\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/routes/__root.tsx}}\\*[3pt]
+\texttt{QF-185} & Reset-link query tokens could be sent in resource referrers\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/continuum/router.go}}\\*[3pt]
+\texttt{QF-186} & An unconfigured router panicked instead of returning unavailable\\[5pt]
+\texttt{QF-187} & Routing-state reads were outside the request timeout\\[5pt]
+\texttt{QF-188} & Backend redirects bypassed the selected routing target\\[5pt]
+\texttt{QF-189} & Requests with a nil body panicked in the router\\[5pt]
+\texttt{QF-190} & Base64 request decoding allocated the entire oversized payload before checking its limit\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/continuum/probe.go}}\\*[3pt]
+\texttt{QF-191} & Health probes followed redirects to unrelated destinations\\[5pt]
+\texttt{QF-192} & Health probes accepted trailing JSON documents or garbage\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/continuum/local.go}}\\*[3pt]
+\texttt{QF-193} & Timed-out local-demo shutdown returned before closing its listeners\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{internal/emaildelivery/smtp.go}}\\*[3pt]
+\texttt{QF-194} & Display-name sender addresses were sent as invalid SMTP envelopes\\[5pt]
+\texttt{QF-195} & Unicode invitation subjects were sent without MIME encoding\\[5pt]
+\texttt{QF-196} & Unicode email bodies relied on unadvertised eight-bit transport support\\[5pt]
+\multicolumn{2}{@{}p{\textwidth}@{}}{\smallskip\color{accent}\footnotesize\path{web/src/routes/teacher.tsx}}\\*[3pt]
+\texttt{QF-197} & A failed analytics catalog had no retry action\\[5pt]
+\texttt{QF-198} & A failed selected quiz trapped analytics without a selector or retry\\[5pt]
+\texttt{QF-199} & An assessment with no submissions displayed a misleading zero-percent average\\[5pt]
+\texttt{QF-200} & Assessment progress bars lacked accessible names\\[5pt]
+\end{longtable}
+\endgroup
+\end{document}

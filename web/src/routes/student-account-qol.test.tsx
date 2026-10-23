@@ -68,6 +68,7 @@ vi.mock("@tanstack/react-query", async () => {
   const ReactModule = await import("react")
   return {
     useQueryClient: () => ({
+      clear: vi.fn(),
       invalidateQueries: vi.fn(() => Promise.resolve()),
       removeQueries: vi.fn(),
       refetchQueries: vi.fn(() => Promise.resolve()),

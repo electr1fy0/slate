@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { EyeIcon, EyeOffIcon, KeyRoundIcon, UserRoundIcon } from "lucide-react"
 
@@ -41,6 +42,7 @@ export const Route = createFileRoute("/settings")({
 
 export function AccountSettingsPage() {
   const auth = useAuth()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [name, setName] = useState(auth.user?.name ?? "")
   const [currentPassword, setCurrentPassword] = useState("")
@@ -49,6 +51,8 @@ export function AccountSettingsPage() {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [profilePending, setProfilePending] = useState(false)
   const [passwordPending, setPasswordPending] = useState(false)
+  const profileLock = useRef(false)
+  const passwordLock = useRef(false)
 
   useEffect(() => {
     setName(auth.user?.name ?? "")
@@ -62,12 +66,14 @@ export function AccountSettingsPage() {
   }, [auth.user?.user_id])
 
   async function saveProfile() {
+    if (profileLock.current) return
     const requestedUserId = auth.user?.user_id
     const cleanName = name.trim()
     if (!requestedUserId || !cleanName) {
       toast.error("Enter a name")
       return
     }
+    profileLock.current = true
     setProfilePending(true)
     try {
       const updatedUser = await api.updateProfile({ name: cleanName })
@@ -85,11 +91,13 @@ export function AccountSettingsPage() {
         )
       }
     } finally {
+      profileLock.current = false
       setProfilePending(false)
     }
   }
 
   async function changePassword() {
+    if (passwordLock.current) return
     const requestedUserId = auth.user?.user_id
     if (
       !requestedUserId ||
@@ -99,6 +107,7 @@ export function AccountSettingsPage() {
       toast.error("Enter your current password and a valid new password")
       return
     }
+    passwordLock.current = true
     setPasswordPending(true)
     try {
       await api.changePassword({
@@ -109,6 +118,7 @@ export function AccountSettingsPage() {
       setCurrentPassword("")
       setNewPassword("")
       clearAuth()
+      queryClient.clear()
       toast.success("Password changed. Sign in again with your new password.")
       void navigate({ to: "/login" })
     } catch (error) {
@@ -120,6 +130,7 @@ export function AccountSettingsPage() {
         )
       }
     } finally {
+      passwordLock.current = false
       setPasswordPending(false)
     }
   }

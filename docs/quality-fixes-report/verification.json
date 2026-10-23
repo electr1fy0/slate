@@ -1,0 +1,28 @@
+{
+  "baseline": "1ec26fb0b59cb4704ccce28b93fc4046da5a35f4",
+  "correction_entries": 200,
+  "checks": [
+    { "command": "go test -race -timeout 30m ./...", "result": "passed" },
+    { "command": "go vet ./...", "result": "passed" },
+    { "command": "bun run typecheck", "cwd": "web", "result": "passed" },
+    { "command": "bun run lint", "cwd": "web", "result": "passed" },
+    { "command": "bun run test", "cwd": "web", "result": "passed", "files": 30, "tests": 238 },
+    { "command": "bun run build", "cwd": "web", "result": "passed" },
+    { "command": "bunx playwright test", "cwd": "web", "result": "passed", "tests": 8 },
+    { "compiler": "desktop LaTeX compiler", "result": "passed" },
+    { "compiler": "Tectonic", "result": "passed", "layout_warnings": 0 }
+  ],
+  "pdf": {
+    "file": "output/pdf/continuum-quality-fixes-2026-10-23.pdf",
+    "pages": 8,
+    "finding_ids_in_order": 200,
+    "out_of_bounds_words": 0,
+    "all_pages_rendered_and_visually_inspected": true
+  },
+  "limits": [
+    "The count includes hardening and polish, not 200 independent production incidents or root causes.",
+    "The original 120-item audit remains a historical baseline and is not fully resolved by this batch.",
+    "Live AWS resources and external SMTP providers were not exercised.",
+    "Existing production-build chunk-size and route-export warnings remain."
+  ]
+}

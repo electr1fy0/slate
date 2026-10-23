@@ -17,7 +17,9 @@ describe("browser state hooks", () => {
       change = listener
     })
     vi.spyOn(window, "matchMedia").mockReturnValue({
-      matches: false,
+      get matches() {
+        return window.innerWidth < 768
+      },
       media: "(max-width: 767px)",
       onchange: null,
       addListener: vi.fn(),
@@ -26,11 +28,19 @@ describe("browser state hooks", () => {
       removeEventListener: removeChange,
       dispatchEvent: vi.fn(),
     })
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 500, writable: true })
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 500,
+      writable: true,
+    })
 
     const hook = renderHook(() => useIsMobile())
     expect(hook.result.current).toBe(true)
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000, writable: true })
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1000,
+      writable: true,
+    })
     act(() => change?.())
     expect(hook.result.current).toBe(false)
     hook.unmount()
@@ -44,7 +54,10 @@ describe("browser state hooks", () => {
   })
 
   it("follows online and offline browser events", () => {
-    Object.defineProperty(navigator, "onLine", { configurable: true, value: true })
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: true,
+    })
     const hook = renderHook(() => useOnlineStatus())
     expect(hook.result.current).toBe(true)
     act(() => window.dispatchEvent(new Event("offline")))
@@ -57,7 +70,10 @@ describe("browser state hooks", () => {
   })
 
   it("starts offline when the browser reports no network", () => {
-    Object.defineProperty(navigator, "onLine", { configurable: true, value: false })
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    })
     const hook = renderHook(() => useOnlineStatus())
     expect(hook.result.current).toBe(false)
     hook.unmount()

@@ -1,0 +1,265 @@
+[WebServer] 2026/10/23 21:11:33 using in-memory data store
+[WebServer] 2026/10/23 21:11:33 continuum API listening on 127.0.0.1:18080
+[WebServer] 2026/10/23 21:12:02 Continuum local process demo listening at http://127.0.0.1:18480 (backend A=http://127.0.0.1:18481, B=http://127.0.0.1:18482)
+[WebServer] 2026/10/23 21:12:02 This demo uses one shared in-memory store and control pointer; all data resets when the process exits.
+[WebServer] $ vite dev --port 3000 --port "18300"
+[WebServer] (node:99013) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 8 tests using 1 worker
+
+(node:99014) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:10 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:10 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:10 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:12 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:12 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:12 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:13 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:13 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:13 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:14 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:14 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:14 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:15 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:15 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:15 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  1 e2e/board.spec.ts:8:3 › live board › two clients share presence and collaborative cursors (7.7s)
+[WebServer] 9:12:17 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:17 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:17 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:19 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:19 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:19 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  2 e2e/board.spec.ts:91:3 › live board › board index lists recently visited rooms (3.4s)
+[WebServer] 9:12:20 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:20 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:20 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  3 e2e/ops.spec.ts:8:3 › ops console › requires sign-in, then drives a Continuum fault and observes recovery (2.1s)
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:22 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  4 e2e/ops.spec.ts:42:3 › ops console › ops is unreachable without a session (574ms)
+[WebServer] 9:12:23 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:23 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:23 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:25 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:25 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:25 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:26 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:26 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:26 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:28 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:28 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:28 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:29 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:32 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:32 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:32 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  5 e2e/qol.spec.ts:4:1 › a teacher publishes a class assignment and a learner starts, resumes, and recovers its receipt (10.4s)
+[WebServer] 9:12:33 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:33 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:33 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:34 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:34 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:34 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  6 e2e/qol.spec.ts:247:1 › profile and password changes persist through sign-out (3.7s)
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:37 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:38 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:38 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:38 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:39 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:39 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:39 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:40 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:40 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:40 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  7 e2e/quiz.spec.ts:39:3 › quiz journey › student registers, takes the seeded quiz with draft persistence, and reviews results (3.9s)
+[WebServer] 9:12:41 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:41 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:41 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:42 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/login.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - LoginPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:42 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/settings.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - AccountSettingsPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+[WebServer] 9:12:42 PM [vite] (client) [console.warn] [tanstack-router] These exports from "/Users/ayush/Developer/slate/web/src/routes/teacher.tsx" will not be code-split and will increase your bundle size:
+[WebServer] - TeacherPage
+[WebServer] For the best optimization, these items should either have their export statements removed, or be imported from another location that is not a route file.
+  ✓  8 e2e/quiz.spec.ts:83:3 › quiz journey › signed-out users are routed through login when opening a quiz link (2.1s)
+
+  8 passed (1.2m)

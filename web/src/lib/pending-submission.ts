@@ -1,4 +1,10 @@
 import { ApiError } from "./api"
+import {
+  answerMap,
+  nonEmpty,
+  nonNegativeInteger,
+  validDate,
+} from "./local-validation"
 
 export interface ExamScope {
   userId: string
@@ -52,30 +58,25 @@ function storage(): Storage | null {
 }
 
 function validAnswers(value: unknown): value is Record<string, number> {
-  return (
-    !!value &&
-    typeof value === "object" &&
-    Object.values(value).every(
-      (answer) => typeof answer === "number" && Number.isFinite(answer)
-    )
-  )
+  return answerMap(value)
 }
 
 function isPendingSubmission(value: unknown): value is PendingSubmission {
   if (!value || typeof value !== "object") return false
   const candidate = value as Partial<PendingSubmission>
   return (
-    typeof candidate.userId === "string" &&
-    typeof candidate.examId === "string" &&
-    typeof candidate.attemptNumber === "number" &&
-    typeof candidate.requestId === "string" &&
-    candidate.requestId.length > 0 &&
+    nonEmpty(candidate.userId) &&
+    nonEmpty(candidate.examId) &&
+    nonNegativeInteger(candidate.attemptNumber) &&
+    candidate.attemptNumber > 0 &&
+    nonEmpty(candidate.requestId) &&
     validAnswers(candidate.answers) &&
     (candidate.status === "buffered" ||
       candidate.status === "submitting" ||
       candidate.status === "blocked") &&
-    typeof candidate.createdAt === "string" &&
-    typeof candidate.updatedAt === "string"
+    validDate(candidate.createdAt) &&
+    validDate(candidate.updatedAt) &&
+    Date.parse(candidate.updatedAt) >= Date.parse(candidate.createdAt)
   )
 }
 
@@ -105,9 +106,9 @@ export function readExamDraft(
     )) {
       const index = Number(key)
       if (
-        Number.isInteger(index) &&
-        typeof value === "number" &&
-        Number.isFinite(value)
+        /^(0|[1-9]\d*)$/.test(key) &&
+        Number.isSafeInteger(index) &&
+        nonNegativeInteger(value)
       ) {
         answers[index] = value
       }
@@ -123,7 +124,7 @@ export function writeExamDraft(
   answers: Partial<Record<number, number>>
 ): boolean {
   const target = storage()
-  if (!target) return false
+  if (!target || !validAnswers(answers)) return false
   try {
     target.setItem(draftKey(scope), JSON.stringify(answers))
     return true
@@ -157,9 +158,20 @@ export function findPendingSubmissionForExam(
       const key = target.key(index)
       if (!key?.startsWith(prefix) || !key.endsWith(".pending")) continue
       const pending = readPending(key)
-      if (!pending || pending.userId !== userId || pending.examId !== examId)
+      if (
+        !pending ||
+        pending.userId !== userId ||
+        pending.examId !== examId ||
+        key !== pendingKey(pending)
+      )
         continue
-      if (!newest || pending.createdAt > newest.createdAt) newest = pending
+      if (
+        !newest ||
+        pending.attemptNumber > newest.attemptNumber ||
+        (pending.attemptNumber === newest.attemptNumber &&
+          Date.parse(pending.createdAt) > Date.parse(newest.createdAt))
+      )
+        newest = pending
     }
   } catch {
     return newest
@@ -184,6 +196,8 @@ export function createOrLoadPendingSubmission(
     createdAt: now,
     updatedAt: now,
   }
+  if (!isPendingSubmission(pending))
+    throw new Error("The pending submission contains invalid data.")
   const target = storage()
   if (!target)
     throw new Error("This browser cannot save a pending submission safely.")
@@ -260,14 +274,17 @@ export function pendingPayload(
     request_id: pending.requestId,
     answers: { ...pending.answers },
     // Preserve the original request hash for receipts created before retakes.
-    ...(pending.attemptNumber > 1 ? { attempt_number: pending.attemptNumber } : {}),
+    ...(pending.attemptNumber > 1
+      ? { attempt_number: pending.attemptNumber }
+      : {}),
   }
 }
 
 export function isTransientSubmissionError(error: unknown): boolean {
   if (error instanceof ApiError) {
     return (
-      error.code === "WRITER_FENCED" || [429, 502, 503, 504].includes(error.status)
+      error.code === "WRITER_FENCED" ||
+      [408, 429, 500, 502, 503, 504].includes(error.status)
     )
   }
   return error instanceof TypeError
@@ -286,6 +303,16 @@ export async function submitWithRetry<T>(
   const attempts = options.attempts ?? 16
   const delayMs = options.delayMs ?? 1000
   const maxDelayMs = options.maxDelayMs ?? 10_000
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 100)
+    throw new RangeError("Retry attempts must be an integer from 1 to 100.")
+  if (
+    ![delayMs, maxDelayMs].every(
+      (value) => Number.isFinite(value) && value >= 0 && value <= 2_147_483_647
+    )
+  )
+    throw new RangeError(
+      "Retry delays must be finite, non-negative timer values."
+    )
   const wait =
     options.wait ??
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
@@ -293,7 +320,7 @@ export async function submitWithRetry<T>(
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await submit(payload)
+      return await submit({ ...payload, answers: { ...payload.answers } })
     } catch (error) {
       if (!isTransientSubmissionError(error) || attempt === attempts - 1)
         throw error
