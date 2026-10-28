@@ -400,6 +400,52 @@ function namedQuestion(name: string): QuestionDraft {
 }
 
 describe("teacher authoring interactions", () => {
+  it("names repeated question controls, exposes the selected answer and retains missing assignment", async () => {
+    renderBuilder({
+      title: "Accessible quiz",
+      classroom_id: "missing-class",
+      duration_minutes: 0,
+      questions: [{ ...question, answer: 0 }, { ...question, answer: 0, question: "Another question" }],
+    })
+    expect(
+      screen.getByRole("option", { name: "Assigned classroom unavailable" })
+    ).toHaveValue("missing-class")
+    expect(
+      screen.getByRole("textbox", { name: "Question 2 prompt" })
+    ).toHaveValue("Another question")
+    expect(
+      screen.getByRole("textbox", { name: "Question 2 option A" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("spinbutton", { name: "Question 2 points" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("textbox", { name: "Question 2 feedback" })
+    ).toBeInTheDocument()
+    const selected = screen.getByRole("button", {
+      name: "Mark question 2 option A as correct",
+    })
+    expect(selected).toHaveAttribute("aria-pressed", "true")
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Mark question 2 option B as correct",
+      })
+    )
+    expect(selected).toHaveAttribute("aria-pressed", "false")
+    expect(
+      screen.getByRole("button", { name: "Save question 2 to bank" })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Add option to question 2" })
+    ).toBeInTheDocument()
+    const duration = screen.getByRole("spinbutton", {
+      name: "Duration in minutes",
+    })
+    expect(duration).toHaveAttribute("min", "0")
+    fireEvent.change(duration, { target: { value: "-1" } })
+    expect(duration).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByRole("button", { name: "Publish quiz" })).toBeDisabled()
+  })
   it("saves assignment, timing, instructions, and scoring fields with a quiz draft", async () => {
     const update = vi
       .spyOn(api, "updateQuizDraft")
@@ -446,7 +492,9 @@ describe("teacher authoring interactions", () => {
     fireEvent.change(screen.getByPlaceholderText("Option B"), {
       target: { value: "4" },
     })
-    fireEvent.click(screen.getByLabelText("Mark option B as correct"))
+    fireEvent.click(
+      screen.getByLabelText("Mark question 1 option B as correct")
+    )
     fireEvent.change(screen.getByLabelText("Points"), {
       target: { value: "7" },
     })
@@ -576,7 +624,9 @@ describe("teacher authoring interactions", () => {
       .spyOn(api, "updateQuizDraft")
       .mockResolvedValue(serverDraft({ id: "draft-1" }))
     renderBuilder(seed)
-    fireEvent.click(screen.getByRole("button", { name: "Remove option B" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove question 1 option B" })
+    )
     expect(update).not.toHaveBeenCalled()
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove option" })
@@ -608,8 +658,12 @@ describe("teacher authoring interactions", () => {
     fireEvent.change(screen.getByPlaceholderText("Option B"), {
       target: { value: "B" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Add option" }))
-    fireEvent.click(screen.getByRole("button", { name: "Bank" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Add option to question / })
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Save question \d+ to bank$/ })
+    )
 
     expect(createBankQuestion).not.toHaveBeenCalled()
   })
@@ -792,11 +846,15 @@ describe("teacher authoring interactions", () => {
       expect(screen.getByRole("status")).toHaveTextContent("Changes not synced")
     )
     const confirm = vi.mocked(window.confirm).mockReturnValue(false)
-    fireEvent.click(screen.getByRole("button", { name: "Load" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Load (local|workspace) draft / })
+    )
     expect(screen.getByLabelText("Title")).toHaveValue("Unsaved quiz")
     expect(confirm).toHaveBeenCalled()
     confirm.mockReturnValue(true)
-    fireEvent.click(screen.getByRole("button", { name: "Load" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Load (local|workspace) draft / })
+    )
     expect(screen.getByLabelText("Title")).toHaveValue("Saved quiz")
     expect(screen.getByLabelText("Prompt")).toHaveValue(question.question)
   })

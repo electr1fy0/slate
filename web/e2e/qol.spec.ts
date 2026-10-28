@@ -59,15 +59,17 @@ test("a teacher publishes a class assignment and a learner starts, resumes, and 
     await teacher.getByLabel("Duration in minutes").fill("10")
     await teacher.getByLabel("Maximum attempts").fill("2")
     await teacher
-      .getByLabel("Prompt", { exact: true })
+      .getByLabel("Question 1 prompt", { exact: true })
       .fill("Which answer is correct?")
-    await teacher.getByLabel(/^Option A/).fill("Correct")
-    await teacher.getByLabel("Option B", { exact: true }).fill("Incorrect")
-    await teacher.getByLabel("Points", { exact: true }).fill("3")
+    await teacher.getByLabel("Question 1 option A", { exact: true }).fill("Correct")
+    await teacher.getByLabel("Question 1 option B", { exact: true }).fill("Incorrect")
+    await teacher.getByLabel("Question 1 points", { exact: true }).fill("3")
     await teacher
-      .getByLabel("Feedback (optional)")
+      .getByLabel("Question 1 feedback")
       .fill("The first option is the correct choice.")
-    await teacher.getByRole("button", { name: "Bank", exact: true }).click()
+    await teacher
+      .getByRole("button", { name: "Save question 1 to bank", exact: true })
+      .click()
     await expect(
       teacher.getByText("Question synced to your bank", { exact: true })
     ).toBeVisible()
@@ -105,6 +107,12 @@ test("a teacher publishes a class assignment and a learner starts, resumes, and 
       learner.getByText("Read the instructions before starting.")
     ).toBeVisible()
     const examId = new URL(learner.url()).pathname.split("/").at(-1)!
+    const teacherHeaders = {
+      Authorization: `Bearer ${await teacher.evaluate(() => JSON.parse(localStorage.getItem("slate.auth")!).accessToken)}`,
+    }
+    const preview = await teacher.request.get(`/api/exam/${examId}/preview`, { headers: teacherHeaders })
+    expect(preview.status()).toBe(200)
+    expect((await preview.json()).questions[0].answer).toBe(0)
     const headers = {
       Authorization: `Bearer ${await learner.evaluate(() => JSON.parse(localStorage.getItem("slate.auth")!).accessToken)}`,
     }
@@ -115,6 +123,10 @@ test("a teacher publishes a class assignment and a learner starts, resumes, and 
     await learner
       .getByRole("button", { name: "Begin assessment", exact: true })
       .click()
+    const learnerExam = await learner.request.get(`/api/exam/${examId}`, { headers })
+    const learnerQuestion = (await learnerExam.json()).questions[0]
+    expect(learnerQuestion).not.toHaveProperty("answer")
+    expect(learnerQuestion).not.toHaveProperty("feedback")
     await learner
       .getByRole("radio", { name: /Correct$/, exact: false })
       .first()
@@ -216,6 +228,9 @@ test("a teacher publishes a class assignment and a learner starts, resumes, and 
       await learner.request.get(`/api/exam/${examId}/result`, { headers })
     ).json()
     expect(secondResult.attempt_number).toBe(2)
+    expect(secondResult.score).toBe(0)
+    const zeroScoreMetadata = await learner.request.get(`/api/exam/${examId}/info`, { headers })
+    expect(await zeroScoreMetadata.json()).toMatchObject({ attempt_status: "submitted", score: 0 })
     expect(secondResult.request_id).not.toBe(firstResult.request_id)
     const replay = await learner.request.post(`/api/exam/${examId}/submit`, {
       headers,

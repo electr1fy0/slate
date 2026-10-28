@@ -149,6 +149,9 @@ func (s *Service) Get(ctx context.Context, examID string, user *model.User) (*mo
 	if exam == nil {
 		return nil, ErrExamNotFound
 	}
+	for i := range exam.Questions {
+		exam.Questions[i].AnswerHidden = true
+	}
 	if err := EnforceWindow(&exam.ExamMeta, userRole(user), s.now()); err != nil {
 		return nil, err
 	}

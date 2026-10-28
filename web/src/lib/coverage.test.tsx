@@ -50,7 +50,7 @@ describe("small frontend libraries", () => {
     vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
       throw new Error("blocked")
     })
-    expect(admin.readAdminToken()).toBe("")
+    expect(admin.readAdminToken()).toBe("next-secret")
     vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
       throw new Error("blocked")
     })

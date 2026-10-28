@@ -58,8 +58,7 @@ const ORIGINAL_WS = globalThis.WebSocket
 
 function installMockWebSocket() {
   MockWebSocket.instances = []
-  ;(globalThis as unknown as { WebSocket: unknown }).WebSocket =
-    MockWebSocket
+  ;(globalThis as unknown as { WebSocket: unknown }).WebSocket = MockWebSocket
 }
 
 function useProbe(options: Parameters<typeof useBoardSync>[0]) {
@@ -142,12 +141,24 @@ describe("useBoardSync", () => {
 
   it("reconnects with the new identity when the signed-in account changes", () => {
     let sessionId = "u1"
-    function Probe() { useBoardSync({ ...baseOptions, sessionId }); return null }
+    function Probe() {
+      useBoardSync({ ...baseOptions, sessionId })
+      return null
+    }
     root = createRoot(container)
     act(() => root!.render(<Probe />))
     const first = MockWebSocket.instances[0]
     act(() => first.simulateOpen())
-    setAuth({ user: { user_id: "u2", email: "b@example.test", name: "Ada", role: "teacher" }, accessToken: "new-access", refreshToken: "new-refresh" })
+    setAuth({
+      user: {
+        user_id: "u2",
+        email: "b@example.test",
+        name: "Ada",
+        role: "teacher",
+      },
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+    })
     sessionId = "u2"
     act(() => root!.render(<Probe />))
     expect(first.readyState).toBe(MockWebSocket.CLOSED)
@@ -174,17 +185,41 @@ describe("useBoardSync", () => {
     const onPermissions = vi.fn()
     const onRestored = vi.fn()
     const onError = vi.fn()
-    const probe = useProbe({ ...baseOptions, role: "student", onPermissions, onRestored, onError })
+    const probe = useProbe({
+      ...baseOptions,
+      role: "student",
+      onPermissions,
+      onRestored,
+      onError,
+    })
     mount(probe)
     const socket = MockWebSocket.instances[0]
     act(() => socket.simulateOpen())
-    act(() => socket.simulateMessage({ type: "init", you: "self", peers: [], elements: [], room: { room_id: "room-1", version: 4, students_draw: true } }))
+    act(() =>
+      socket.simulateMessage({
+        type: "init",
+        you: "self",
+        peers: [],
+        elements: [],
+        room: { room_id: "room-1", version: 4, students_draw: true },
+      })
+    )
     expect(onPermissions).toHaveBeenLastCalledWith(true)
-    act(() => socket.simulateMessage({ type: "permissions", students_draw: false }))
+    act(() =>
+      socket.simulateMessage({ type: "permissions", students_draw: false })
+    )
     expect(onPermissions).toHaveBeenLastCalledWith(false)
-    act(() => socket.simulateMessage({ type: "restored", version: 5, elements: [{ id: "historical", version: 1 }] }))
+    act(() =>
+      socket.simulateMessage({
+        type: "restored",
+        version: 5,
+        elements: [{ id: "historical", version: 1 }],
+      })
+    )
     expect(onRestored).toHaveBeenCalledWith([{ id: "historical", version: 1 }])
-    act(() => socket.simulateMessage({ type: "error", message: "Permission denied" }))
+    act(() =>
+      socket.simulateMessage({ type: "error", message: "Permission denied" })
+    )
     expect(onError).toHaveBeenCalledWith("Permission denied")
   })
 
@@ -196,8 +231,14 @@ describe("useBoardSync", () => {
       socket.simulateOpen()
       socket.simulateOpen()
     })
-    expect(JSON.parse(socket.sent[0])).toMatchObject({ type: "join", name: "Guest", role: "student" })
-    expect(socket.sent.filter((frame) => JSON.parse(frame).type === "join").length).toBeGreaterThanOrEqual(2)
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      type: "join",
+      name: "Guest",
+      role: "student",
+    })
+    expect(
+      socket.sent.filter((frame) => JSON.parse(frame).type === "join").length
+    ).toBeGreaterThanOrEqual(2)
     act(() => socket.onerror?.())
     expect(socket.readyState).toBe(MockWebSocket.CLOSED)
   })
@@ -215,7 +256,9 @@ describe("useBoardSync", () => {
     expect(first.sent).toEqual([]) // nothing open yet -> queued
 
     // Cursor frames are never queued offline.
-    act(() => probe.state.current.send({ type: "cursor", x: 5, y: 6, tool: "pointer" }))
+    act(() =>
+      probe.state.current.send({ type: "cursor", x: 5, y: 6, tool: "pointer" })
+    )
 
     act(() => first.simulateOpen())
     // Join first, then the drained outbox; the cursor frame stayed behind.
@@ -224,7 +267,9 @@ describe("useBoardSync", () => {
     expect(JSON.stringify(first.sent)).not.toContain("cursor")
 
     // Online again: cursors flow immediately.
-    act(() => probe.state.current.send({ type: "cursor", x: 7, y: 8, tool: "pointer" }))
+    act(() =>
+      probe.state.current.send({ type: "cursor", x: 7, y: 8, tool: "pointer" })
+    )
     expect(first.sent.at(-1)).toContain('"cursor"')
   })
 
@@ -237,7 +282,7 @@ describe("useBoardSync", () => {
         probe.state.current.send({
           type: "elements",
           elements: [{ id: `e${i}`, version: 1 }],
-        }),
+        })
       )
     }
     const socket = MockWebSocket.instances[0]
@@ -319,11 +364,26 @@ describe("useBoardSync", () => {
     const socket = MockWebSocket.instances[0]
     act(() => socket.simulateOpen())
 
-    const firstPeer = { id: "peer-1", name: "Bea", role: "student" as const, cursor: null }
-    const secondPeer = { id: "peer-2", name: "Cy", role: "teacher" as const, cursor: null }
+    const firstPeer = {
+      id: "peer-1",
+      name: "Bea",
+      role: "student" as const,
+      cursor: null,
+    }
+    const secondPeer = {
+      id: "peer-2",
+      name: "Cy",
+      role: "teacher" as const,
+      cursor: null,
+    }
     act(() => {
       socket.onmessage?.({ data: "not-json" })
-      socket.simulateMessage({ type: "init", you: "self", elements: [{ id: "a" }], peers: [firstPeer] })
+      socket.simulateMessage({
+        type: "init",
+        you: "self",
+        elements: [{ id: "a" }],
+        peers: [firstPeer],
+      })
       socket.simulateMessage({ type: "peer-joined", peer: firstPeer })
       socket.simulateMessage({ type: "peer-joined", peer: secondPeer })
       socket.simulateMessage({
@@ -338,13 +398,91 @@ describe("useBoardSync", () => {
     expect(onInit).toHaveBeenCalledWith([{ id: "a" }])
     expect(onElements).toHaveBeenCalledWith([{ id: "b" }])
     expect(probe.state.current.peers).toEqual([
-      { id: "peer-1", name: "Bea", role: "student", cursor: { x: 10, y: 20, tool: "pen" } },
+      {
+        id: "peer-1",
+        name: "Bea",
+        role: "student",
+        cursor: { x: 10, y: 20, tool: "pen" },
+      },
     ])
 
     act(() => vi.advanceTimersByTime(20_000))
     expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "ping" })
     act(() => socket.close())
     act(() => vi.advanceTimersByTime(20_000))
+  })
+
+  it("clears disconnected presence and ignores queued frames from an old room", () => {
+    const onElements = vi.fn()
+    const options = { ...baseOptions, onElements }
+    const probe = useProbe(options)
+    mount(probe)
+    const socket = MockWebSocket.instances[0]
+    act(() => socket.simulateOpen())
+    act(() =>
+      socket.simulateMessage({
+        type: "init",
+        you: "self",
+        elements: [],
+        peers: [{ id: "p", name: "Peer", role: "teacher", cursor: null }],
+      })
+    )
+    const oldMessage = socket.onmessage
+    act(() => socket.close())
+    expect(probe.state.current.peers).toEqual([])
+    expect(probe.state.current.selfId).toBeNull()
+    options.roomId = "new-room"
+    act(() => root!.render(<probe.Probe />))
+    act(() =>
+      oldMessage?.({
+        data: JSON.stringify({ type: "elements", elements: [{ id: "old" }] }),
+      })
+    )
+    expect(onElements).not.toHaveBeenCalled()
+  })
+
+  it("recovers from a constructor failure when the browser comes online", () => {
+    const onError = vi.fn()
+    globalThis.WebSocket = class {
+      constructor() {
+        throw new Error("offline")
+      }
+    } as unknown as typeof WebSocket
+    const probe = useProbe({ ...baseOptions, onError })
+    mount(probe)
+    expect(probe.state.current.status).toBe("unavailable")
+    expect(onError).toHaveBeenCalledOnce()
+    globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    act(() => window.dispatchEvent(new Event("online")))
+    expect(MockWebSocket.instances).toHaveLength(1)
+    act(() => MockWebSocket.instances[0].simulateOpen())
+    expect(probe.state.current.status).toBe("live")
+  })
+
+  it("buffers a synchronous send failure and recovers from a failed heartbeat", () => {
+    const probe = useProbe({ ...baseOptions, onError: vi.fn() })
+    mount(probe)
+    const first = MockWebSocket.instances[0]
+    act(() => first.simulateOpen())
+    vi.spyOn(first, "send").mockImplementationOnce(() => {
+      throw new Error("closed during send")
+    })
+    act(() =>
+      probe.state.current.send({ type: "elements", elements: [{ id: "work" }] })
+    )
+    expect(probe.state.current.status).toBe("reconnecting")
+    act(() => vi.advanceTimersByTime(500))
+    const second = MockWebSocket.instances[1]
+    act(() => second.simulateOpen())
+    expect(second.sent.map((frame) => JSON.parse(frame))).toContainEqual({
+      type: "elements",
+      elements: [{ id: "work" }],
+    })
+    vi.spyOn(second, "send").mockImplementationOnce(() => {
+      throw new Error("heartbeat failed")
+    })
+    act(() => vi.advanceTimersByTime(20_000))
+    expect(second.readyState).toBe(MockWebSocket.CLOSED)
   })
 
   it("rejoins when identity changes and stops reconnecting after disposal", () => {
@@ -360,7 +498,11 @@ describe("useBoardSync", () => {
     // rerendering exercises the identity effect without opening another socket.
     act(() => root!.render(<probe.Probe />))
     expect(socket.sent.length).toBeGreaterThan(sentBefore)
-    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "join", name: "Guest", role: "student" })
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      type: "join",
+      name: "Guest",
+      role: "student",
+    })
 
     socket.close()
     const count = MockWebSocket.instances.length

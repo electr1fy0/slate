@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -213,6 +215,9 @@ func (m *Manager) persistSnapshot(ctx context.Context, snapshot BoardSnapshot) e
 	// also keeps a later debounced revision from overtaking an earlier one.
 	m.persistenceWriteMu.Lock()
 	defer m.persistenceWriteMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := store.Save(ctx, snapshot.Clone()); err != nil {
 		return err
 	}
@@ -288,6 +293,12 @@ func (m *Manager) Resume(ctx context.Context, roomID string) error {
 				loaded = nil
 			}
 		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err == nil && loaded != nil {
+			err = validateSnapshot(roomID, *loaded)
+		}
 
 		m.mu.Lock()
 		shouldRefreshPending := false
@@ -336,7 +347,7 @@ func (m *Manager) Flush(ctx context.Context, roomID string) error {
 	if pending != nil && pending.ctx != nil {
 		// The pending snapshot belongs to its originating routed writer. A
 		// later flush request must not refresh its epoch or backend identity.
-		saveCtx = pending.ctx
+		saveCtx = flushContext{Context: ctx, writer: pending.ctx}
 	}
 	snapshot, ok := m.exportSnapshotIfPresent(roomID)
 	if !ok {
@@ -420,6 +431,12 @@ func (m *Manager) Restore(ctx context.Context, roomID string, version int64) (Ro
 	}
 	if historical == nil {
 		return RoomSnapshot{}, ErrSnapshotNotFound
+	}
+	if err := validateSnapshot(roomID, *historical); err != nil {
+		return RoomSnapshot{}, err
+	}
+	if historical.Version != version {
+		return RoomSnapshot{}, fmt.Errorf("snapshot revision does not match requested version")
 	}
 	// Discard the pre-restore debounce before taking the new live snapshot. A
 	// concurrent element update after this point gets its own newer debounce.
@@ -666,8 +683,15 @@ func (m *Manager) absorbElementLocked(r *room, element map[string]any) bool {
 		if !currentOK {
 			currentVersion = 0
 		}
-		if version <= currentVersion {
+		if version < currentVersion {
 			return false
+		}
+		if version == currentVersion {
+			incomingNonce, incomingOK := versionValue(element["versionNonce"])
+			currentNonce, currentOK := versionValue(current["versionNonce"])
+			if !incomingOK || !currentOK || incomingNonce >= currentNonce {
+				return false
+			}
 		}
 	}
 	r.elements[id] = cloneMap(element)
@@ -675,6 +699,26 @@ func (m *Manager) absorbElementLocked(r *room, element map[string]any) bool {
 		r.elementOrder = append(r.elementOrder, id)
 	}
 	return true
+}
+
+type flushContext struct {
+	context.Context
+	writer context.Context
+}
+
+func (c flushContext) Value(key any) any { return c.writer.Value(key) }
+
+func validateSnapshot(roomID string, snapshot BoardSnapshot) error {
+	if snapshot.RoomID != "" && snapshot.RoomID != roomID {
+		return fmt.Errorf("snapshot belongs to another room")
+	}
+	if snapshot.SchemaVersion < 0 || snapshot.SchemaVersion > BoardSnapshotSchemaVersion {
+		return fmt.Errorf("unsupported board snapshot schema %d", snapshot.SchemaVersion)
+	}
+	if snapshot.Version < 0 || snapshot.Version == math.MaxInt64 {
+		return fmt.Errorf("invalid board snapshot revision")
+	}
+	return nil
 }
 
 func (m *Manager) nowLocked() time.Time {

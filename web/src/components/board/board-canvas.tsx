@@ -4,11 +4,15 @@ import {
   CaptureUpdateAction,
   reconcileElements,
 } from "@excalidraw/excalidraw"
-import type { ExcalidrawImperativeAPI, AppState  } from "@excalidraw/excalidraw/types"
+import type {
+  ExcalidrawImperativeAPI,
+  AppState,
+} from "@excalidraw/excalidraw/types"
 import type { OrderedExcalidrawElement } from "@excalidraw/excalidraw/element/types"
 import "@excalidraw/excalidraw/index.css"
 
 import type { BoardElement, ClientMessage } from "@/lib/types"
+import { mergeBoardElements } from "@/lib/board-elements"
 
 const FLUSH_INTERVAL_MS = 100
 const SAVE_DELAY_MS = 800
@@ -34,7 +38,9 @@ function storageKey(roomId: string): string {
   return `slate.board.${roomId}`
 }
 
-function dedupeLatest(elements: OrderedExcalidrawElement[]): OrderedExcalidrawElement[] {
+function dedupeLatest(
+  elements: OrderedExcalidrawElement[]
+): OrderedExcalidrawElement[] {
   const latest = new Map<string, OrderedExcalidrawElement>()
   for (const element of elements) latest.set(element.id, element)
   return Array.from(latest.values())
@@ -51,8 +57,10 @@ function loadSnapshot(roomId: string): OrderedExcalidrawElement[] {
   try {
     const raw = window.localStorage.getItem(storageKey(roomId))
     if (!raw) return []
-    const parsed = JSON.parse(raw) as BoardElement[]
-    return parsed.filter((element) => element.id) as OrderedExcalidrawElement[]
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? mergeBoardElements([], parsed).map(normaliseElement)
+      : []
   } catch {
     return []
   }
@@ -79,7 +87,8 @@ export default function BoardCanvas({
 
   const initialElements = useMemo(() => loadSnapshot(roomId), [roomId])
   if (elementsRef.current.size === 0 && initialElements.length > 0) {
-    for (const element of initialElements) elementsRef.current.set(element.id, element)
+    for (const element of initialElements)
+      elementsRef.current.set(element.id, element)
   }
 
   const scheduleSave = useCallback(() => {
@@ -88,25 +97,31 @@ export default function BoardCanvas({
       saveTimerRef.current = null
       try {
         const snapshot = Array.from(elementsRef.current.values())
-        window.localStorage.setItem(storageKey(roomId), JSON.stringify(snapshot))
+        window.localStorage.setItem(
+          storageKey(roomId),
+          JSON.stringify(snapshot)
+        )
       } catch {
         // storage unavailable — autosave stays best effort
       }
     }, SAVE_DELAY_MS)
   }, [roomId])
 
-  const queueOutgoing = useCallback((element: OrderedExcalidrawElement) => {
-    outgoingRef.current.push(element)
-    if (flushTimerRef.current !== null) return
-    flushTimerRef.current = window.setTimeout(() => {
-      flushTimerRef.current = null
-      const batch = dedupeLatest(outgoingRef.current.splice(0))
-      /* c8 ignore next */
-      if (batch.length > 0) {
-        senderRef.current?.({ type: "elements", elements: batch })
-      }
-    }, FLUSH_INTERVAL_MS)
-  }, [senderRef])
+  const queueOutgoing = useCallback(
+    (element: OrderedExcalidrawElement) => {
+      outgoingRef.current.push(element)
+      if (flushTimerRef.current !== null) return
+      flushTimerRef.current = window.setTimeout(() => {
+        flushTimerRef.current = null
+        const batch = dedupeLatest(outgoingRef.current.splice(0))
+        /* c8 ignore next */
+        if (batch.length > 0) {
+          senderRef.current?.({ type: "elements", elements: batch })
+        }
+      }, FLUSH_INTERVAL_MS)
+    },
+    [senderRef]
+  )
 
   const handleChange = useCallback(
     (elements: readonly OrderedExcalidrawElement[], appState: AppState) => {
@@ -125,7 +140,7 @@ export default function BoardCanvas({
         scheduleSave()
       }
     },
-    [onLocalEdit, queueOutgoing, scheduleSave],
+    [onLocalEdit, queueOutgoing, scheduleSave]
   )
 
   useEffect(() => {
@@ -134,27 +149,41 @@ export default function BoardCanvas({
       const remote = incoming
         .filter((element) => element.id)
         .map(normaliseElement)
-      if (!api || remote.length === 0) return
+      if (remote.length === 0) return
+      if (!api) {
+        remoteSnapshotRef.current = mergeBoardElements(remoteSnapshotRef.current ?? [], remote)
+        return
+      }
 
       const local = Array.from(elementsRef.current.values())
       const merged = reconcileElements(
         local,
         remote as never,
-        appStateRef.current ?? ({} as AppState),
+        appStateRef.current ?? ({} as AppState)
       )
       elementsRef.current.clear()
       for (const element of merged) {
         elementsRef.current.set(element.id, element)
       }
-      api.updateScene({ elements: merged, captureUpdate: CaptureUpdateAction.NEVER })
+      api.updateScene({
+        elements: merged,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
       scheduleSave()
     }
     handle.current.getSnapshot = () => Array.from(elementsRef.current.values())
     handle.current.replaceRemote = (incoming) => {
-      const elements = incoming.filter((element) => element.id).map(normaliseElement)
-      elementsRef.current = new Map(elements.map((element) => [element.id, element]))
+      const elements = incoming
+        .filter((element) => element.id)
+        .map(normaliseElement)
+      elementsRef.current = new Map(
+        elements.map((element) => [element.id, element])
+      )
       outgoingRef.current = []
-      apiRef.current?.updateScene({ elements, captureUpdate: CaptureUpdateAction.NEVER })
+      apiRef.current?.updateScene({
+        elements,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
       scheduleSave()
     }
     return () => {
@@ -170,8 +199,10 @@ export default function BoardCanvas({
 
   useEffect(() => {
     return () => {
-      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current)
-      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+      if (flushTimerRef.current !== null)
+        window.clearTimeout(flushTimerRef.current)
+      if (saveTimerRef.current !== null)
+        window.clearTimeout(saveTimerRef.current)
     }
   }, [])
 
@@ -188,8 +219,14 @@ export default function BoardCanvas({
       if (!callback || !el) return
       const rect = el.getBoundingClientRect()
       if (rect.width <= 0 || rect.height <= 0) return
-      const x = Math.min(100, Math.max(0, ((event.clientX - rect.left) / rect.width) * 100))
-      const y = Math.min(100, Math.max(0, ((event.clientY - rect.top) / rect.height) * 100))
+      const x = Math.min(
+        100,
+        Math.max(0, ((event.clientX - rect.left) / rect.width) * 100)
+      )
+      const y = Math.min(
+        100,
+        Math.max(0, ((event.clientY - rect.top) / rect.height) * 100)
+      )
       callback(Math.round(x * 10) / 10, Math.round(y * 10) / 10)
     }
     container.addEventListener("pointermove", handlePointerMove)
@@ -204,7 +241,8 @@ export default function BoardCanvas({
         initialData={{ elements: initialElements }}
         excalidrawAPI={(api) => {
           apiRef.current = api
-          if (remoteSnapshotRef.current) handle.current.replaceRemote?.(remoteSnapshotRef.current)
+          if (remoteSnapshotRef.current)
+            handle.current.replaceRemote?.(remoteSnapshotRef.current)
         }}
         onChange={handleChange}
       />

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { FileUpIcon } from "lucide-react"
 
 import type { QuestionDraft } from "@/lib/types"
@@ -22,17 +22,25 @@ export function QuestionImport({
 }) {
   const [format, setFormat] = useState<"json" | "csv">("json")
   const [source, setSource] = useState("")
+  const imported = useRef(false)
   const [result, setResult] = useState<ReturnType<
     typeof parseQuestionImport
   > | null>(null)
 
   function preview(): void {
+    imported.current = false
     setResult(parseQuestionImport(source, format))
   }
 
   function importQuestions(): void {
-    if (!result || result.errors.length > 0 || result.questions.length === 0)
+    if (
+      imported.current ||
+      !result ||
+      result.errors.length > 0 ||
+      result.questions.length === 0
+    )
       return
+    imported.current = true
     onImport(result.questions)
     setSource("")
     setResult(null)
@@ -54,6 +62,7 @@ export function QuestionImport({
           <FieldLabel htmlFor="question-import-format">File format</FieldLabel>
           <select
             id="question-import-format"
+            aria-describedby="question-import-help"
             aria-label="Import format"
             className="h-9 w-fit rounded-lg border border-input bg-background px-3 text-sm"
             value={format}
@@ -65,7 +74,7 @@ export function QuestionImport({
             <option value="json">JSON</option>
             <option value="csv">CSV</option>
           </select>
-          <FieldDescription>
+          <FieldDescription id="question-import-help">
             {format === "json"
               ? 'Use an array of objects: {"question":"...","options":["A","B"],"answer":0,"points":1,"feedback":"..."}.'
               : "Use question, option_a through option_f, answer, points, and feedback headers. Answer accepts A–F or a zero-based index."}
@@ -77,6 +86,7 @@ export function QuestionImport({
           </FieldLabel>
           <Textarea
             id="question-import-source"
+            aria-describedby="question-import-help"
             spellCheck={false}
             className="min-h-32 font-mono text-xs"
             value={source}
@@ -133,21 +143,26 @@ export function QuestionImport({
                 key={`${index}-${question.question}`}
                 className="rounded-lg border p-3 text-sm"
               >
-                <p className="font-medium">
+                <p className="font-medium break-words whitespace-pre-wrap">
                   {index + 1}. {question.question}
                 </p>
+                <ol className="mt-1 space-y-1 text-xs text-muted-foreground">
+                  {question.options.map((option, optionIndex) => (
+                    <li
+                      key={optionIndex}
+                      className="break-words whitespace-pre-wrap"
+                    >
+                      {String.fromCharCode(65 + optionIndex)}. {option}
+                      {optionIndex === question.answer ? " (correct)" : ""}
+                    </li>
+                  ))}
+                </ol>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {question.options
-                    .map(
-                      (option, optionIndex) =>
-                        `${String.fromCharCode(65 + optionIndex)}. ${option}${optionIndex === question.answer ? " (correct)" : ""}`
-                    )
-                    .join(" · ")}{" "}
-                  · {question.points ?? 1} point
+                  {question.points ?? 1} point
                   {(question.points ?? 1) === 1 ? "" : "s"}
                 </p>
                 {question.feedback ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-xs break-words whitespace-pre-wrap text-muted-foreground">
                     Feedback: {question.feedback}
                   </p>
                 ) : null}

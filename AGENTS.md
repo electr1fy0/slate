@@ -43,6 +43,8 @@ When you need to do an inventory of resources, you need to look in both the sele
 - Before starting a task, check whether a relevant AWS skill is available. Load the skill with retrieve_skill and prefer its guidance over general knowledge.
 ### Help level
 
+- help_level: HIGH (selected by the user; retain this preference without asking again unless the user requests a change).
+
 - help_level (required): LOW, MEDIUM, or HIGH. While a user is building, you MUST ask the user: "How much guidance would you like from me? Low (I only flag security risks), medium (I ask a couple of clarifying questions if something seems off), or high (I explain what I'm doing, suggest alternatives, and flag best practices)."
 
 You CAN update this rule file to save a user's help_level.

@@ -41,9 +41,14 @@ export function AppShell({
           />
           <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold">{title}</h1>
+              <h1 title={title} className="truncate text-sm font-semibold">
+                {title}
+              </h1>
               {description ? (
-                <p className="truncate text-xs text-muted-foreground">
+                <p
+                  title={description}
+                  className="truncate text-xs text-muted-foreground"
+                >
                   {description}
                 </p>
               ) : null}

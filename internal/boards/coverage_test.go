@@ -413,8 +413,8 @@ func TestProtocolCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.Disconnect("room", socket)
-	if _, err := session.HandleFrame(context.Background(), `{"type":"cursor"}`, 0); err != nil {
-		t.Fatal(err)
+	if _, err := session.HandleFrame(context.Background(), `{"type":"cursor"}`, 0); err == nil {
+		t.Fatal("detached session accepted another frame")
 	}
 
 	failing := NewSession(NewManager(), "room", &protocolFailSocket{}, Identity{})
@@ -849,7 +849,7 @@ func TestPersistenceResumeConcurrencyAndRestoreCoverage(t *testing.T) {
 	}}
 	highManager := NewManagerWithPersistence(high, time.Hour)
 	highManager.SetClock(func() time.Time { return time.Time{} })
-	if _, err := highManager.Restore(nil, "room", 1); err != nil {
+	if _, err := highManager.Restore(nil, "room", 99); err != nil {
 		t.Fatal(err)
 	}
 	if highManager.Snapshot("room").Version != 100 {

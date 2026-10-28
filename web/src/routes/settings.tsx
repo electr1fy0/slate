@@ -53,9 +53,20 @@ export function AccountSettingsPage() {
   const [passwordPending, setPasswordPending] = useState(false)
   const profileLock = useRef(false)
   const passwordLock = useRef(false)
+  const previousProfile = useRef({
+    id: auth.user?.user_id,
+    name: auth.user?.name,
+  })
+  const profileNameValid = !!name.trim() && Array.from(name.trim()).length <= 60
 
   useEffect(() => {
-    setName(auth.user?.name ?? "")
+    const previous = previousProfile.current
+    setName((current) =>
+      previous.id !== auth.user?.user_id || current === (previous.name ?? "")
+        ? (auth.user?.name ?? "")
+        : current
+    )
+    previousProfile.current = { id: auth.user?.user_id, name: auth.user?.name }
   }, [auth.user?.name, auth.user?.user_id])
 
   useEffect(() => {
@@ -69,8 +80,8 @@ export function AccountSettingsPage() {
     if (profileLock.current) return
     const requestedUserId = auth.user?.user_id
     const cleanName = name.trim()
-    if (!requestedUserId || !cleanName) {
-      toast.error("Enter a name")
+    if (!requestedUserId || !profileNameValid) {
+      toast.error("Enter a name of 1–60 characters")
       return
     }
     profileLock.current = true
@@ -158,11 +169,17 @@ export function AccountSettingsPage() {
                 <InputGroup>
                   <InputGroupInput
                     id="profile-name"
+                    disabled={profilePending}
+                    aria-invalid={!!name && !profileNameValid}
+                    aria-describedby="profile-name-help"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                     autoComplete="name"
                   />
                 </InputGroup>
+                <FieldDescription id="profile-name-help">
+                  Use 1–60 characters.
+                </FieldDescription>
               </Field>
               <Field>
                 <FieldLabel htmlFor="profile-email">Email</FieldLabel>
@@ -177,7 +194,7 @@ export function AccountSettingsPage() {
               </Field>
               <Button
                 disabled={
-                  !name.trim() ||
+                  !profileNameValid ||
                   name.trim() === auth.user?.name ||
                   profilePending
                 }
@@ -203,7 +220,8 @@ export function AccountSettingsPage() {
               Change password
             </CardTitle>
             <CardDescription>
-              Use at least 8 characters. Very long passwords may be rejected.
+              Use 8–72 UTF-8 bytes. Emoji and accented characters can count as
+              multiple bytes.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -215,12 +233,18 @@ export function AccountSettingsPage() {
                 <InputGroup>
                   <InputGroupInput
                     id="current-password"
+                    disabled={passwordPending}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     type={showCurrentPassword ? "text" : "password"}
                     value={currentPassword}
                     onChange={(event) => setCurrentPassword(event.target.value)}
                     autoComplete="current-password"
                   />
                   <InputGroupButton
+                    disabled={passwordPending}
+                    aria-pressed={showCurrentPassword}
                     aria-label={
                       showCurrentPassword
                         ? "Hide current password"
@@ -245,12 +269,23 @@ export function AccountSettingsPage() {
                 <InputGroup>
                   <InputGroupInput
                     id="new-password"
+                    disabled={passwordPending}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-invalid={
+                      newPassword.length > 0 &&
+                      !isPasswordLengthValid(newPassword)
+                    }
+                    aria-describedby="new-password-help"
                     type={showNewPassword ? "text" : "password"}
                     value={newPassword}
                     onChange={(event) => setNewPassword(event.target.value)}
                     autoComplete="new-password"
                   />
                   <InputGroupButton
+                    disabled={passwordPending}
+                    aria-pressed={showNewPassword}
                     aria-label={
                       showNewPassword
                         ? "Hide new password"
@@ -261,9 +296,9 @@ export function AccountSettingsPage() {
                     {showNewPassword ? <EyeOffIcon /> : <EyeIcon />}
                   </InputGroupButton>
                 </InputGroup>
-                <FieldDescription>
+                <FieldDescription id="new-password-help">
                   {passwordLengthMessage(newPassword) ??
-                    "Use at least 8 characters."}
+                    "Use 8–72 UTF-8 bytes."}
                 </FieldDescription>
               </Field>
               <Button

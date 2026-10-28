@@ -241,6 +241,14 @@ export function LoginPage() {
                   <InputGroup>
                     <InputGroupInput
                       id="reset-password"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      aria-invalid={
+                        resetPassword.length > 0 &&
+                        !isPasswordLengthValid(resetPassword)
+                      }
+                      aria-describedby="reset-password-help"
                       type={showResetPassword ? "text" : "password"}
                       value={resetPassword}
                       onChange={(event) => setResetPassword(event.target.value)}
@@ -248,6 +256,7 @@ export function LoginPage() {
                     />
                     <InputGroupButton
                       type="button"
+                      aria-pressed={showResetPassword}
                       aria-label={
                         showResetPassword ? "Hide password" : "Show password"
                       }
@@ -258,7 +267,7 @@ export function LoginPage() {
                       {showResetPassword ? <EyeOffIcon /> : <EyeIcon />}
                     </InputGroupButton>
                   </InputGroup>
-                  <FieldDescription>
+                  <FieldDescription id="reset-password-help">
                     {passwordLengthMessage(resetPassword) ??
                       "Use at least 8 characters."}
                   </FieldDescription>
@@ -288,6 +297,9 @@ export function LoginPage() {
                   <InputGroup>
                     <InputGroupInput
                       id="forgot-email"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
                       type="email"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
@@ -360,6 +372,7 @@ export function LoginPage() {
                         <InputGroup>
                           <InputGroupInput
                             id="login-name"
+                            aria-invalid={name.length > 0 && !name.trim()}
                             placeholder="Ada Lovelace"
                             value={name}
                             onChange={(event) => setName(event.target.value)}
@@ -377,12 +390,17 @@ export function LoginPage() {
                       <InputGroup>
                         <InputGroupInput
                           id="login-email"
+                          aria-invalid={email.length > 0 && !emailReady}
                           type="email"
                           placeholder="you@example.com"
                           value={email}
                           onChange={(event) => setEmail(event.target.value)}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter" && canSubmit)
+                            if (
+                              event.key === "Enter" &&
+                              !event.nativeEvent.isComposing &&
+                              canSubmit
+                            )
                               void submit()
                           }}
                           autoCapitalize="none"
@@ -404,6 +422,19 @@ export function LoginPage() {
                       <InputGroup>
                         <InputGroupInput
                           id="login-password"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          aria-invalid={
+                            mode === "register" &&
+                            password.length > 0 &&
+                            !passwordReady
+                          }
+                          aria-describedby={
+                            mode === "register"
+                              ? "login-password-help"
+                              : undefined
+                          }
                           type={showPassword ? "text" : "password"}
                           placeholder={
                             mode === "register"
@@ -413,7 +444,11 @@ export function LoginPage() {
                           value={password}
                           onChange={(event) => setPassword(event.target.value)}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter" && canSubmit)
+                            if (
+                              event.key === "Enter" &&
+                              !event.nativeEvent.isComposing &&
+                              canSubmit
+                            )
                               void submit()
                           }}
                           autoComplete={
@@ -424,6 +459,7 @@ export function LoginPage() {
                         />
                         <InputGroupButton
                           type="button"
+                          aria-pressed={showPassword}
                           aria-label={
                             showPassword ? "Hide password" : "Show password"
                           }
@@ -433,7 +469,7 @@ export function LoginPage() {
                         </InputGroupButton>
                       </InputGroup>
                       {mode === "register" ? (
-                        <FieldDescription>
+                        <FieldDescription id="login-password-help">
                           {passwordLengthMessage(password) ??
                             "Use at least 8 characters."}{" "}
                           Students create their own accounts; teachers are

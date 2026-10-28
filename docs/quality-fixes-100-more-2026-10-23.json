@@ -1,0 +1,1414 @@
+{
+  "project": "Continuum / Slate",
+  "baseline_commit": "e218e12",
+  "date": "2026-10-23",
+  "entries": 100,
+  "categories": {
+    "Behavior": 32,
+    "Polish": 56,
+    "Hardening": 12
+  },
+  "counting_policy": "Distinct correction entries, including behavior, boundary hardening and accessibility/polish. Related entries may share a root cause or implementation. These are not 100 independent production incidents. Previous CQ-001..120 and QF-001..200 are separate baselines.",
+  "findings": [
+    {
+      "id": "QF-201",
+      "category": "Behavior",
+      "title": "Option zero disappears from authored JSON",
+      "trigger_and_before": "Save or preview a question whose correct option is A; the answer field was absent.",
+      "correction": "Encode zero explicitly for authoring and use a separate redaction flag on learner reads.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/model/model.go",
+        "line": 93,
+        "anchor": "func (q Question) MarshalJSON",
+        "sha256": "a0314d2b3143b2c36596486c848d2276891932e2e14b174ef36d34e24e502469"
+      }
+    },
+    {
+      "id": "QF-202",
+      "category": "Behavior",
+      "title": "Zero scores disappear from catalog metadata",
+      "trigger_and_before": "A submitted assessment scored zero serialized without its score field.",
+      "correction": "Keep numeric zero in the public metadata contract so submitted results stay distinguishable from missing data.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/model/model.go",
+        "line": 123,
+        "anchor": "json:\"score\"",
+        "sha256": "a0314d2b3143b2c36596486c848d2276891932e2e14b174ef36d34e24e502469"
+      }
+    },
+    {
+      "id": "QF-203",
+      "category": "Polish",
+      "title": "Whitespace-only board names",
+      "trigger_and_before": "Join with spaces as a display name; presence showed an empty-looking participant.",
+      "correction": "Trim names before applying the Guest fallback and length limit.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 128,
+        "anchor": "func normaliseName",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-204",
+      "category": "Behavior",
+      "title": "Duplicate socket registration leaves phantom peers",
+      "trigger_and_before": "Connect the same socket twice; peer order contained it twice while the map retained one identity.",
+      "correction": "Return the existing peer ID without appending a second registration.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 168,
+        "anchor": "if peer := r.peers[socket]",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-205",
+      "category": "Hardening",
+      "title": "Typed nil transports pass connection validation",
+      "trigger_and_before": "An integration passes a typed nil pointer as a socket; it was accepted and could panic on send.",
+      "correction": "Reject nil pointer, channel and interface transport values before registration.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 152,
+        "anchor": "v := reflect.ValueOf(socket)",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-206",
+      "category": "Hardening",
+      "title": "Non-comparable transport helpers panic",
+      "trigger_and_before": "Pass a slice or map to peer lookup helpers after room creation; map indexing could panic.",
+      "correction": "Apply the comparable-socket guard consistently to public peer operations and exclusions.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 618,
+        "anchor": "func comparableKey",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-207",
+      "category": "Behavior",
+      "title": "Peerless rooms inflate active-room metrics",
+      "trigger_and_before": "Export or absorb a room with no connected peers; status counted it as active.",
+      "correction": "Count only rooms with at least one attached peer.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 361,
+        "anchor": "func (m *Manager) ActiveRooms",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-208",
+      "category": "Behavior",
+      "title": "Reset retains obsolete persistence errors",
+      "trigger_and_before": "Reset local board state after a failed save; LastPersistenceError still reported the old incident.",
+      "correction": "Clear asynchronous error state together with rooms and pending saves.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 374,
+        "anchor": "func (m *Manager) Reset",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-209",
+      "category": "Behavior",
+      "title": "Canceled broadcast removes healthy peers",
+      "trigger_and_before": "Cancel a broadcast context before or during delivery; healthy recipients were detached as transport failures.",
+      "correction": "Stop the broadcast on context cancellation without evicting recipients.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 486,
+        "anchor": "if ctx.Err() != nil",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-210",
+      "category": "Behavior",
+      "title": "Heartbeat races with idle eviction",
+      "trigger_and_before": "A peer sends fresh traffic after the sweep collects stale peers but before its turn is processed.",
+      "correction": "Recheck LastSeen under the room lock immediately before detaching the peer.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 665,
+        "anchor": "func (m *Manager) disconnectIfStale",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-211",
+      "category": "Behavior",
+      "title": "Typed collections alias board snapshots",
+      "trigger_and_before": "Integrations pass typed point slices or nested maps; mutating input or returned snapshots could mutate live room state.",
+      "correction": "Recursively clone typed maps, slices and arrays while preserving their concrete types.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 626,
+        "anchor": "func cloneCollection",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-212",
+      "category": "Hardening",
+      "title": "Invalid element revisions enter ordering",
+      "trigger_and_before": "Negative, fractional, infinite or unsafe integer revisions could enter last-writer ordering and persistence.",
+      "correction": "Accept only finite, non-negative, safe integer revisions.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/manager.go",
+        "line": 697,
+        "anchor": "func versionValue",
+        "sha256": "e2c5825fb0d92e2713abca17e021f4bea2b067e2ff2f2884495e60d70fccfc72"
+      }
+    },
+    {
+      "id": "QF-213",
+      "category": "Behavior",
+      "title": "Concurrent equal-version edits do not converge",
+      "trigger_and_before": "Two valid Excalidraw edits share a version but differ in versionNonce; arrival order determined the stored winner.",
+      "correction": "Use the lower nonce as the deterministic tie breaker, matching canvas reconciliation.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 690,
+        "anchor": "incomingNonce",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-214",
+      "category": "Polish",
+      "title": "Unchanged repeated joins generate redundant announcements",
+      "trigger_and_before": "Identity refresh or another join frame announced the same unchanged peer again.",
+      "correction": "Send init on rejoin while broadcasting presence only for first joins or actual identity changes.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/protocol.go",
+        "line": 127,
+        "anchor": "alreadyJoined",
+        "sha256": "945945f478bd98e778f8fa41b538722ed07f517dd04f6f469d87d52daee8a28d"
+      }
+    },
+    {
+      "id": "QF-215",
+      "category": "Hardening",
+      "title": "Detached sessions can process new frames",
+      "trigger_and_before": "Call HandleFrame after Close or eviction; a stale session could still issue protocol operations.",
+      "correction": "Reject closed or no-longer-registered sessions before dispatch.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/protocol.go",
+        "line": 79,
+        "anchor": "s.closed.Load()",
+        "sha256": "945945f478bd98e778f8fa41b538722ed07f517dd04f6f469d87d52daee8a28d"
+      }
+    },
+    {
+      "id": "QF-216",
+      "category": "Behavior",
+      "title": "Canceled request suppresses peer departure",
+      "trigger_and_before": "Close a session using a canceled request context; remaining peers missed peer-left.",
+      "correction": "Detach once and announce departure using a cleanup context independent of request cancellation.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/protocol.go",
+        "line": 229,
+        "anchor": "context.WithoutCancel(ctx)",
+        "sha256": "945945f478bd98e778f8fa41b538722ed07f517dd04f6f469d87d52daee8a28d"
+      }
+    },
+    {
+      "id": "QF-217",
+      "category": "Behavior",
+      "title": "Canceled WebSocket requests keep blocking",
+      "trigger_and_before": "Cancel the HTTP request while ReadMessage waits for a silent client; the handler and peer remained alive.",
+      "correction": "Close the connection when its request context ends and stop the callback during normal cleanup.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/http.go",
+        "line": 122,
+        "anchor": "stopCancel :=",
+        "sha256": "c0e5947ad0e96790b2318c45a628aadcf6d3253b7c18d3e404917c648b36b4e9"
+      }
+    },
+    {
+      "id": "QF-218",
+      "category": "Hardening",
+      "title": "Snapshots can load into the wrong room",
+      "trigger_and_before": "A backing adapter returns a snapshot with another room ID; Resume previously merged it.",
+      "correction": "Validate snapshot ownership before merging or restoring persisted content.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 712,
+        "anchor": "snapshot.RoomID !=",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-219",
+      "category": "Hardening",
+      "title": "Unsupported snapshot schemas load silently",
+      "trigger_and_before": "A future or invalid schema revision was treated like the current format.",
+      "correction": "Accept the current schema and legacy zero only, returning an explicit error for unsupported schemas.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 715,
+        "anchor": "snapshot.SchemaVersion <",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-220",
+      "category": "Hardening",
+      "title": "Invalid snapshot revisions damage room sequencing",
+      "trigger_and_before": "Negative or maximum int64 snapshot versions can corrupt the next room revision.",
+      "correction": "Reject invalid or immediately overflowing persisted revisions before applying them.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 718,
+        "anchor": "snapshot.Version <",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-221",
+      "category": "Behavior",
+      "title": "Canceled loads become cached successes",
+      "trigger_and_before": "A store ignores cancellation and returns successfully; Resume marked the room loaded anyway.",
+      "correction": "Check request cancellation after loading and leave the room eligible for a later successful resume.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 297,
+        "anchor": "err = ctx.Err()",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-222",
+      "category": "Behavior",
+      "title": "Explicit flush ignores its caller cancellation",
+      "trigger_and_before": "A pending save retained its original writer context but also discarded a canceled flush caller.",
+      "correction": "Preserve writer identity values while honoring the flush caller's cancellation and deadline.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 350,
+        "anchor": "saveCtx = flushContext",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-223",
+      "category": "Hardening",
+      "title": "Restore accepts a different requested revision",
+      "trigger_and_before": "LoadVersion returns a valid snapshot for another revision; the manager restored it without checking.",
+      "correction": "Compare the returned revision with the requested version before touching the live room.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/persistence.go",
+        "line": 438,
+        "anchor": "historical.Version != version",
+        "sha256": "f18cdeafbf2c6b3004819f5ec542ee4459712653923a7fea4a00427ab922377e"
+      }
+    },
+    {
+      "id": "QF-224",
+      "category": "Polish",
+      "title": "No-op permission changes create history",
+      "trigger_and_before": "Repeat the current students-draw setting; it incremented versions and wrote another snapshot.",
+      "correction": "Return without persistence or broadcast when the setting is unchanged.",
+      "status": "fixed",
+      "source": {
+        "file": "internal/boards/permissions.go",
+        "line": 29,
+        "anchor": "if r.studentsDraw == allowed",
+        "sha256": "4064b9860de9b43064ec883c616c80e0d3012a52d5b9235536f00509d4a57c03"
+      }
+    },
+    {
+      "id": "QF-225",
+      "category": "Behavior",
+      "title": "Admin token consumers disagree in one tab",
+      "trigger_and_before": "Save a token from one mounted hook; other consumers kept their previous local state.",
+      "correction": "Use one subscribed external store and notify every mounted consumer on writes.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/lib/admin-token.ts",
+        "line": 1,
+        "anchor": "useSyncExternalStore",
+        "sha256": "dbad75e0a978a41e32ae1068a5e82f55297f35e38eae65611aed85dfa23d3451"
+      }
+    },
+    {
+      "id": "QF-226",
+      "category": "Behavior",
+      "title": "Admin token changes do not cross tabs",
+      "trigger_and_before": "Change or clear the token in another tab; existing consumers kept stale credentials.",
+      "correction": "Handle relevant local-storage events and full storage clears while ignoring other storage areas.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/lib/admin-token.ts",
+        "line": 15,
+        "anchor": "window.addEventListener",
+        "sha256": "dbad75e0a978a41e32ae1068a5e82f55297f35e38eae65611aed85dfa23d3451"
+      }
+    },
+    {
+      "id": "QF-227",
+      "category": "Behavior",
+      "title": "Blocked storage loses shared ephemeral credentials",
+      "trigger_and_before": "A token write fails because storage is blocked; another component reading the token saw empty or old data.",
+      "correction": "Retain a shared in-memory fallback for the session and expose it consistently.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/lib/admin-token.ts",
+        "line": 23,
+        "anchor": "if (ephemeral)",
+        "sha256": "dbad75e0a978a41e32ae1068a5e82f55297f35e38eae65611aed85dfa23d3451"
+      }
+    },
+    {
+      "id": "QF-228",
+      "category": "Hardening",
+      "title": "Malformed socket envelopes crash consumers",
+      "trigger_and_before": "Valid JSON such as null, missing peers or non-array elements passed directly to callbacks.",
+      "correction": "Validate known message envelopes and ignore malformed frames before updating state.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 39,
+        "anchor": "export function validBoardMessage",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-229",
+      "category": "Behavior",
+      "title": "Queued old-socket callbacks affect a new room",
+      "trigger_and_before": "A queued event arrives after room replacement or disposal; it could update the current callbacks and presence.",
+      "correction": "Check both disposal and socket identity before processing open, message and close events.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 191,
+        "anchor": "socketRef.current !== socket",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-230",
+      "category": "Behavior",
+      "title": "WebSocket constructor failures crash the page",
+      "trigger_and_before": "Browser policy or an invalid connection environment throws synchronously during socket construction.",
+      "correction": "Expose an unavailable state with a recoverable error instead of escaping the effect.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 184,
+        "anchor": "Could not open the board connection",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-231",
+      "category": "Behavior",
+      "title": "Synchronous send errors lose a drawing batch",
+      "trigger_and_before": "A socket closes between readyState checking and send; the exception escaped without buffering work.",
+      "correction": "Catch send failure, close the failed transport and retain the element batch for reconnect.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 142,
+        "anchor": "Could not send board changes",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-232",
+      "category": "Polish",
+      "title": "Disconnected presence remains visible",
+      "trigger_and_before": "A connection closes but the participant list and self ID stayed visible until another init.",
+      "correction": "Clear disconnected presence immediately while reconnecting.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 276,
+        "anchor": "setStatus(\"reconnecting\")",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-233",
+      "category": "Polish",
+      "title": "Online recovery waits for exponential backoff",
+      "trigger_and_before": "The browser regains connectivity while a reconnect timer is waiting.",
+      "correction": "Attempt reconnect immediately on the online event and remove the listener during cleanup.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 313,
+        "anchor": "const onOnline",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-234",
+      "category": "Behavior",
+      "title": "Large drawing batches exceed the frame limit",
+      "trigger_and_before": "A normal gesture produces a multi-element batch larger than the server's 64 KiB limit and disconnects.",
+      "correction": "Split by encoded UTF-8 size with envelope headroom and explain an individually oversized element.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 81,
+        "anchor": "export function boardMessageBatches",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-235",
+      "category": "Hardening",
+      "title": "One corrupt cache row discards the local scene",
+      "trigger_and_before": "A local snapshot mixes valid elements with null or malformed rows; the broad catch discarded everything.",
+      "correction": "Validate rows individually and recover the valid subset with normalized revision defaults.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/board/board-canvas.tsx",
+        "line": 60,
+        "anchor": "const parsed: unknown",
+        "sha256": "1c03c3734e3b204618d3ec6548a024d7a266d19559e9f7051ad11838bf530513"
+      }
+    },
+    {
+      "id": "QF-236",
+      "category": "Behavior",
+      "title": "Duplicate cached IDs retain stale revisions",
+      "trigger_and_before": "A cached scene has repeated IDs in a different revision order; the last array row could overwrite newer state.",
+      "correction": "Keep the newest element revision and deterministic nonce winner for each ID.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/lib/board-elements.ts",
+        "line": 14,
+        "anchor": "export function mergeBoardElements",
+        "sha256": "693e8b961496deb175a17c293084e1faea2358e38d1571bf07249ee38157eb71"
+      }
+    },
+    {
+      "id": "QF-237",
+      "category": "Behavior",
+      "title": "Board deltas arrive before the lazy canvas exists",
+      "trigger_and_before": "An elements frame arrives after init while the canvas module is still loading; the optional callback dropped it.",
+      "correction": "Merge early deltas into the pending remote snapshot until the canvas can consume them.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 86,
+        "anchor": "mergeBoardElements(current",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-238",
+      "category": "Hardening",
+      "title": "An empty room still opens a socket",
+      "trigger_and_before": "A route normalizes to an empty room code; the error view appeared while its hook still connected.",
+      "correction": "Disable realtime transport for an empty room identifier.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 95,
+        "anchor": "enabled: boardRealtimeEnabled",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-239",
+      "category": "Polish",
+      "title": "Repeated export clicks create overlapping downloads",
+      "trigger_and_before": "Click Export repeatedly while the persistence request is pending.",
+      "correction": "Use a synchronous export lock and a visible exporting state until completion.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 142,
+        "anchor": "if (exportLock.current)",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-240",
+      "category": "Behavior",
+      "title": "Board JSON downloads revoke URLs immediately",
+      "trigger_and_before": "The board export clicked an unattached anchor and immediately revoked its blob URL.",
+      "correction": "Reuse the attached-anchor download helper with delayed object-URL cleanup.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 172,
+        "anchor": "downloadTextFile(",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-241",
+      "category": "Polish",
+      "title": "Board download failures have no actionable feedback",
+      "trigger_and_before": "Blob URL creation or a download operation throws; the async event handler rejected without guidance.",
+      "correction": "Catch download errors, release the pending state and show a retryable failure message.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 179,
+        "anchor": "Could not download the board snapshot",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-242",
+      "category": "Polish",
+      "title": "Constructor failure leaves no retry control",
+      "trigger_and_before": "Realtime is configured but socket construction fails; the unavailable state had no Retry now button.",
+      "correction": "Expose manual retry for recoverable unavailable connections as well as reconnecting ones.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 212,
+        "anchor": "sync.status === \"unavailable\"",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-243",
+      "category": "Polish",
+      "title": "Room-code button lacks an explicit copy action",
+      "trigger_and_before": "The toolbar button's accessible name was only the code, leaving its purpose unclear.",
+      "correction": "Name the control with the copy action and complete room code.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.$roomId.tsx",
+        "line": 242,
+        "anchor": "aria-label={`Copy room code",
+        "sha256": "78262e8ad0961f8a1f6bd8838bd770bc64201f4870ef7330d84dfd238f924557"
+      }
+    },
+    {
+      "id": "QF-244",
+      "category": "Behavior",
+      "title": "Heartbeat send exceptions escape the timer",
+      "trigger_and_before": "The socket closes during an interval heartbeat; send could throw outside the transport recovery path.",
+      "correction": "Catch heartbeat send failure and close the transport to enter reconnect handling.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/hooks/use-board-sync.ts",
+        "line": 207,
+        "anchor": "current.send(JSON.stringify",
+        "sha256": "35349b48e4ecc41c2d3c51b193359aac742327f3b5bbadd50428da0594444cbf"
+      }
+    },
+    {
+      "id": "QF-245",
+      "category": "Behavior",
+      "title": "Late history restore replaces another room",
+      "trigger_and_before": "Change rooms or user identity while restore is pending; its late response applied through the current callback.",
+      "correction": "Capture the requested room and user scope and ignore a response after either changes.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/board/board-history-dialog.tsx",
+        "line": 90,
+        "anchor": "requestedScope",
+        "sha256": "089212506ad70ed1eaee0ba2a93e7b854488f562e6ade7929de5dcdfb39f9e39"
+      }
+    },
+    {
+      "id": "QF-246",
+      "category": "Polish",
+      "title": "History restore controls are indistinguishable",
+      "trigger_and_before": "A screen-reader button list contains multiple controls all named Restore.",
+      "correction": "Include the target revision in each restore button's accessible name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/board/board-history-dialog.tsx",
+        "line": 104,
+        "anchor": "aria-label={`Restore version",
+        "sha256": "089212506ad70ed1eaee0ba2a93e7b854488f562e6ade7929de5dcdfb39f9e39"
+      }
+    },
+    {
+      "id": "QF-247",
+      "category": "Polish",
+      "title": "Malformed history timestamps show Invalid Date",
+      "trigger_and_before": "A history adapter returns an invalid saved_at string.",
+      "correction": "Display a clear unavailable-time fallback instead of rendering Invalid Date.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/board/board-history-dialog.tsx",
+        "line": 80,
+        "anchor": "Save time unavailable",
+        "sha256": "089212506ad70ed1eaee0ba2a93e7b854488f562e6ade7929de5dcdfb39f9e39"
+      }
+    },
+    {
+      "id": "QF-248",
+      "category": "Polish",
+      "title": "Standard dialogs exceed short viewports",
+      "trigger_and_before": "Open a tall dialog with a short window or virtual keyboard; top or bottom content can be unreachable.",
+      "correction": "Bound popup height to the dynamic viewport and allow internal vertical scrolling.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/dialog.tsx",
+        "line": 56,
+        "anchor": "max-h-[calc(100dvh",
+        "sha256": "3cc0680a61cbbc1a3f2b567641976fb38e07577a0029fcc82921feb7ac2d05ba"
+      }
+    },
+    {
+      "id": "QF-249",
+      "category": "Polish",
+      "title": "Dialog headings overlap the close control",
+      "trigger_and_before": "A long dialog title reaches the top-right close button.",
+      "correction": "Reserve header space for the close control.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/dialog.tsx",
+        "line": 86,
+        "anchor": "gap-2 pr-8",
+        "sha256": "3cc0680a61cbbc1a3f2b567641976fb38e07577a0029fcc82921feb7ac2d05ba"
+      }
+    },
+    {
+      "id": "QF-250",
+      "category": "Polish",
+      "title": "Confirmations overflow very narrow screens",
+      "trigger_and_before": "The alert popup's full width and fixed maximum can reach viewport edges at small widths.",
+      "correction": "Keep a viewport-relative width with consistent outer margins.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/alert-dialog.tsx",
+        "line": 53,
+        "anchor": "w-[calc(100%-2rem)]",
+        "sha256": "b1a897381b15b2dd28061d8e76eb764150b6e116034cc8a892042a089c6d1f67"
+      }
+    },
+    {
+      "id": "QF-251",
+      "category": "Polish",
+      "title": "Long confirmations exceed the visible height",
+      "trigger_and_before": "A confirmation has long text or an error on a short screen.",
+      "correction": "Bound its height and scroll its contents so actions remain reachable.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/alert-dialog.tsx",
+        "line": 53,
+        "anchor": "max-h-[calc(100dvh",
+        "sha256": "b1a897381b15b2dd28061d8e76eb764150b6e116034cc8a892042a089c6d1f67"
+      }
+    },
+    {
+      "id": "QF-252",
+      "category": "Polish",
+      "title": "Unbroken names overflow confirmation titles",
+      "trigger_and_before": "An item title contains a long token without spaces.",
+      "correction": "Allow long confirmation titles to wrap anywhere within the popup.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/alert-dialog.tsx",
+        "line": 118,
+        "anchor": "overflow-wrap:anywhere",
+        "sha256": "b1a897381b15b2dd28061d8e76eb764150b6e116034cc8a892042a089c6d1f67"
+      }
+    },
+    {
+      "id": "QF-253",
+      "category": "Polish",
+      "title": "Pending confirmations are not communicated as busy",
+      "trigger_and_before": "A destructive request waits while controls are disabled, without exposing busy state.",
+      "correction": "Mark the dialog busy and announce the changing confirmation action label politely.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/confirm-action.tsx",
+        "line": 61,
+        "anchor": "aria-busy={pending}",
+        "sha256": "9b424e6994760ff8a87c2a93c494fcb7593ff5bac78b614fd0b55da51011ae36"
+      }
+    },
+    {
+      "id": "QF-254",
+      "category": "Behavior",
+      "title": "Input-group addons do not focus textareas",
+      "trigger_and_before": "Click a text addon next to an InputGroupTextarea; the helper searched only for input.",
+      "correction": "Focus either supported editable control.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/input-group.tsx",
+        "line": 64,
+        "anchor": "input, textarea",
+        "sha256": "dc1cdea59d0f0c752d4cc055cc03de5972a2d43dd84c916c087fa5f6a1e8c545"
+      }
+    },
+    {
+      "id": "QF-255",
+      "category": "Behavior",
+      "title": "Custom addon click handlers suppress built-in focus",
+      "trigger_and_before": "Passing onClick replaced the internal focus handler through prop spreading.",
+      "correction": "Compose the supplied callback with default focus behavior and respect preventDefault.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/ui/input-group.tsx",
+        "line": 58,
+        "anchor": "onClick?.(e)",
+        "sha256": "dc1cdea59d0f0c752d4cc055cc03de5972a2d43dd84c916c087fa5f6a1e8c545"
+      }
+    },
+    {
+      "id": "QF-256",
+      "category": "Polish",
+      "title": "Home catalog failures require a page refresh",
+      "trigger_and_before": "The assessment catalog fails but the error state offers only explanatory text.",
+      "correction": "Add a catalog retry control that refetches the failed query.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/index.tsx",
+        "line": 257,
+        "anchor": "Retry assessments",
+        "sha256": "b74f2482b2fd81006784eafd2df6d1880ee33d23f0d43aba096bed1b9256b5a7"
+      }
+    },
+    {
+      "id": "QF-257",
+      "category": "Polish",
+      "title": "Empty assessment searches lack a reset action",
+      "trigger_and_before": "Search and class/status filters produce zero results; recovery requires clearing several controls manually.",
+      "correction": "Reset search, status and classroom filters from the empty state.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/index.tsx",
+        "line": 351,
+        "anchor": "Clear assessment filters",
+        "sha256": "b74f2482b2fd81006784eafd2df6d1880ee33d23f0d43aba096bed1b9256b5a7"
+      }
+    },
+    {
+      "id": "QF-258",
+      "category": "Polish",
+      "title": "Empty room searches lack a reset action",
+      "trigger_and_before": "A room filter yields no results with only text suggesting that it be cleared.",
+      "correction": "Provide a clear-filter action in the empty state.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/board.index.tsx",
+        "line": 275,
+        "anchor": "Clear room filter",
+        "sha256": "03522a3aa5bdfa0d64780944e071a8241bb06afa83a45067f79470e1b3101b19"
+      }
+    },
+    {
+      "id": "QF-259",
+      "category": "Polish",
+      "title": "Filtered assessment counts are silent",
+      "trigger_and_before": "Change filters while using assistive technology; the changing badge is not announced.",
+      "correction": "Expose the count as a named polite status.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/index.tsx",
+        "line": 218,
+        "anchor": "Matching assessments",
+        "sha256": "b74f2482b2fd81006784eafd2df6d1880ee33d23f0d43aba096bed1b9256b5a7"
+      }
+    },
+    {
+      "id": "QF-260",
+      "category": "Behavior",
+      "title": "IME confirmation can submit authentication",
+      "trigger_and_before": "Press Enter to finish composing text in an authentication field; it also submits credentials.",
+      "correction": "Ignore Enter submission while the browser reports active composition.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/login.tsx",
+        "line": 401,
+        "anchor": "!event.nativeEvent.isComposing",
+        "sha256": "51713da0d0f64691eaa47ef55f4284ad85fba129eba96e045a48583d282fcb48"
+      }
+    },
+    {
+      "id": "QF-261",
+      "category": "Polish",
+      "title": "Recovery email fields enable unwanted typing assistance",
+      "trigger_and_before": "On mobile, recovery email entry can receive capitalization or spellchecking behavior.",
+      "correction": "Disable capitalization, autocorrection and spellchecking for the recovery address.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/login.tsx",
+        "line": 299,
+        "anchor": "id=\"forgot-email\"",
+        "sha256": "51713da0d0f64691eaa47ef55f4284ad85fba129eba96e045a48583d282fcb48"
+      }
+    },
+    {
+      "id": "QF-262",
+      "category": "Polish",
+      "title": "Password visibility controls do not expose state",
+      "trigger_and_before": "Toggle password visibility in authentication or settings; only the label changes.",
+      "correction": "Expose the pressed state on all password visibility controls.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/login.tsx",
+        "line": 462,
+        "anchor": "aria-pressed={showPassword}",
+        "sha256": "51713da0d0f64691eaa47ef55f4284ad85fba129eba96e045a48583d282fcb48"
+      }
+    },
+    {
+      "id": "QF-263",
+      "category": "Polish",
+      "title": "Visible passwords can receive text autocorrection",
+      "trigger_and_before": "Show a password as text on mobile; default keyboard assistance can modify its contents.",
+      "correction": "Disable capitalization, correction and spellchecking on password inputs in both account flows.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/login.tsx",
+        "line": 245,
+        "anchor": "autoCorrect=\"off\"",
+        "sha256": "51713da0d0f64691eaa47ef55f4284ad85fba129eba96e045a48583d282fcb48"
+      }
+    },
+    {
+      "id": "QF-264",
+      "category": "Behavior",
+      "title": "Profile edits made during save are overwritten",
+      "trigger_and_before": "Type another display name while an earlier profile update is pending; the response replaces that new edit.",
+      "correction": "Disable the profile input for its pending write.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 172,
+        "anchor": "disabled={profilePending}",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-265",
+      "category": "Behavior",
+      "title": "New credentials typed during a password change are erased",
+      "trigger_and_before": "Edit password fields while the mutation waits; successful cleanup clears those newly typed values.",
+      "correction": "Disable both password inputs and visibility controls while the request is pending.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 236,
+        "anchor": "disabled={passwordPending}",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-266",
+      "category": "Polish",
+      "title": "Overlong profile names fail only after submission",
+      "trigger_and_before": "Enter more than the server's 60-character profile limit with no field guidance.",
+      "correction": "Validate character count locally, explain the limit and disable invalid saves.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 60,
+        "anchor": "const profileNameValid",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-267",
+      "category": "Behavior",
+      "title": "Background profile refresh destroys unsaved names",
+      "trigger_and_before": "A same-user identity refresh updates the canonical name while a local profile edit is in progress.",
+      "correction": "Update pristine values on refresh and preserve an independently edited local name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 56,
+        "anchor": "const previousProfile",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-268",
+      "category": "Polish",
+      "title": "Password instructions disagree with byte-based validation",
+      "trigger_and_before": "The settings description promises eight characters while the actual policy measures UTF-8 bytes.",
+      "correction": "Explain the 8–72-byte range and how non-ASCII text affects it.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 223,
+        "anchor": "Use 8–72 UTF-8 bytes",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-269",
+      "category": "Polish",
+      "title": "Settings password validation lacks input semantics",
+      "trigger_and_before": "A password field is visibly invalid but does not expose aria-invalid or its help text association.",
+      "correction": "Connect the live validation message to the input and expose its invalid state.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/settings.tsx",
+        "line": 280,
+        "anchor": "aria-describedby=\"new-password-help\"",
+        "sha256": "1c64269a304abee9978ecb05fcb71d1997a08d4f7c808cfad3834e3208950264"
+      }
+    },
+    {
+      "id": "QF-270",
+      "category": "Polish",
+      "title": "Authentication validation is only visual",
+      "trigger_and_before": "Registration and reset fields show invalid styling without equivalent input semantics.",
+      "correction": "Expose invalid field states and associate password guidance with the relevant inputs.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/login.tsx",
+        "line": 433,
+        "anchor": "aria-describedby={",
+        "sha256": "51713da0d0f64691eaa47ef55f4284ad85fba129eba96e045a48583d282fcb48"
+      }
+    },
+    {
+      "id": "QF-271",
+      "category": "Polish",
+      "title": "Builder validation is only visual",
+      "trigger_and_before": "Invalid time, duration or attempt settings color their groups without exposing input-level errors.",
+      "correction": "Add invalid state and associated guidance to the affected question-builder controls.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 975,
+        "anchor": "aria-describedby=\"quiz-window-help\"",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-272",
+      "category": "Polish",
+      "title": "Repeated prompts lack question context",
+      "trigger_and_before": "A teacher navigates text fields for several questions; every prompt is named Prompt.",
+      "correction": "Include the question number in each prompt's accessible name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1425,
+        "anchor": "aria-label={`Question ${index + 1} prompt",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-273",
+      "category": "Polish",
+      "title": "Correct-answer controls hide their selected state",
+      "trigger_and_before": "The current answer is conveyed through a visual badge and button color only.",
+      "correction": "Expose the selected correct option with aria-pressed.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1459,
+        "anchor": "aria-pressed={optionIndex",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-274",
+      "category": "Polish",
+      "title": "Repeated option controls lack question context",
+      "trigger_and_before": "Option A and answer-selection controls repeat across multiple question cards.",
+      "correction": "Include the question number in option input and correct-answer action names.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1447,
+        "anchor": "aria-label={`Question ${index + 1} option",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-275",
+      "category": "Polish",
+      "title": "Repeated feedback fields lack question context",
+      "trigger_and_before": "Several feedback inputs have the same accessible name.",
+      "correction": "Identify each feedback field by question number.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1530,
+        "anchor": "aria-label={`Question ${index + 1} feedback",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-276",
+      "category": "Polish",
+      "title": "Repeated scoring fields lack question context",
+      "trigger_and_before": "Several point inputs have the same accessible name.",
+      "correction": "Identify each points field by question number.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1509,
+        "anchor": "aria-label={`Question ${index + 1} points",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-277",
+      "category": "Polish",
+      "title": "Bank-save actions lack question context",
+      "trigger_and_before": "A list of builder buttons contains several controls named Bank.",
+      "correction": "Name each save-to-bank action with its question number and purpose.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1411,
+        "anchor": "aria-label={`Save question",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-278",
+      "category": "Polish",
+      "title": "Add-option actions lack question context",
+      "trigger_and_before": "Multiple question cards expose identical Add option controls.",
+      "correction": "Include the receiving question number in each add-option action.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1496,
+        "anchor": "aria-label={`Add option",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-279",
+      "category": "Polish",
+      "title": "Remove-option actions lack question context",
+      "trigger_and_before": "A screen-reader action list repeats Remove option A across question cards.",
+      "correction": "Identify both the question and option being removed.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1479,
+        "anchor": "aria-label={`Remove question ${index + 1} option",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-280",
+      "category": "Polish",
+      "title": "Local draft actions are indistinguishable",
+      "trigger_and_before": "Several local rows expose identical Load controls.",
+      "correction": "Include the local draft title and storage context in the action name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1117,
+        "anchor": "aria-label={`Load local draft",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-281",
+      "category": "Polish",
+      "title": "Workspace draft actions are indistinguishable",
+      "trigger_and_before": "Several remote rows expose identical Load controls.",
+      "correction": "Include the workspace draft title and storage context in the action name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1202,
+        "anchor": "aria-label={`Load workspace draft",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-282",
+      "category": "Polish",
+      "title": "Question-bank reuse actions are indistinguishable",
+      "trigger_and_before": "Each bank row exposes a button named Use, without naming its question.",
+      "correction": "Include the question text in the reuse action name.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1300,
+        "anchor": "aria-label={`Use bank question",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-283",
+      "category": "Polish",
+      "title": "Draft list titles are permanently truncated",
+      "trigger_and_before": "Long local or workspace draft titles cannot be distinguished visually in their rows.",
+      "correction": "Wrap full draft titles, including authored line breaks.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1106,
+        "anchor": "draft.title || \"Untitled draft\"",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-284",
+      "category": "Polish",
+      "title": "Question-bank prompts hide distinguishing content",
+      "trigger_and_before": "Long bank prompts are truncated, concealing differences between similar questions.",
+      "correction": "Wrap complete question text and preserve authored line breaks.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1292,
+        "anchor": "min-w-0 text-sm break-words whitespace-pre-wrap",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-285",
+      "category": "Polish",
+      "title": "Workspace draft failures have no retry control",
+      "trigger_and_before": "Loading the remote drafts fails; only an error sentence is available.",
+      "correction": "Add a retry action while keeping local drafts available.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1254,
+        "anchor": "Retry workspace drafts",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-286",
+      "category": "Polish",
+      "title": "Missing builder assignments appear unassigned",
+      "trigger_and_before": "Load a draft assigned to a class outside the current classroom list; the select has no matching option.",
+      "correction": "Keep an explicit unavailable-assignment option for the selected classroom ID.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 926,
+        "anchor": "Assigned classroom unavailable",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-287",
+      "category": "Polish",
+      "title": "Duration zero conflicts with the builder's native minimum",
+      "trigger_and_before": "The backend supports zero for unlimited duration but the builder sets its numeric minimum to one.",
+      "correction": "Align the numeric minimum and guidance with the supported zero value.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1003,
+        "anchor": "0 means no limit",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-288",
+      "category": "Hardening",
+      "title": "One invalid date can pass publish readiness",
+      "trigger_and_before": "Only one time boundary is invalid; the previous window expression short-circuits as valid.",
+      "correction": "Validate each supplied date independently before enabling publication.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 796,
+        "anchor": "Number.isFinite(openInstant)",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-289",
+      "category": "Polish",
+      "title": "Import preview collapses multiline prompts",
+      "trigger_and_before": "A question prompt contains authored line breaks; preview collapses them.",
+      "correction": "Preserve prompt whitespace and wrap long words during review.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/question-import.tsx",
+        "line": 147,
+        "anchor": "{index + 1}. {question.question}",
+        "sha256": "effa1df8a4a125728646449f98d7a9daac73e4c9b4717913a572de40be5da98c"
+      }
+    },
+    {
+      "id": "QF-290",
+      "category": "Polish",
+      "title": "Import preview merges choices into ambiguous text",
+      "trigger_and_before": "Options contain separators or line breaks; a joined paragraph obscures choice boundaries.",
+      "correction": "Render each option as a separate ordered list item with its answer marker.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/question-import.tsx",
+        "line": 149,
+        "anchor": "<ol className=",
+        "sha256": "effa1df8a4a125728646449f98d7a9daac73e4c9b4717913a572de40be5da98c"
+      }
+    },
+    {
+      "id": "QF-291",
+      "category": "Polish",
+      "title": "Import preview collapses feedback formatting",
+      "trigger_and_before": "A feedback explanation contains multiple lines or a long token.",
+      "correction": "Preserve line breaks and wrap feedback within the preview.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/question-import.tsx",
+        "line": 166,
+        "anchor": "Feedback: {question.feedback}",
+        "sha256": "effa1df8a4a125728646449f98d7a9daac73e4c9b4717913a572de40be5da98c"
+      }
+    },
+    {
+      "id": "QF-292",
+      "category": "Polish",
+      "title": "Import format instructions are disconnected from inputs",
+      "trigger_and_before": "Assistive technology reaches the format or source field without its required data-shape guidance.",
+      "correction": "Associate both controls with the format-specific instructions.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/question-import.tsx",
+        "line": 65,
+        "anchor": "aria-describedby=\"question-import-help\"",
+        "sha256": "effa1df8a4a125728646449f98d7a9daac73e4c9b4717913a572de40be5da98c"
+      }
+    },
+    {
+      "id": "QF-293",
+      "category": "Behavior",
+      "title": "One reviewed import can be inserted twice",
+      "trigger_and_before": "Two activations occur before the cleared preview rerenders; the same reviewed batch is appended twice.",
+      "correction": "Guard insertion synchronously and reset the guard for a new preview.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/question-import.tsx",
+        "line": 43,
+        "anchor": "imported.current = true",
+        "sha256": "effa1df8a4a125728646449f98d7a9daac73e4c9b4717913a572de40be5da98c"
+      }
+    },
+    {
+      "id": "QF-294",
+      "category": "Polish",
+      "title": "Workspace draft loading has no announced status",
+      "trigger_and_before": "The remote draft section shows only a skeleton while loading.",
+      "correction": "Give the loading region a named status for assistive technology.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1156,
+        "anchor": "Loading workspace drafts",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-295",
+      "category": "Polish",
+      "title": "Question-bank loading has no announced status",
+      "trigger_and_before": "The empty local bank waits for its remote query with only a skeleton.",
+      "correction": "Give the bank loading region a named status.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/teacher/quiz-builder.tsx",
+        "line": 1283,
+        "anchor": "Loading question bank",
+        "sha256": "4e6f9d4121f93f1ea7108d9428cad81b0434b946666c6e4a0172b7d8fbbb39a2"
+      }
+    },
+    {
+      "id": "QF-296",
+      "category": "Polish",
+      "title": "The not-found page lacks a main landmark and heading",
+      "trigger_and_before": "A user reaches an unknown route and cannot find a page heading or main landmark.",
+      "correction": "Use a main landmark and a real level-one 404 heading.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/__root.tsx",
+        "line": 62,
+        "anchor": "<h1 className=\"text-7xl",
+        "sha256": "eba7e2ab8d3d78ca7bb890189f1919f0703c1bed0fd3d22b663169bec466ff05"
+      }
+    },
+    {
+      "id": "QF-297",
+      "category": "Polish",
+      "title": "The rendering-error page lacks announced structure",
+      "trigger_and_before": "A route rendering error shows plain paragraphs without alert semantics or a heading.",
+      "correction": "Use an alerting main region and a level-one error heading.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/routes/__root.tsx",
+        "line": 76,
+        "anchor": "role=\"alert\"",
+        "sha256": "eba7e2ab8d3d78ca7bb890189f1919f0703c1bed0fd3d22b663169bec466ff05"
+      }
+    },
+    {
+      "id": "QF-298",
+      "category": "Polish",
+      "title": "Header ellipsis hides complete page context",
+      "trigger_and_before": "A narrow header truncates the title and description with no pointer-accessible disclosure.",
+      "correction": "Expose the full title and description through their title attributes.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/layout/app-shell.tsx",
+        "line": 44,
+        "anchor": "<h1 title={title}",
+        "sha256": "c844241262ed7b4a773edb71a8d9d9c83f4109d35622925e684c3abce0f4e0e9"
+      }
+    },
+    {
+      "id": "QF-299",
+      "category": "Polish",
+      "title": "Roster rows hide full member identities",
+      "trigger_and_before": "Names and emails in roster rows are ellipsized, concealing the distinguishing part.",
+      "correction": "Wrap complete member names and email addresses within their table cells.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/classroom-dashboard-real.tsx",
+        "line": 691,
+        "anchor": "{member.email ||",
+        "sha256": "9c8e06f3a0ec811c810637678cdfcfac85e8378c5c1da2348051599a4c208b96"
+      }
+    },
+    {
+      "id": "QF-300",
+      "category": "Polish",
+      "title": "Invitation cards hide full recipient identities",
+      "trigger_and_before": "Long recipient names and addresses are truncated in pending invitation cards.",
+      "correction": "Wrap full recipient details so teachers can verify the invitation destination.",
+      "status": "fixed",
+      "source": {
+        "file": "web/src/components/classroom-dashboard-real.tsx",
+        "line": 873,
+        "anchor": "{invitation.email}",
+        "sha256": "9c8e06f3a0ec811c810637678cdfcfac85e8378c5c1da2348051599a4c208b96"
+      }
+    }
+  ]
+}

@@ -4,6 +4,9 @@ import "context"
 
 // CanDraw derives permission from server state, never a browser-supplied role.
 func (m *Manager) CanDraw(roomID string, socket any) bool {
+	if !comparableSocket(socket) {
+		return false
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	r := m.rooms[roomID]
@@ -23,6 +26,10 @@ func (m *Manager) SetStudentDrawing(ctx context.Context, roomID string, allowed 
 	}
 	m.mu.Lock()
 	r := m.roomLocked(roomID)
+	if r.studentsDraw == allowed {
+		m.mu.Unlock()
+		return nil
+	}
 	previous := r.studentsDraw
 	previousVersion, previousUpdated := r.version, r.updatedAt
 	r.studentsDraw = allowed

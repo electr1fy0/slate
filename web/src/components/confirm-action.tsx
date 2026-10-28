@@ -58,7 +58,7 @@ export function ConfirmAction({
       }}
     >
       <AlertDialogTrigger render={children} />
-      <AlertDialogContent>
+      <AlertDialogContent aria-busy={pending}>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
@@ -71,6 +71,7 @@ export function ConfirmAction({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
           <AlertDialogAction
+            aria-live="polite"
             variant="destructive"
             disabled={pending}
             onClick={() => void confirm()}

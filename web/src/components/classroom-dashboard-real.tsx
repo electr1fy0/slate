@@ -684,10 +684,10 @@ export function ClassroomDashboard({
                                   </AvatarFallback>
                                 </Avatar>
                                 <div className="min-w-0">
-                                  <p className="truncate font-medium">
+                                  <p className="font-medium break-words whitespace-normal">
                                     {member.name}
                                   </p>
-                                  <p className="truncate text-xs text-muted-foreground">
+                                  <p className="text-xs break-all whitespace-normal text-muted-foreground">
                                     {member.email || "No email on file"}
                                   </p>
                                 </div>
@@ -866,10 +866,10 @@ export function ClassroomDashboard({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
+                            <p className="text-sm font-medium break-words whitespace-normal">
                               {invitation.name}
                             </p>
-                            <p className="truncate text-xs text-muted-foreground">
+                            <p className="text-xs break-all whitespace-normal text-muted-foreground">
                               {invitation.email}
                             </p>
                           </div>

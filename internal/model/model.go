@@ -2,6 +2,8 @@
 // components. The dynamodbav tags intentionally document the existing table.
 package model
 
+import "encoding/json"
+
 type User struct {
 	PK             string `json:"-" dynamodbav:"pk"`
 	SK             string `json:"-" dynamodbav:"sk"`
@@ -77,12 +79,27 @@ type EmailIndex struct {
 }
 
 type Question struct {
-	Index    int      `json:"index" dynamodbav:"-"`
-	Question string   `json:"question" dynamodbav:"question"`
-	Options  []string `json:"options" dynamodbav:"options"`
-	Answer   int      `json:"answer,omitempty" dynamodbav:"answer"`
-	Points   int      `json:"points,omitempty" dynamodbav:"points,omitempty"`
-	Feedback string   `json:"feedback,omitempty" dynamodbav:"feedback,omitempty"`
+	Index        int      `json:"index" dynamodbav:"-"`
+	Question     string   `json:"question" dynamodbav:"question"`
+	Options      []string `json:"options" dynamodbav:"options"`
+	Answer       int      `json:"answer,omitempty" dynamodbav:"answer"`
+	Points       int      `json:"points,omitempty" dynamodbav:"points,omitempty"`
+	Feedback     string   `json:"feedback,omitempty" dynamodbav:"feedback,omitempty"`
+	AnswerHidden bool     `json:"-" dynamodbav:"-"`
+}
+
+// MarshalJSON preserves option zero for authoring while explicitly redacting
+// answers on learner reads. A numeric zero cannot represent both states.
+func (q Question) MarshalJSON() ([]byte, error) {
+	type questionAlias Question
+	var answer *int
+	if !q.AnswerHidden {
+		answer = &q.Answer
+	}
+	return json.Marshal(struct {
+		questionAlias
+		Answer *int `json:"answer,omitempty"`
+	}{questionAlias(q), answer})
 }
 
 type ExamMeta struct {
@@ -103,7 +120,7 @@ type ExamMeta struct {
 	AllowLate        bool   `json:"allow_late,omitempty" dynamodbav:"allow_late,omitempty"`
 	LateGraceMinutes int    `json:"late_grace_minutes,omitempty" dynamodbav:"late_grace_minutes,omitempty"`
 	AttemptStatus    string `json:"attempt_status,omitempty" dynamodbav:"-"`
-	Score            int    `json:"score,omitempty" dynamodbav:"-"`
+	Score            int    `json:"score" dynamodbav:"-"`
 	Total            int    `json:"total,omitempty" dynamodbav:"-"`
 	SubmittedAt      string `json:"submitted_at,omitempty" dynamodbav:"-"`
 	AttemptNumber    int    `json:"attempt_number,omitempty" dynamodbav:"-"`

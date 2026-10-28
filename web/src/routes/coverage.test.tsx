@@ -895,7 +895,9 @@ describe("route components", () => {
     state.syncOptions?.onInit([])
     state.syncOptions?.onElements([])
     fireEvent.click(screen.getByTestId("board-canvas"))
-    fireEvent.click(screen.getByRole("button", { name: "room-1" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy room code room-1" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Export" }))
     fireEvent.click(screen.getByRole("switch", { name: "students draw" }))
     await waitFor(() =>
@@ -952,7 +954,9 @@ describe("route components", () => {
     fireEvent.click(screen.getByTestId("board-canvas"))
     fireEvent.click(screen.getByTestId("board-canvas"))
     fireEvent.click(screen.getByTestId("board-no-snapshot"))
-    fireEvent.click(screen.getByRole("button", { name: "room-1" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy room code room-1" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Export" }))
     await waitFor(() =>
       expect(state.api.boardExport).toHaveBeenCalledWith("room-1")
@@ -2108,7 +2112,9 @@ describe("route components", () => {
     fireEvent.change(screen.getByPlaceholderText("Option B"), {
       target: { value: "B" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Bank" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Save question \d+ to bank$/ })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }))
     await waitFor(() => expect(state.api.createQuizDraft).toHaveBeenCalled())
     fireEvent.click(
@@ -2127,7 +2133,7 @@ describe("route components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }))
     await waitFor(() => expect(state.api.createQuizDraft).toHaveBeenCalled())
     const localDraftLoad = screen
-      .getAllByRole("button", { name: "Load" })
+      .getAllByRole("button", { name: /^Load (local|workspace) draft / })
       .find((button) => {
         let node: HTMLElement | null = button
         while (node) {
@@ -2155,7 +2161,9 @@ describe("route components", () => {
     fireEvent.change(screen.getByLabelText("Custom ID (optional)"), {
       target: { value: "builder-id" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Bank" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Save question \d+ to bank$/ })
+    )
     fireEvent.change(screen.getByLabelText("Prompt"), {
       target: { value: "Choose one" },
     })
@@ -2165,9 +2173,13 @@ describe("route components", () => {
     fireEvent.change(screen.getByPlaceholderText("Option B"), {
       target: { value: "Second" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Bank" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Save question \d+ to bank$/ })
+    )
     expect(screen.getAllByText("Choose one").length).toBeGreaterThan(0)
-    fireEvent.click(screen.getAllByRole("button", { name: "Use" }).at(-1)!)
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^Use bank question / }).at(-1)!
+    )
     fireEvent.click(
       screen.getByRole("button", { name: "Delete bank question Choose one" })
     )
@@ -2175,14 +2187,20 @@ describe("route components", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove question 2" }))
     fireEvent.click(screen.getByRole("button", { name: "Remove question" }))
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Add option" })[0])
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^Add option to question / })[0]
+    )
     fireEvent.change(screen.getByPlaceholderText("Option C"), {
       target: { value: "Third" },
     })
     fireEvent.click(
-      screen.getByRole("button", { name: "Mark option C as correct" })
+      screen.getByRole("button", {
+        name: "Mark question 1 option C as correct",
+      })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Remove option C" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove question 1 option C" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Remove option" }))
     fireEvent.change(screen.getByLabelText("Points"), {
       target: { value: "3" },
@@ -2192,8 +2210,12 @@ describe("route components", () => {
     fireEvent.change(screen.getAllByLabelText("Prompt")[0], {
       target: { value: "Updated first" },
     })
-    fireEvent.click(screen.getAllByRole("button", { name: "Add option" })[0])
-    fireEvent.click(screen.getByRole("button", { name: "Remove option C" }))
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^Add option to question / })[0]
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove question 1 option C" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Remove option" }))
     fireEvent.change(screen.getAllByLabelText("Points")[0], {
       target: { value: "1" },
@@ -2201,11 +2223,15 @@ describe("route components", () => {
     fireEvent.change(screen.getAllByLabelText("Feedback (optional)")[0], {
       target: { value: "  " },
     })
-    fireEvent.click(screen.getAllByRole("button", { name: "Bank" })[0])
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /^Save question \d+ to bank$/ })[0]
+    )
     fireEvent.click(screen.getByRole("button", { name: "Remove question 2" }))
     fireEvent.click(screen.getByRole("button", { name: "Remove question" }))
     for (let index = 0; index < 4; index += 1) {
-      fireEvent.click(screen.getByRole("button", { name: "Add option" }))
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Add option to question / })
+      )
     }
     for (const [letter, value] of [
       ["C", "Third"],

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 )
 
 // ProtocolError is a recoverable board-frame error. The server sends it as an
@@ -50,6 +51,7 @@ type Session struct {
 	PeerID   string
 	Identity Identity
 	Joined   bool
+	closed   atomic.Bool
 }
 
 // NewSession connects a socket and returns a protocol session. A nil result
@@ -74,6 +76,9 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 	if s == nil || s.Manager == nil {
 		return 0, fmt.Errorf("nil board session")
 	}
+	if s.closed.Load() || !s.registered() {
+		return 0, fmt.Errorf("board session is closed")
+	}
 	s.Manager.Touch(s.RoomID, s.Socket)
 	if maxBytes > 0 && len([]byte(raw)) > maxBytes {
 		if err := s.Manager.Send(ctx, s.Socket,
@@ -95,6 +100,7 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 	case "join":
 		s.Manager.controlMu.Lock()
 		defer s.Manager.controlMu.Unlock()
+		previousPeer := s.findPeer()
 		requestedName := s.Identity.Name
 		if value, exists := frame["name"]; exists {
 			// The handler accepts any JSON value after stringification. Name is
@@ -118,10 +124,13 @@ func (s *Session) HandleFrame(ctx context.Context, raw string, maxBytes int) (cl
 		}); err != nil {
 			return 0, err
 		}
+		alreadyJoined := s.Joined
 		s.Joined = true
 		peer := s.findPeer()
-		s.Manager.Broadcast(ctx, s.RoomID,
-			map[string]any{"type": "peer-joined", "peer": peer}, s.Socket)
+		if !alreadyJoined || previousPeer == nil || (peer != nil && (previousPeer.Name != peer.Name || previousPeer.Role != peer.Role)) {
+			s.Manager.Broadcast(ctx, s.RoomID,
+				map[string]any{"type": "peer-joined", "peer": peer}, s.Socket)
+		}
 		return 0, nil
 
 	case "elements":
@@ -205,12 +214,29 @@ func (s *Session) findPeer() *Peer {
 	return nil
 }
 
+func (s *Session) registered() bool {
+	if !comparableSocket(s.Socket) {
+		return false
+	}
+	s.Manager.mu.RLock()
+	defer s.Manager.mu.RUnlock()
+	r := s.Manager.rooms[s.RoomID]
+	return r != nil && r.peers[s.Socket] != nil && r.peers[s.Socket].ID == s.PeerID
+}
+
 // Close detaches the session and announces the departure exactly once. It is
 // safe to call from both the normal receive-loop exit and a transport failure.
 func (s *Session) Close(ctx context.Context) {
 	if s == nil || s.Manager == nil {
 		return
 	}
+	if s.closed.Swap(true) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
 	if peer := s.Manager.Disconnect(s.RoomID, s.Socket); peer != nil {
 		s.Manager.Broadcast(ctx, s.RoomID,
 			map[string]any{"type": "peer-left", "peer": peer}, nil)

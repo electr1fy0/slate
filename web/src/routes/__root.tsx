@@ -58,22 +58,27 @@ export const Route = createRootRoute({
 
 function NotFound() {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
-      <p className="text-7xl font-semibold tracking-tight text-primary">404</p>
+    <main className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
+      <h1 className="text-7xl font-semibold tracking-tight text-primary">
+        404
+      </h1>
       <p className="text-muted-foreground">That page isn't on the board.</p>
       <Button variant="outline" nativeButton={false} render={<Link to="/" />}>
         Back home
       </Button>
-    </div>
+    </main>
   )
 }
 
 function RootError({ error }: { error: Error }) {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center">
-      <p className="text-5xl font-semibold tracking-tight text-destructive">
+    <main
+      role="alert"
+      className="flex min-h-svh flex-col items-center justify-center gap-3 p-6 text-center"
+    >
+      <h1 className="text-5xl font-semibold tracking-tight text-destructive">
         Something broke
-      </p>
+      </h1>
       <p className="max-w-md text-sm text-muted-foreground">
         {error.message ||
           "An unexpected error occurred while rendering this page."}
@@ -82,7 +87,7 @@ function RootError({ error }: { error: Error }) {
         <RefreshCwIcon data-icon="inline-start" />
         Reload
       </Button>
-    </div>
+    </main>
   )
 }
 

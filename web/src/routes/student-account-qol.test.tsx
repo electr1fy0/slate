@@ -1,6 +1,7 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -194,6 +195,67 @@ describe("student account and assessment entry flows", () => {
   })
 
   afterEach(cleanup)
+
+  it("preserves an unsaved profile name during a background identity refresh", () => {
+    render(<AccountSettingsPage />)
+    fireEvent.change(screen.getByLabelText("Display name"), {
+      target: { value: "My unsaved name" },
+    })
+    act(() =>
+      setAuth({
+        ...session,
+        user: { ...session.user, name: "Background update" },
+      })
+    )
+    expect(screen.getByLabelText("Display name")).toHaveValue("My unsaved name")
+  })
+
+  it("validates profile names by characters and locks the pending profile input", async () => {
+    let resolve!: (user: typeof session.user) => void
+    state.api.updateProfile.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    render(<AccountSettingsPage />)
+    const name = screen.getByLabelText("Display name")
+    fireEvent.change(name, { target: { value: "a".repeat(61) } })
+    expect(name).toHaveAttribute("aria-invalid", "true")
+    expect(screen.getByRole("button", { name: "Save profile" })).toBeDisabled()
+    const unicodeName = "🙂".repeat(31)
+    fireEvent.change(name, { target: { value: unicodeName } })
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }))
+    expect(name).toBeDisabled()
+    await act(async () => resolve({ ...session.user, name: unicodeName }))
+    expect(name).not.toBeDisabled()
+  })
+
+  it("communicates password validation, toggle state, and locks pending credentials", async () => {
+    let resolve!: (value: { message: string }) => void
+    state.api.changePassword.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    render(<AccountSettingsPage />)
+    const current = screen.getByLabelText("Current password")
+    const next = screen.getByLabelText("New password")
+    fireEvent.change(next, { target: { value: "short" } })
+    expect(next).toHaveAttribute("aria-invalid", "true")
+    expect(next).toHaveAccessibleDescription("Password is too short.")
+    const toggle = screen.getByRole("button", { name: "Show new password" })
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute("aria-pressed", "true")
+    expect(next).toHaveAttribute("autocorrect", "off")
+    fireEvent.change(current, { target: { value: "old-password" } })
+    fireEvent.change(next, { target: { value: "new-password" } })
+    fireEvent.click(screen.getByRole("button", { name: "Change password" }))
+    expect(current).toBeDisabled()
+    expect(next).toBeDisabled()
+    await act(async () => resolve({ message: "Changed" }))
+  })
 
   it("updates the profile and signs out after changing the password", async () => {
     render(<AccountSettingsPage />)

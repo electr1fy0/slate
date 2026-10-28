@@ -262,7 +262,7 @@ describe("board and classroom components", () => {
     )
     expect(handle.current.getSnapshot?.()).toEqual([
       ...initial,
-      { id: "deleted", isDeleted: true },
+      { id: "deleted", isDeleted: true, version: 0 },
     ])
     handle.current.mergeRemote?.([{ id: "remote-before-change", version: 3 }])
     fireEvent.click(screen.getByTestId("excalidraw"))

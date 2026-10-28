@@ -212,7 +212,11 @@ function HomePage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Badge variant="secondary">
+              <Badge
+                variant="secondary"
+                role="status"
+                aria-label="Matching assessments"
+              >
                 {examsQuery.data ? filteredExams.length : "…"}
               </Badge>
               {isTeacher ? (
@@ -246,6 +250,12 @@ function HomePage() {
                   try again when the API responds.
                 </EmptyDescription>
               </EmptyHeader>
+              <Button
+                variant="outline"
+                onClick={() => void examsQuery.refetch()}
+              >
+                Retry assessments
+              </Button>
             </Empty>
           ) : examsQuery.data.length === 0 ? (
             <Empty className="rounded-xl border border-dashed">
@@ -330,6 +340,16 @@ function HomePage() {
                       Change the search or filters to see other assessments.
                     </EmptyDescription>
                   </EmptyHeader>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setAssessmentSearch("")
+                      setStatusFilter("all")
+                      setClassroomFilter("all")
+                    }}
+                  >
+                    Clear assessment filters
+                  </Button>
                 </Empty>
               ) : (
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

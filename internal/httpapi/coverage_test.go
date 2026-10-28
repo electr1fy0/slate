@@ -885,8 +885,11 @@ func TestHTTPAPICoverageBoardsAndResults(t *testing.T) {
 	if response := call(t, handler, http.MethodGet, "/api/boards/persistent-room/export", nil, student); response.Code != http.StatusOK {
 		t.Fatalf("board export: %d %s", response.Code, response.Body.String())
 	}
-	if response := call(t, handler, http.MethodPost, "/api/boards/persistent-room/restore", map[string]any{}, teacher); response.Code != http.StatusOK {
-		t.Fatalf("board restore empty body: %d %s", response.Code, response.Body.String())
+	if response := call(t, handler, http.MethodPost, "/api/boards/persistent-room/restore", map[string]any{}, teacher); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("board restore mismatched returned revision: %d %s", response.Code, response.Body.String())
+	}
+	if response := call(t, handler, http.MethodPost, "/api/boards/persistent-room/restore", map[string]any{"version": 4}, teacher); response.Code != http.StatusOK {
+		t.Fatalf("board restore requested revision: %d %s", response.Code, response.Body.String())
 	}
 	persistence.versionsErr = errors.New("history unavailable")
 	if response := call(t, handler, http.MethodGet, "/api/boards/persistent-room/history", nil, student); response.Code != http.StatusServiceUnavailable {

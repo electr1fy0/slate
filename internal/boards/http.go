@@ -119,6 +119,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close(r.Context())
 	defer conn.Close()
+	stopCancel := context.AfterFunc(r.Context(), func() { _ = conn.Close() })
+	defer stopCancel()
 
 	// Keep Gorilla's parser bounded above the application limit. The protocol
 	// layer must see frames over maxMessageBytes so it can send the required

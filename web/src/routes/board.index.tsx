@@ -34,8 +34,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
@@ -43,7 +54,14 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 
 export const Route = createFileRoute("/board/")({
   ssr: false,
@@ -52,12 +70,18 @@ export const Route = createFileRoute("/board/")({
   head: () => ({ meta: [{ title: "Live board · Continuum" }] }),
 })
 
-export function exportBoardHistory(entries: ReturnType<typeof mergeBoardHistory>): void {
+export function exportBoardHistory(
+  entries: ReturnType<typeof mergeBoardHistory>
+): void {
   if (entries.length === 0) {
     toast.info("There is no board history to export")
     return
   }
-  downloadTextFile("slate-board-history.csv", boardHistoryCsv(entries), "text/csv;charset=utf-8")
+  downloadTextFile(
+    "slate-board-history.csv",
+    boardHistoryCsv(entries),
+    "text/csv;charset=utf-8"
+  )
   toast.success("Board history exported")
 }
 
@@ -68,8 +92,11 @@ function BoardIndexPage() {
   const [joinCode, setJoinCode] = useState("")
   const [filter, setFilter] = useState("")
   const entries = useMemo(
-    () => mergeBoardHistory(recentRooms, history).filter((entry) => entry.room_id.includes(filter.trim().toLowerCase())),
-    [filter, history, recentRooms],
+    () =>
+      mergeBoardHistory(recentRooms, history).filter((entry) =>
+        entry.room_id.includes(filter.trim().toLowerCase())
+      ),
+    [filter, history, recentRooms]
   )
 
   function joinBoard(code: string): void {
@@ -102,7 +129,10 @@ function BoardIndexPage() {
   }
 
   return (
-    <AppShell title="Live board" description="Join a room, review local history, or export a session handoff">
+    <AppShell
+      title="Live board"
+      description="Join a room, review local history, or export a session handoff"
+    >
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.55fr)]">
           <Card>
@@ -112,7 +142,8 @@ function BoardIndexPage() {
                 Join a board
               </CardTitle>
               <CardDescription>
-                Rooms are live the moment two people open them. Ask your teacher for the code.
+                Rooms are live the moment two people open them. Ask your teacher
+                for the code.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -132,7 +163,10 @@ function BoardIndexPage() {
                       spellCheck={false}
                     />
                     <InputGroupAddon align="inline-end">
-                      <InputGroupButton onClick={() => joinBoard(joinCode)} disabled={!normaliseRoomCode(joinCode)}>
+                      <InputGroupButton
+                        onClick={() => joinBoard(joinCode)}
+                        disabled={!normaliseRoomCode(joinCode)}
+                      >
                         Join
                         <ArrowRightIcon data-icon="inline-end" />
                       </InputGroupButton>
@@ -143,7 +177,10 @@ function BoardIndexPage() {
               </FieldGroup>
             </CardContent>
             <CardFooter>
-              <Button variant="secondary" onClick={() => joinBoard(newRoomCode())}>
+              <Button
+                variant="secondary"
+                onClick={() => joinBoard(newRoomCode())}
+              >
                 <PlusIcon data-icon="inline-start" />
                 New room
               </Button>
@@ -153,17 +190,28 @@ function BoardIndexPage() {
           <Card>
             <CardHeader>
               <CardTitle>Session handoff</CardTitle>
-              <CardDescription>Download a compact room list for a lesson plan or support handoff.</CardDescription>
+              <CardDescription>
+                Download a compact room list for a lesson plan or support
+                handoff.
+              </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <div className="flex items-end justify-between gap-3">
                 <div>
-                  <p className="text-2xl font-semibold tracking-tight">{history.length}</p>
-                  <p className="text-xs text-muted-foreground">rooms with local metadata</p>
+                  <p className="text-2xl font-semibold tracking-tight">
+                    {history.length}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    rooms with local metadata
+                  </p>
                 </div>
                 <Badge variant="secondary">visit history local</Badge>
               </div>
-              <Button variant="outline" onClick={exportHistory} disabled={entries.length === 0}>
+              <Button
+                variant="outline"
+                onClick={exportHistory}
+                disabled={entries.length === 0}
+              >
                 <DownloadIcon data-icon="inline-start" />
                 Export history
               </Button>
@@ -175,7 +223,9 @@ function BoardIndexPage() {
           <InfoIcon />
           <AlertTitle>Board content resumes across reconnects</AlertTitle>
           <AlertDescription>
-            Visit time and count stay in this browser for quick access. The board snapshot itself is persisted by the API and restored when the room is reopened.
+            Visit time and count stay in this browser for quick access. The
+            board snapshot itself is persisted by the API and restored when the
+            room is reopened.
           </AlertDescription>
         </Alert>
 
@@ -186,12 +236,21 @@ function BoardIndexPage() {
                 <HistoryIcon data-icon="inline-start" />
                 Recent rooms
               </CardTitle>
-              <CardDescription>Metadata is inferred from this browser's room visits.</CardDescription>
+              <CardDescription>
+                Metadata is inferred from this browser's room visits.
+              </CardDescription>
             </div>
             <div className="w-full sm:w-56">
               <Field>
-                <FieldLabel htmlFor="room-history-filter" className="sr-only">Filter rooms</FieldLabel>
-                <Input id="room-history-filter" placeholder="Filter by room code" value={filter} onChange={(event) => setFilter(event.target.value)} />
+                <FieldLabel htmlFor="room-history-filter" className="sr-only">
+                  Filter rooms
+                </FieldLabel>
+                <Input
+                  id="room-history-filter"
+                  placeholder="Filter by room code"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                />
               </Field>
             </div>
           </CardHeader>
@@ -202,11 +261,20 @@ function BoardIndexPage() {
                   <EmptyMedia variant="icon">
                     <PresentationIcon />
                   </EmptyMedia>
-                  <EmptyTitle>{filter ? "No matching rooms" : "No rooms yet"}</EmptyTitle>
+                  <EmptyTitle>
+                    {filter ? "No matching rooms" : "No rooms yet"}
+                  </EmptyTitle>
                   <EmptyDescription>
-                    {filter ? "Try another code or clear the filter." : "Boards you visit will show up here for quick access."}
+                    {filter
+                      ? "Try another code or clear the filter."
+                      : "Boards you visit will show up here for quick access."}
                   </EmptyDescription>
                 </EmptyHeader>
+                {filter ? (
+                  <Button variant="outline" onClick={() => setFilter("")}>
+                    Clear room filter
+                  </Button>
+                ) : null}
               </Empty>
             ) : (
               <Table>
@@ -216,27 +284,49 @@ function BoardIndexPage() {
                     <TableHead>Last opened</TableHead>
                     <TableHead>Visits</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="w-28 text-right"><span className="sr-only">Actions</span></TableHead>
+                    <TableHead className="w-28 text-right">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
                     <TableRow key={entry.room_id}>
-                      <TableCell className="font-mono font-medium">{entry.room_id}</TableCell>
+                      <TableCell className="font-mono font-medium">
+                        {entry.room_id}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {entry.last_opened_at === new Date(0).toISOString()
                           ? "Before local history"
                           : new Date(entry.last_opened_at).toLocaleString()}
                       </TableCell>
                       <TableCell>{entry.visits}</TableCell>
-                      <TableCell><Badge variant="secondary">history only</Badge></TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">history only</Badge>
+                      </TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1">
-                          <Button size="icon-sm" variant="ghost" aria-label={`Copy ${entry.room_id}`} onClick={() => void copyRoom(entry.room_id)}>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Copy ${entry.room_id}`}
+                            onClick={() => void copyRoom(entry.room_id)}
+                          >
                             <CopyIcon />
                           </Button>
-                          <Button size="sm" variant="outline" onClick={() => joinBoard(entry.room_id)}>Open</Button>
-                          <Button size="icon-sm" variant="ghost" aria-label={`Remove ${entry.room_id}`} onClick={() => removeRoom(entry.room_id)}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => joinBoard(entry.room_id)}
+                          >
+                            Open
+                          </Button>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Remove ${entry.room_id}`}
+                            onClick={() => removeRoom(entry.room_id)}
+                          >
                             <Trash2Icon />
                           </Button>
                         </div>

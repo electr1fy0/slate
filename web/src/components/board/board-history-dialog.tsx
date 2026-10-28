@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { HistoryIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -27,6 +27,8 @@ export function BoardHistoryDialog({
 }) {
   const [open, setOpen] = useState(false)
   const auth = useAuth()
+  const activeScope = useRef("")
+  activeScope.current = `${auth.user?.user_id}:${roomId}`
   const query = useQuery({
     queryKey: ["board-versions", auth.user?.user_id, roomId],
     queryFn: () => api.boardHistory(roomId, 100),
@@ -73,7 +75,9 @@ export function BoardHistoryDialog({
                   </p>
                   {version.saved_at ? (
                     <p className="text-xs text-muted-foreground">
-                      {new Date(version.saved_at).toLocaleString()}
+                      {Number.isFinite(Date.parse(version.saved_at))
+                        ? new Date(version.saved_at).toLocaleString()
+                        : "Save time unavailable"}
                     </p>
                   ) : null}
                 </div>
@@ -83,16 +87,22 @@ export function BoardHistoryDialog({
                     description="This replaces the current canvas for everyone. The current saved version remains in history."
                     confirmLabel="Restore snapshot"
                     onConfirm={async () => {
+                      const requestedScope = activeScope.current
                       const snapshot = await api.boardRestore(
                         roomId,
                         version.version
                       )
+                      if (activeScope.current !== requestedScope) return
                       onRestored(snapshot.elements)
                       toast.success(`Restored version ${version.version}`)
                       void query.refetch()
                     }}
                   >
-                    <Button size="sm" variant="outline">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Restore version ${version.version}`}
+                    >
                       Restore
                     </Button>
                   </ConfirmAction>

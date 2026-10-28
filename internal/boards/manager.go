@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 )
@@ -125,6 +126,7 @@ func (m *Manager) roomLocked(id string) *room {
 }
 
 func normaliseName(name string) string {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "Guest"
 	}
@@ -147,7 +149,11 @@ func comparableSocket(socket any) bool {
 	if socket == nil {
 		return false
 	}
-	return reflect.TypeOf(socket).Comparable()
+	v := reflect.ValueOf(socket)
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Chan || v.Kind() == reflect.Interface) && v.IsNil() {
+		return false
+	}
+	return v.Type().Comparable()
 }
 
 // Connect adds socket to room and returns a short unique peer ID. It returns an
@@ -159,6 +165,9 @@ func (m *Manager) Connect(roomID string, socket any, name, role string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := m.roomLocked(roomID)
+	if peer := r.peers[socket]; peer != nil {
+		return peer.ID
+	}
 	// Retry is practically never needed, but it makes the ID invariant explicit
 	// even in tests that replace the random source.
 	var id string
@@ -200,6 +209,9 @@ func randomPeerID() string {
 // Identify updates only display information. Callers should pass the role
 // obtained from the authenticated token, not a client-supplied role.
 func (m *Manager) Identify(roomID string, socket any, name, role string) *Peer {
+	if !comparableSocket(socket) {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := m.rooms[roomID]
@@ -217,6 +229,9 @@ func (m *Manager) Identify(roomID string, socket any, name, role string) *Peer {
 
 // Touch records app-level traffic for idle eviction.
 func (m *Manager) Touch(roomID string, socket any) {
+	if !comparableSocket(socket) {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r := m.rooms[roomID]; r != nil {
@@ -228,6 +243,9 @@ func (m *Manager) Touch(roomID string, socket any) {
 
 // SetCursor updates the peer cursor and returns its public peer record.
 func (m *Manager) SetCursor(roomID string, socket any, cursor map[string]any) *Peer {
+	if !comparableSocket(socket) {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r := m.rooms[roomID]; r != nil {
@@ -241,6 +259,9 @@ func (m *Manager) SetCursor(roomID string, socket any, cursor map[string]any) *P
 
 // Disconnect removes a peer. A nil result means it was already disconnected.
 func (m *Manager) Disconnect(roomID string, socket any) *Peer {
+	if !comparableSocket(socket) {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r := m.rooms[roomID]
@@ -319,7 +340,7 @@ func (m *Manager) Peers(roomID string, exclude any) []Peer {
 	r := m.rooms[roomID]
 	var excludedID string
 	if r != nil {
-		if p := r.peers[exclude]; p != nil {
+		if p := r.peers[comparableKey(exclude)]; p != nil {
 			excludedID = p.ID
 		}
 	}
@@ -340,7 +361,13 @@ func (m *Manager) Peers(roomID string, exclude any) []Peer {
 func (m *Manager) ActiveRooms() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.rooms)
+	count := 0
+	for _, r := range m.rooms {
+		if len(r.peers) > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 // Reset removes all process-local board state.
@@ -355,6 +382,7 @@ func (m *Manager) Reset() {
 		}
 	}
 	m.pendingSaves = make(map[string]*pendingBoardSave)
+	m.persistenceErrors = make(map[string]error)
 	m.persistenceMu.Unlock()
 }
 
@@ -372,6 +400,9 @@ func (m *Manager) SetClock(clock func() time.Time) {
 
 // SetLastSeen is a test/integration helper for deterministic eviction.
 func (m *Manager) SetLastSeen(roomID string, socket any, at time.Time) bool {
+	if !comparableSocket(socket) {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if r := m.rooms[roomID]; r != nil {
@@ -452,7 +483,13 @@ func (m *Manager) Broadcast(ctx context.Context, roomID string, message any, exc
 	m.mu.RUnlock()
 	sent := 0
 	for _, socket := range sockets {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := m.Send(ctx, socket, message); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			m.Disconnect(roomID, socket)
 			continue
 		}
@@ -516,7 +553,7 @@ func (m *Manager) EvictStale(ctx context.Context, maxIdle time.Duration, closeFn
 		default:
 		}
 		// Detach first, so a concurrent disconnect cannot announce a duplicate.
-		if m.Disconnect(item.roomID, item.socket) == nil {
+		if m.disconnectIfStale(item.roomID, item.socket, now, maxIdle) == nil {
 			continue
 		}
 		if len(closeFns) > 0 && closeFns[0] != nil {
@@ -571,8 +608,81 @@ func cloneValue(value any) any {
 		}
 		return output
 	default:
+		if value == nil {
+			return nil
+		}
+		return cloneCollection(reflect.ValueOf(value)).Interface()
+	}
+}
+
+func comparableKey(value any) any {
+	if !comparableSocket(value) {
+		return nil
+	}
+	return value
+}
+
+// Typed slices and maps occur in integrations before a JSON round trip.
+func cloneCollection(value reflect.Value) reflect.Value {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value
+		}
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloneCollection(value.Elem()))
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return value
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			result.SetMapIndex(iter.Key(), cloneCollection(iter.Value()))
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return value
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneCollection(value.Index(i)))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneCollection(value.Index(i)))
+		}
+		return result
+	default:
 		return value
 	}
+}
+
+func (m *Manager) disconnectIfStale(roomID string, socket any, now time.Time, maxIdle time.Duration) *Peer {
+	m.mu.Lock()
+	r := m.rooms[roomID]
+	if r == nil || r.peers[socket] == nil || now.Sub(r.peers[socket].LastSeen) <= maxIdle {
+		m.mu.Unlock()
+		return nil
+	}
+	peer := clonePeer(r.peers[socket])
+	delete(r.peers, socket)
+	for i, existing := range r.peerOrder {
+		if existing == socket {
+			r.peerOrder = append(r.peerOrder[:i], r.peerOrder[i+1:]...)
+			break
+		}
+	}
+	r.updatedAt = m.nowLocked()
+	if len(r.peers) == 0 {
+		delete(m.rooms, roomID)
+	}
+	m.mu.Unlock()
+	return peer
 }
 
 func stringValue(value any) (string, bool) {
@@ -584,7 +694,10 @@ func stringValue(value any) (string, bool) {
 	}
 }
 
-func versionValue(value any) (float64, bool) {
+func versionValue(value any) (number float64, valid bool) {
+	defer func() {
+		valid = valid && !math.IsNaN(number) && !math.IsInf(number, 0) && number >= 0 && number <= 9007199254740991 && math.Trunc(number) == number
+	}()
 	if value == nil {
 		return 0, true
 	}

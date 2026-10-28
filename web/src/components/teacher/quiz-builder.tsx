@@ -793,7 +793,11 @@ export function QuizBuilder({
   const openInstant = opensAt ? new Date(opensAt).getTime() : null
   const closeInstant = closesAt ? new Date(closesAt).getTime() : null
   const validWindow =
-    openInstant === null || closeInstant === null || closeInstant > openInstant
+    (openInstant === null || Number.isFinite(openInstant)) &&
+    (closeInstant === null || Number.isFinite(closeInstant)) &&
+    (openInstant === null ||
+      closeInstant === null ||
+      closeInstant > openInstant)
   const validDuration =
     !duration ||
     (Number.isInteger(Number(duration)) &&
@@ -882,6 +886,7 @@ export function QuizBuilder({
               <FieldLabel htmlFor="quiz-title">Title</FieldLabel>
               <Input
                 id="quiz-title"
+                aria-invalid={!titleReady && title.length > 0}
                 placeholder="CS101 — Week 4 recap"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
@@ -913,6 +918,14 @@ export function QuizBuilder({
                 onChange={(event) => setClassroomId(event.target.value)}
               >
                 <option value="">No classroom assignment</option>
+                {classroomId &&
+                !(classroomsQuery.data ?? []).some(
+                  (classroom) => classroom.id === classroomId
+                ) ? (
+                  <option value={classroomId}>
+                    Assigned classroom unavailable
+                  </option>
+                ) : null}
                 {(classroomsQuery.data ?? []).map((classroom) => (
                   <option key={classroom.id} value={classroom.id}>
                     {classroom.name}
@@ -958,11 +971,13 @@ export function QuizBuilder({
               <FieldLabel htmlFor="quiz-closes">Closes at</FieldLabel>
               <Input
                 id="quiz-closes"
+                aria-invalid={!validWindow}
+                aria-describedby="quiz-window-help"
                 type="datetime-local"
                 value={closesAt}
                 onChange={(event) => setClosesAt(event.target.value)}
               />
-              <FieldDescription>
+              <FieldDescription id="quiz-window-help">
                 {validWindow
                   ? "Leave blank for no closing time."
                   : "Must be after the opening time."}
@@ -974,15 +989,19 @@ export function QuizBuilder({
               </FieldLabel>
               <Input
                 id="quiz-duration"
+                aria-invalid={!validDuration}
+                aria-describedby="quiz-duration-help"
                 type="number"
-                min={1}
+                min={0}
                 max={1440}
                 value={duration}
                 onChange={(event) => setDuration(event.target.value)}
                 placeholder="No limit"
               />
-              <FieldDescription>
-                Optional; up to 1,440 minutes.
+              <FieldDescription id="quiz-duration-help">
+                {validDuration
+                  ? "Optional; 0 means no limit, up to 1,440 minutes."
+                  : "Enter a whole number from 0 to 1,440."}
               </FieldDescription>
             </Field>
             <Field data-invalid={!validAttempts ? true : undefined}>
@@ -991,6 +1010,8 @@ export function QuizBuilder({
               </FieldLabel>
               <Input
                 id="quiz-max-attempts"
+                aria-invalid={!validAttempts}
+                aria-describedby="quiz-attempts-help"
                 type="number"
                 min={0}
                 max={20}
@@ -998,7 +1019,7 @@ export function QuizBuilder({
                 onChange={(event) => setMaxAttempts(event.target.value)}
                 placeholder="Default: 1"
               />
-              <FieldDescription>
+              <FieldDescription id="quiz-attempts-help">
                 Leave blank for one attempt, enter 0 for unlimited attempts, or
                 set a limit up to 20.
               </FieldDescription>
@@ -1023,6 +1044,8 @@ export function QuizBuilder({
               </FieldLabel>
               <Input
                 id="quiz-late-grace"
+                aria-invalid={!validGrace}
+                aria-describedby="quiz-grace-help"
                 type="number"
                 min={0}
                 max={10080}
@@ -1031,7 +1054,7 @@ export function QuizBuilder({
                 placeholder="0"
                 disabled={!allowLate}
               />
-              <FieldDescription>
+              <FieldDescription id="quiz-grace-help">
                 Blank or 0 allows late work without a cutoff. Otherwise, up to 7
                 days.
               </FieldDescription>
@@ -1079,7 +1102,7 @@ export function QuizBuilder({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">
+                      <p className="text-sm font-medium break-words whitespace-pre-wrap">
                         {draft.title || "Untitled draft"}
                       </p>
                       <p className="text-xs text-muted-foreground">
@@ -1091,6 +1114,7 @@ export function QuizBuilder({
                         size="sm"
                         variant="outline"
                         onClick={() => loadLocalDraft(draft)}
+                        aria-label={`Load local draft ${draft.title || "Untitled draft"}`}
                       >
                         Load
                       </Button>
@@ -1129,7 +1153,9 @@ export function QuizBuilder({
             </section>
           ) : null}
           {serverDraftsQuery.isPending ? (
-            <Skeleton className="h-10 w-full" />
+            <div role="status" aria-label="Loading workspace drafts">
+              <Skeleton className="h-10 w-full" />
+            </div>
           ) : serverDrafts.length > 0 ? (
             <section
               className="flex flex-col gap-2 border-t pt-3"
@@ -1158,7 +1184,7 @@ export function QuizBuilder({
                     className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">
+                      <p className="text-sm font-medium break-words whitespace-pre-wrap">
                         {draft.title}
                       </p>
                       <p className="text-xs text-muted-foreground">
@@ -1173,6 +1199,7 @@ export function QuizBuilder({
                         size="sm"
                         variant="outline"
                         onClick={() => loadServerDraft(draft)}
+                        aria-label={`Load workspace draft ${draft.title}`}
                       >
                         Load
                       </Button>
@@ -1215,9 +1242,18 @@ export function QuizBuilder({
             </section>
           ) : null}
           {serverDraftsQuery.isError ? (
-            <p className="text-xs text-muted-foreground">
-              Server drafts could not be loaded. Local drafts remain available.
-            </p>
+            <div role="alert">
+              <p className="text-xs text-muted-foreground">
+                Server drafts could not be loaded. Local drafts remain
+                available.
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => void serverDraftsQuery.refetch()}
+              >
+                Retry workspace drafts
+              </Button>
+            </div>
           ) : null}
         </CardContent>
       </Card>
@@ -1244,19 +1280,24 @@ export function QuizBuilder({
             placeholder="Search question bank"
           />
           {bankQuery.isPending && localQuestionBank.length === 0 ? (
-            <Skeleton className="h-10 w-full" />
+            <div role="status" aria-label="Loading question bank">
+              <Skeleton className="h-10 w-full" />
+            </div>
           ) : bankPageItems.items.length > 0 ? (
             bankPageItems.items.map((question) => (
               <div
                 key={question.id}
                 className="flex items-center justify-between gap-2 rounded-lg border p-2"
               >
-                <p className="min-w-0 truncate text-sm">{question.question}</p>
+                <p className="min-w-0 text-sm break-words whitespace-pre-wrap">
+                  {question.question}
+                </p>
                 <div className="flex shrink-0 items-center gap-1">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => useBankQuestion(question)}
+                    aria-label={`Use bank question ${question.question}`}
                   >
                     Use
                   </Button>
@@ -1367,6 +1408,7 @@ export function QuizBuilder({
                 size="sm"
                 variant="outline"
                 onClick={() => void saveQuestion(question)}
+                aria-label={`Save question ${index + 1} to bank`}
               >
                 <SaveIcon data-icon="inline-start" />
                 Bank
@@ -1380,6 +1422,7 @@ export function QuizBuilder({
               </FieldLabel>
               <Textarea
                 id={`question-text-${question.key}`}
+                aria-label={`Question ${index + 1} prompt`}
                 placeholder="What does RPO measure?"
                 value={question.question}
                 onChange={(event) =>
@@ -1401,6 +1444,7 @@ export function QuizBuilder({
                   <InputGroup>
                     <InputGroupInput
                       id={`option-${question.key}-${optionIndex}`}
+                      aria-label={`Question ${index + 1} option ${optionLetter(optionIndex)}`}
                       placeholder={`Option ${optionLetter(optionIndex)}`}
                       value={option}
                       onChange={(event) => {
@@ -1411,7 +1455,8 @@ export function QuizBuilder({
                     />
                     <InputGroupAddon align="inline-end">
                       <InputGroupButton
-                        aria-label={`Mark option ${optionLetter(optionIndex)} as correct`}
+                        aria-label={`Mark question ${index + 1} option ${optionLetter(optionIndex)} as correct`}
+                        aria-pressed={optionIndex === question.answer}
                         onClick={() =>
                           patchQuestion(question.key, { answer: optionIndex })
                         }
@@ -1431,7 +1476,7 @@ export function QuizBuilder({
                           }
                         >
                           <InputGroupButton
-                            aria-label={`Remove option ${optionLetter(optionIndex)}`}
+                            aria-label={`Remove question ${index + 1} option ${optionLetter(optionIndex)}`}
                           >
                             <Trash2Icon />
                           </InputGroupButton>
@@ -1448,6 +1493,7 @@ export function QuizBuilder({
                 size="sm"
                 className="self-start"
                 onClick={() => addOption(question.key)}
+                aria-label={`Add option to question ${index + 1}`}
               >
                 <PlusIcon data-icon="inline-start" />
                 Add option
@@ -1460,6 +1506,7 @@ export function QuizBuilder({
                 </FieldLabel>
                 <Input
                   id={`points-${question.key}`}
+                  aria-label={`Question ${index + 1} points`}
                   type="number"
                   min={1}
                   max={1000}
@@ -1480,6 +1527,7 @@ export function QuizBuilder({
                 </FieldLabel>
                 <Textarea
                   id={`feedback-${question.key}`}
+                  aria-label={`Question ${index + 1} feedback`}
                   placeholder="Explain why the answer is correct."
                   value={question.feedback ?? ""}
                   onChange={(event) =>

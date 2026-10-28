@@ -21,13 +21,19 @@ import { requireAuth } from "@/lib/guard"
 import { useAuth } from "@/lib/auth"
 import { api, hasExternalApiOrigin } from "@/lib/api"
 import type { BoardElement, ClientMessage } from "@/lib/types"
+import { mergeBoardElements } from "@/lib/board-elements"
+import { downloadTextFile } from "@/lib/board-history"
 import { useBoardSync } from "@/hooks/use-board-sync"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 const BoardCanvas = lazy(() => import("@/components/board/board-canvas"))
 
@@ -47,9 +53,16 @@ function BoardPage() {
   const [copied, setCopied] = useState(false)
   const [studentDraw, setStudentDraw] = useState(false)
   const [permissionPending, setPermissionPending] = useState(false)
-  const [remoteSnapshot, setRemoteSnapshot] = useState<BoardElement[] | null>(null)
+  const [exportPending, setExportPending] = useState(false)
+  const exportLock = useRef(false)
+  const [remoteSnapshot, setRemoteSnapshot] = useState<BoardElement[] | null>(
+    null
+  )
 
-  const canvasHandle = useRef<BoardCanvasHandle>({ mergeRemote: undefined, getSnapshot: undefined })
+  const canvasHandle = useRef<BoardCanvasHandle>({
+    mergeRemote: undefined,
+    getSnapshot: undefined,
+  })
   const senderRef = useRef<((message: ClientMessage) => void) | null>(null)
 
   useEffect(() => {
@@ -66,7 +79,12 @@ function BoardPage() {
   const boardRealtimeEnabled = !hasExternalApiOrigin()
 
   const onRemote = useCallback((elements: BoardElement[]) => {
-    canvasHandle.current.mergeRemote?.(elements)
+    if (canvasHandle.current.mergeRemote)
+      canvasHandle.current.mergeRemote(elements)
+    else
+      setRemoteSnapshot((current) =>
+        mergeBoardElements(current ?? [], elements)
+      )
   }, [])
 
   const sync = useBoardSync({
@@ -74,12 +92,18 @@ function BoardPage() {
     sessionId: auth.user?.user_id,
     name: auth.user?.name || "Guest",
     role: isTeacher ? "teacher" : "student",
-    enabled: boardRealtimeEnabled,
+    enabled: boardRealtimeEnabled && !!roomId,
     onInit: setRemoteSnapshot,
     onElements: onRemote,
     onRestored: setRemoteSnapshot,
-    onPermissions: (allowed) => { setStudentDraw(allowed); setPermissionPending(false) },
-    onError: (message) => { setPermissionPending(false); toast.error(message) },
+    onPermissions: (allowed) => {
+      setStudentDraw(allowed)
+      setPermissionPending(false)
+    },
+    onError: (message) => {
+      setPermissionPending(false)
+      toast.error(message)
+    },
   })
   senderRef.current = sync.send
 
@@ -91,7 +115,7 @@ function BoardPage() {
       lastCursorSentRef.current = now
       sync.send({ type: "cursor", x: xPercent, y: yPercent, tool: "pointer" })
     },
-    [sync.send],
+    [sync.send]
   )
 
   function toggleStudentDraw(allowed: boolean) {
@@ -115,42 +139,56 @@ function BoardPage() {
   }
 
   async function exportBoard(): Promise<void> {
-    const elements = canvasHandle.current.getSnapshot?.() ?? []
-    let payload: {
-      format: string
-      version: number
-      room_id: string
-      exported_at: string
-      elements: BoardElement[]
-    } = {
-      format: "slate-board",
-      version: 1,
-      room_id: roomId,
-      exported_at: new Date().toISOString(),
-      elements,
-    }
+    if (exportLock.current) return
+    exportLock.current = true
+    setExportPending(true)
     try {
-      if (boardRealtimeEnabled) {
-        const persisted = await api.boardExport(roomId)
-        payload = { ...payload, ...persisted, exported_at: new Date().toISOString() }
+      const elements = canvasHandle.current.getSnapshot?.() ?? []
+      let payload: {
+        format: string
+        version: number
+        room_id: string
+        exported_at: string
+        elements: BoardElement[]
+      } = {
+        format: "slate-board",
+        version: 1,
+        room_id: roomId,
+        exported_at: new Date().toISOString(),
+        elements,
       }
+      try {
+        if (boardRealtimeEnabled) {
+          const persisted = await api.boardExport(roomId)
+          payload = {
+            ...payload,
+            ...persisted,
+            exported_at: new Date().toISOString(),
+          }
+        }
+      } catch {
+        // The live canvas remains a useful export when the persistence API is unavailable.
+      }
+      downloadTextFile(
+        `slate-board-${roomId}.json`,
+        JSON.stringify(payload, null, 2),
+        "application/json"
+      )
+      toast.success("Board snapshot exported")
     } catch {
-      // The live canvas remains a useful export when the persistence API is unavailable.
+      toast.error("Could not download the board snapshot. Try again.")
+    } finally {
+      exportLock.current = false
+      setExportPending(false)
     }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement("a")
-    anchor.href = url
-    anchor.download = `slate-board-${roomId}.json`
-    anchor.click()
-    URL.revokeObjectURL(url)
-    toast.success("Board snapshot exported")
   }
 
   if (!roomId) {
     return (
       <AppShell title="Live board">
-        <p className="text-sm text-muted-foreground">That room code isn't valid.</p>
+        <p className="text-sm text-muted-foreground">
+          That room code isn't valid.
+        </p>
       </AppShell>
     )
   }
@@ -158,7 +196,11 @@ function BoardPage() {
   return (
     <AppShell
       title={`Board · ${roomId}`}
-      description={canEdit ? "You can draw" : "View-only — ask your teacher to enable drawing"}
+      description={
+        canEdit
+          ? "You can draw"
+          : "View-only — ask your teacher to enable drawing"
+      }
       padded={false}
       actions={
         <>
@@ -182,7 +224,8 @@ function BoardPage() {
                 <WifiOffIcon data-icon="inline-start" />
                 {sync.status}
               </Badge>
-              {sync.status === "reconnecting" ? (
+              {sync.status === "reconnecting" ||
+              (sync.status === "unavailable" && boardRealtimeEnabled) ? (
                 <Button variant="outline" size="sm" onClick={sync.reconnect}>
                   <RefreshCwIcon data-icon="inline-start" />
                   Retry now
@@ -193,7 +236,12 @@ function BoardPage() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <Button variant="outline" size="sm" onClick={() => void copyRoomCode()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Copy room code ${roomId}`}
+                  onClick={() => void copyRoomCode()}
+                >
                   {copied ? (
                     <>
                       <CheckIcon data-icon="inline-start" />
@@ -213,15 +261,24 @@ function BoardPage() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <Button variant="outline" size="sm" onClick={() => void exportBoard()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={exportPending}
+                  onClick={() => void exportBoard()}
+                >
                   <DownloadIcon data-icon="inline-start" />
-                  Export
+                  {exportPending ? "Exporting…" : "Export"}
                 </Button>
               }
             />
             <TooltipContent>Download a portable board snapshot</TooltipContent>
           </Tooltip>
-          <BoardHistoryDialog roomId={roomId} enabled={boardRealtimeEnabled} onRestored={setRemoteSnapshot} />
+          <BoardHistoryDialog
+            roomId={roomId}
+            enabled={boardRealtimeEnabled}
+            onRestored={setRemoteSnapshot}
+          />
           <div className="flex items-center gap-1.5">
             <PresencePanel
               peers={sync.peers}
@@ -249,9 +306,13 @@ function BoardPage() {
       {!boardRealtimeEnabled ? (
         <Alert className="m-4 mb-0">
           <InfoIcon />
-          <AlertTitle>Live board sync is unavailable in this deployment</AlertTitle>
+          <AlertTitle>
+            Live board sync is unavailable in this deployment
+          </AlertTitle>
           <AlertDescription>
-            This deployment sends API requests to a separate HTTP origin and has no configured board WebSocket endpoint. Edits stay in this browser; export a snapshot before leaving to keep them.
+            This deployment sends API requests to a separate HTTP origin and has
+            no configured board WebSocket endpoint. Edits stay in this browser;
+            export a snapshot before leaving to keep them.
           </AlertDescription>
         </Alert>
       ) : null}

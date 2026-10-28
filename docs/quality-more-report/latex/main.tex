@@ -1,0 +1,114 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=20mm,headheight=14pt]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage{xcolor,booktabs,array,tabularx}
+\usepackage{xurl,hyperref,fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\definecolor{ink}{HTML}{172D46}
+\definecolor{accent}{HTML}{087E8B}
+\definecolor{muted}{HTML}{526172}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,pdftitle={Continuum: 100 Additional Quality Corrections},pdfauthor={Continuum Project}}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{muted}CONTINUUM / PROJECT QUALITY}
+\fancyhead[R]{\small\color{muted}QF-201--QF-300}
+\fancyfoot[L]{\footnotesize\color{muted}Baseline: \texttt{e218e12}}
+\fancyfoot[R]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\setlength{\emergencystretch}{3em}
+\urlstyle{tt}
+\begin{document}
+\begin{titlepage}
+\vspace*{14mm}
+{\small\bfseries\color{accent}CONTINUUM / SLATE\par}
+\vspace{16mm}
+{\Huge\bfseries\color{ink}Project Quality\\[4pt]and Implementation\par}
+\vspace{9mm}
+{\Large 100 additional corrections\par}
+\vspace{4mm}
+{\large QF-201--QF-300\par}
+\vspace{18mm}
+\begin{tikzpicture}
+\fill[ink] (0,0) rectangle (16.8,2.1);
+\node[anchor=west,text=white,font=\LARGE\bfseries] at (0.5,1.35) {Reliable state. Recoverable workflows.};
+\node[anchor=west,text=white,font=\normalsize] at (0.5,0.55) {Go APIs \quad / \quad React client \quad / \quad Board collaboration};
+\end{tikzpicture}
+\vspace{14mm}
+\begin{tabularx}{\linewidth}{@{}p{36mm}X@{}}
+\toprule
+Project & Timed academic assessments, classroom workspaces, board collaboration and verified application recovery\\
+Scope & Additional behavioral corrections, boundary validation, accessibility and interface polish\\
+Change baseline & \texttt{e218e12} --- the preceding 200-correction batch\\
+Issue register & 100 fixed entries, with final source locations and a machine-readable companion\\
+Date & 23 October 2026\\
+\bottomrule
+\end{tabularx}
+\vfill
+{\small\color{muted}The original full project study and earlier correction register remain historical baselines. This continuation does not mark every earlier audit finding resolved.}
+\end{titlepage}
+
+\section{Project and implementation}
+Continuum supports teacher-authored assessments and classroom assignment, learner attempts and receipt-backed submissions, shared drawing rooms, and a bounded application recovery demonstration. Go implements the API and recovery services. React and TypeScript implement the browser application with TanStack routing and query state. DynamoDB is the regional persistence adapter; the local demonstration shares an in-memory store between two backend processes.
+
+The recovery demonstration handles backend application failures while preserving the original submission identity and server deadline. It does not demonstrate survival of a complete Region or DynamoDB outage. Shared boards use a separate WebSocket protocol with room snapshots and revision history.
+
+\begin{center}
+\begin{tikzpicture}[
+box/.style={draw=ink!35,rounded corners=3pt,fill=ink!3,text width=67mm,align=center,minimum height=16mm,font=\small},
+edge/.style={-{Stealth[length=2mm]},thick,draw=accent},
+node distance=10mm and 9mm]
+\node[box] (web) {React / TypeScript browser\\Teacher, learner and board workflows};
+\node[box,right=of web] (api) {Go API\\Authentication, assessment and classroom services};
+\node[box,below=of web] (board) {Board transport and canvas\\WebSocket sessions and Excalidraw state};
+\node[box,below=of api] (store) {Persistence adapters\\Regional DynamoDB / local shared memory};
+\draw[edge] (web) -- (api);
+\draw[edge] (web) -- (board);
+\draw[edge] (api) -- (store);
+\draw[edge] (board) -- (store);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Correction boundaries}
+The additional register starts after QF-200 and uses commit \texttt{e218e12} as its comparison point. Each entry describes a distinct trigger or user-facing outcome. Several entries share a component or root cause; a correction count is not a count of independent production incidents. The earlier CQ-001--CQ-120 audit and QF-001--QF-200 correction register are retained separately.
+
+\input{classification.tex}
+
+\subsection{Assessment data contracts}
+Authoring now preserves correct-answer index zero. Learner responses carry an explicit redaction decision instead of relying on numeric zero to omit a field. Submitted zero scores remain present in metadata. Model tests cover both answer indices and redaction; the teacher/learner browser journey checks preview visibility, learner answer-key omission and zero-score metadata.
+
+\subsection{Board state and transport}
+Peer registration is idempotent for a socket. Canceled broadcasts retain healthy participants, idle eviction rechecks recent traffic, and cleanup announces departures even after request cancellation. Snapshot application validates room identity, schema and revision. Explicit flush retains its originating writer identity while respecting its caller's cancellation.
+
+Element copies isolate typed collections. Revision validation rejects invalid numeric ordering values, and equal-version conflicts use the Excalidraw nonce tie breaker. The browser validates socket envelopes, ignores disposed transport events and retains early deltas during lazy canvas loading. Large scenes are split by UTF-8 byte size beneath the default frame limit.
+
+\subsection{User interaction and accessibility}
+Account workflows preserve unsaved profile edits during background refresh and prevent edits that would be overwritten by a pending save. Password controls expose their state and disable unwanted keyboard correction. Repeated builder inputs and actions identify their question or draft. Dialogs scroll within constrained viewports, and empty/error states provide direct recovery actions.
+
+These improvements preserve the established product styling. They focus on readable authored text, complete member identity, keyboard and assistive-technology context, and useful failure recovery.
+
+\clearpage
+\section{Verification and remaining limits}
+\input{verification.tex}
+
+\subsection{Regression focus}
+Backend regressions cover serialization, peer registration, cancellation, heartbeat/eviction ordering, typed snapshot isolation, revision convergence, invalid persisted state and WebSocket request cleanup. Frontend regressions cover malformed socket messages, UTF-8 batching, old-socket events, constructor/send failures, shared token state, composed input groups, reviewed imports, profile editing and repeated authoring controls.
+
+Existing broad tests remain in place. Expectations were updated only where intended behavior changed, such as rejecting frames from a detached session, validating a requested historical revision, normalized cache revisions and clearer action names.
+
+\subsection{Operational boundary}
+No live AWS deployment, production traffic exercise or external SMTP delivery is part of this batch. The default browser batching budget targets the configured default 64 KiB WebSocket limit; a custom lower deployment limit needs a matching client budget. An individual oversized element is reported to the user instead of being silently transmitted.
+
+Earlier durability and authorization limitations remain tracked in the original audit. In particular, this batch does not claim durable acknowledgment for every drawing frame, complete offline conflict recovery, historical assessment receipts for every retake, or a complete resolution of the original backlog. The existing production-build chunk-size and route-export warnings remain.
+
+\subsection{Project materials}
+The full historical project report is \nolinkurl{output/pdf/continuum-project-quality-report-2026-10-23.pdf}. The preceding supplement is \nolinkurl{output/pdf/continuum-quality-fixes-2026-10-23.pdf}. The new JSON/Markdown register contains exact final source locations and SHA-256 source hashes. Editable LaTeX and its generator live under \nolinkurl{docs/quality-more-report/}.
+
+\clearpage
+\section{Additional correction register}
+\small
+\input{register.tex}
+\end{document}

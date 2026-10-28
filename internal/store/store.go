@@ -1069,6 +1069,7 @@ func (s *Store) GetExam(ctx context.Context, examID string, includeAnswers bool)
 	if !includeAnswers {
 		for i := range exam.Questions {
 			exam.Questions[i].Answer = 0
+			exam.Questions[i].AnswerHidden = true
 			exam.Questions[i].Feedback = ""
 		}
 	}
@@ -2789,6 +2790,7 @@ func (m *MemoryStore) GetExam(_ context.Context, id string, include bool) (*mode
 	if !include {
 		for i := range v.Questions {
 			v.Questions[i].Answer = 0
+			v.Questions[i].AnswerHidden = true
 			v.Questions[i].Feedback = ""
 		}
 	}
