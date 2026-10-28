@@ -1,0 +1,145 @@
+\documentclass[12pt,a4paper,oneside]{report}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage[left=28mm,right=25mm,top=25mm,bottom=25mm,headheight=15pt]{geometry}
+\usepackage{graphicx,booktabs,tabularx,array,longtable}
+\usepackage{amsmath,amssymb}
+\usepackage{setspace,enumitem,fancyhdr,titlesec,caption,float,placeins,needspace}
+\usepackage[table]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
+\usepackage{listings}
+\usepackage[hidelinks,bookmarksnumbered,pdfusetitle]{hyperref}
+\usepackage{xurl}
+\newcommand{\studentname}{Ayush Pandey}
+\newcommand{\registrationnumber}{24BIT0394}
+\newcommand{\guidename}{Venketesh P}
+\newcommand{\guidedesignation}{Professor Grade 2, SCORE}
+\newcommand{\coursename}{Cloud Architecture Design}
+\newcommand{\coursecode}{BCSE355L}
+\newcommand{\semester}{Fall Semester 2026--27}
+\title{Continuum: Intent-Verified Recovery for Timed Academic Assessments}
+\author{Ayush Pandey (24BIT0394)}
+\date{October 2026}
+\renewcommand{\bibname}{References}
+\setstretch{1.17}
+\setlength{\parindent}{1.2em}
+\setlength{\parskip}{4pt}
+\setlength{\emergencystretch}{2em}
+\raggedbottom
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\bottomfraction}{0.9}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.75}
+\setcounter{topnumber}{4}
+\setcounter{bottomnumber}{3}
+\setcounter{totalnumber}{5}
+\makeatletter
+\setlength{\@fptop}{0pt}
+\setlength{\@fpsep}{16pt}
+\setlength{\@fpbot}{0pt plus 1fil}
+\makeatother
+\setcounter{secnumdepth}{2}
+\setcounter{tocdepth}{1}
+\setlist[itemize]{leftmargin=1.5em,itemsep=3pt,topsep=5pt}
+\setlist[enumerate]{leftmargin=1.8em,itemsep=4pt,topsep=5pt}
+\renewcommand{\arraystretch}{1.22}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\captionsetup{font=small,labelfont=bf,justification=justified,singlelinecheck=false,skip=8pt}
+\titleformat{\chapter}[display]{\normalfont\bfseries\color{black}}{\large\chaptertitlename\ \thechapter}{8pt}{\LARGE}
+\titlespacing*{\chapter}{0pt}{-8pt}{19pt}
+\titleformat{\section}{\large\bfseries\color{black}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{black}}{\thesubsection}{0.7em}{}
+\titlespacing*{\section}{0pt}{13pt}{6pt}
+\titlespacing*{\subsection}{0pt}{9pt}{4pt}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{\small\textsc{Continuum}}
+\fancyhead[R]{\small Cloud Architecture Design}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+\lstset{basicstyle=\ttfamily\footnotesize,breaklines=true,columns=fullflexible,keepspaces=true,frame=single,rulecolor=\color{black!35},xleftmargin=4pt,xrightmargin=4pt,aboveskip=10pt,belowskip=10pt,showstringspaces=false,captionpos=b}
+\tikzset{box/.style={draw=black,rounded corners=1.5pt,align=center,font=\small,minimum height=12mm,text width=36mm,fill=white},arrow/.style={-{Stealth[length=2mm]},line width=.65pt},smallbox/.style={box,text width=30mm,minimum height=11mm},group/.style={draw=black!55,dashed,rounded corners=2pt,inner sep=9pt},decision/.style={diamond,draw,aspect=2.3,align=center,font=\small,inner sep=2pt,text width=26mm}}
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}\centering\setstretch{1.0}
+\vspace*{2mm}
+\includegraphics[width=108mm]{images/vit-logo.png}\par
+\vspace{16mm}
+{\large Project report\par}
+\vspace{11mm}
+{\fontsize{30}{36}\selectfont\bfseries Continuum\par}
+\vspace{5mm}
+{\Large Intent-verified recovery for\par timed academic assessments\par}
+\vspace{16mm}
+{\normalsize Submitted in partial fulfilment of the requirements for\par}
+\vspace{4mm}
+{\large\bfseries\coursename\par}{\large\coursecode\par}
+\vspace{8mm}{\normalsize Submitted by\par}\vspace{3mm}
+{\large\bfseries\studentname\par}
+{\normalsize Registration Number: \registrationnumber\par}
+\vspace{8mm}{\normalsize Under the guidance of\par}\vspace{3mm}
+{\large\bfseries\guidename\par}{\normalsize\guidedesignation\par}
+\vfill
+{\large\bfseries\semester\par}\vspace{3mm}
+{\normalsize Vellore Institute of Technology, Vellore\par}
+\end{titlepage}
+\pagenumbering{roman}
+\hypersetup{pageanchor=true}
+\chapter*{Acknowledgement}\addcontentsline{toc}{chapter}{Acknowledgement}
+I express my sincere gratitude to \textbf{\guidename, \guidedesignation}, for guidance in the course \textbf{\coursename\ (\coursecode)} and for the opportunity to apply cloud architecture principles to a working academic assessment platform.
+
+I thank Vellore Institute of Technology for providing the academic setting for this project. The study of availability, fault isolation, distributed data correctness, cloud security, and operational cost has helped connect architectural concepts with implementation decisions.
+
+The development of Continuum has reinforced the importance of testing the operation that users depend on. A server restart alone does not resolve the uncertainty of a student's final submission; recovery must also preserve the attempt, prevent conflicting writes, and return a verifiable receipt.
+\vspace{13mm}\begin{flushright}\textbf{\studentname}\\\registrationnumber\end{flushright}
+\chapter*{Abstract}\addcontentsline{toc}{chapter}{Abstract}
+Timed online assessments create a demanding recovery problem: students must be able to submit answers before an authoritative deadline, and a lost network response must not create uncertainty about a completed submission. Continuum is an implemented assessment platform that combines application recovery with transactional writer fencing and durable submission receipts.
+
+The cloud architecture places two Go application instances in separate Availability Zones within the selected AWS Region, Sydney (\texttt{ap-southeast-2}). A React frontend is delivered through Amazon CloudFront and private Amazon S3 storage. An Amazon API Gateway HTTP API invokes a router Lambda that reads an authoritative DynamoDB control record. A scheduled monitor checks process liveness and application readiness separately. Following repeated active-specific failures, an AWS Step Functions workflow acquires an incident lease, revalidates the standby, advances the active writer epoch, verifies the public route, and reconciles pending audit work.
+
+Final submissions bind a persistent request identifier to an immutable answer snapshot. The submission, receipt, attempt completion, and outbox entry are committed together with a condition on the writer's backend and epoch. An exact retry can retrieve an existing receipt after the assessment closes, while a changed payload under the same identifier is rejected. Local mode exercises these contracts using separate HTTP servers and shared memory; cloud mode uses separate EC2 instances and a regional DynamoDB table.
+
+A recorded AWS rehearsal on 10 October 2026 recovered from an actual active-instance stop. The external observation interval was 50.472 seconds, while the controller's check-cycle-to-public-verification interval was 23.713 seconds. Receipt replay preserved the request identifier and commit timestamp; independent inspection found one canonical submission, one receipt, one processed outbox record, and one audit summary. These results establish a bounded prototype outcome rather than a service-level guarantee. Complete regional failure and failure of the shared DynamoDB service remain outside the recovery boundary.
+
+\noindent\textbf{Keywords:} cloud architecture, assessment continuity, failover, writer fencing, DynamoDB transactions, idempotency, durable receipts, AWS Step Functions.
+{\small\setlength{\parskip}{0pt}\begin{spacing}{1.0}\tableofcontents\end{spacing}}\clearpage
+{\small\setlength{\parskip}{0pt}\begin{spacing}{1.0}\listoffigures\listoftables\end{spacing}}\clearpage
+\chapter*{Abbreviations and Notation}\addcontentsline{toc}{chapter}{Abbreviations and Notation}
+\begin{tabularx}{\textwidth}{@{}L{29mm}Y@{}}\toprule
+\textbf{Term} & \textbf{Meaning}\\\midrule
+ACID & Atomicity, consistency, isolation, and durability\\
+API & Application programming interface\\
+ASL & Amazon States Language\\
+AWS & Amazon Web Services\\
+AZ & Availability Zone\\
+CDN & Content delivery network\\
+EC2 & Amazon Elastic Compute Cloud\\
+HTTP & Hypertext Transfer Protocol\\
+IAM & AWS Identity and Access Management\\
+JWT & JSON Web Token\\
+NAT & Network address translation\\
+OAC & Origin access control\\
+RPO & Recovery point objective: acceptable loss of committed data\\
+RTO & Recovery time objective: target time to restore an operation\\
+S3 & Amazon Simple Storage Service\\
+SSM & AWS Systems Manager\\
+TTL & Time to live\\
+VPC & Virtual private cloud\\
+$(b,e)$ & Active backend identifier and monotonically increasing writer epoch\\
+$r$ & Persistent application submission request identifier\\
+$H(a)$ & Deterministic hash binding a request to its answer payload and scope\\\bottomrule
+\end{tabularx}\clearpage
+\pagenumbering{arabic}
+\input{sections/01-introduction}
+\input{sections/02-analysis}
+\input{sections/03-architecture}
+\input{sections/04-correctness}
+\input{sections/05-implementation}
+\input{sections/06-validation}
+\input{sections/07-operations}
+\input{sections/08-conclusion}
+\input{sections/09-references}
+\appendix\input{sections/10-appendix}
+\end{document}

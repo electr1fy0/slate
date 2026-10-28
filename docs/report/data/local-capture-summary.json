@@ -1,0 +1,96 @@
+{
+  "mode": "local",
+  "captured_at": "2026-10-23T16:41:24.947Z",
+  "synthetic_data": true,
+  "policy": {
+    "version": "intent-v1",
+    "confirmation_probes": 3,
+    "probe_interval_ms": 5000
+  },
+  "recovered_state": {
+    "active_backend": "B",
+    "epoch": 2,
+    "metrics": {
+      "failovers": 1,
+      "suppressed": 1,
+      "recovery_ms": 10010,
+      "reconciled": true,
+      "fenced_writes": 0
+    }
+  },
+  "events": [
+    {
+      "id": "event-11b92b25ee2ab9fcac52011b",
+      "at": "2026-10-23T16:36:43.764384Z",
+      "type": "fault",
+      "message": "partial fault injected on backend A",
+      "backend": "A",
+      "epoch": 1
+    },
+    {
+      "id": "event-9b61009acd097c88a0cffcab",
+      "at": "2026-10-23T16:36:48.784721Z",
+      "type": "fault",
+      "message": "standby backend B readiness disabled; promotion should be refused",
+      "backend": "B",
+      "epoch": 1
+    },
+    {
+      "id": "event-64c8dd6d7ae45a90056a4bed",
+      "at": "2026-10-23T16:36:52.925108Z",
+      "type": "suppressed",
+      "message": "both backends failed deep health; shared dependency or verifier failure suspected",
+      "backend": "A",
+      "epoch": 1
+    },
+    {
+      "id": "event-c3215884ce760e41b9788229",
+      "at": "2026-10-23T16:40:04.526102Z",
+      "type": "failback",
+      "message": "backend A is already active",
+      "backend": "A",
+      "epoch": 1
+    },
+    {
+      "id": "event-6671dd0d593012347c92e950",
+      "at": "2026-10-23T16:40:04.526106Z",
+      "type": "reset",
+      "message": "faults cleared and both backends passed deep health",
+      "backend": "A",
+      "epoch": 1
+    },
+    {
+      "id": "event-8da29fb17e062b427115b279",
+      "at": "2026-10-23T16:40:04.537181Z",
+      "type": "fault",
+      "message": "crash fault injected on backend A",
+      "backend": "A",
+      "epoch": 1
+    },
+    {
+      "id": "event-184e8be02e12685d8859980f",
+      "at": "2026-10-23T16:40:18.441211Z",
+      "type": "failover",
+      "message": "backend B promoted after 3 consecutive failed probes",
+      "backend": "B",
+      "epoch": 2
+    },
+    {
+      "id": "event-ca7a5d53066be923b2520e37",
+      "at": "2026-10-23T16:40:18.444809Z",
+      "type": "recovered",
+      "message": "route recovery took 10010 ms from the first failed monitor probe; public health smoke took 3 ms",
+      "backend": "B",
+      "epoch": 2,
+      "duration_ms": 10010
+    },
+    {
+      "id": "event-028f8c72949eadd8ff5871a6",
+      "at": "2026-10-23T16:40:18.444993Z",
+      "type": "reconcile",
+      "message": "downstream work reconciliation completed",
+      "backend": "B",
+      "epoch": 2
+    }
+  ]
+}

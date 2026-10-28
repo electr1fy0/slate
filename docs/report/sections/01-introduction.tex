@@ -1,0 +1,35 @@
+\chapter{Introduction}
+\section{Project Context}
+Online assessments require more than the availability of a webpage. During a timed examination, the important operation is the student's ability to preserve answers and obtain confirmation of a final submission. An application may appear alive while database access is unavailable. A response may disappear after a valid submission has already committed. A recovering instance may continue processing an old request after another instance has become the active writer.
+
+These situations connect infrastructure recovery with application correctness. Simply redirecting traffic does not establish which instance is allowed to write, whether an answer has been stored, or whether a retry will create a duplicate. Continuum addresses this connection through an assessment application and an observable recovery controller.
+
+The platform provides student and teacher workflows, timed attempts, server autosave, final submission receipts, classroom assignment, and a recovery cockpit. Its architectural focus is a bounded HTTP assessment path that can recover from an application-instance failure while preserving the original attempt and submission identity.
+\section{Problem Statement}
+The project investigates the following problem:
+\begin{quote}
+How can a timed assessment platform recover from failure of its active application instance while preserving a single authorised writer, continuity of the learner's attempt under unchanged assessment policy, and a reliable outcome for a submission whose response was lost?
+\end{quote}
+Four conditions make this problem significant. First, process liveness can disagree with the ability to serve assessment operations. Second, changing a route does not automatically stop requests already executing on the former backend. Third, a network error does not reveal whether the server committed a request. Fourth, downstream audit processing may be interrupted even after the assessment write succeeds.
+
+An effective design therefore needs a recovery decision, a write-authorisation mechanism, a retry contract, and a way to complete pending secondary work. These mechanisms must agree on the meaning of success.
+\section{Objectives}
+The principal objectives are to:
+\begin{enumerate}
+\item Implement teacher authoring, timed learner attempts, progress saving, and final receipts in a usable application.
+\item Recover from sustained application failure through verified promotion, while rejecting obsolete writers at the database transaction.
+\item Resolve lost responses through exact receipt replay, complete audit work without duplication, and evaluate these contracts locally and in AWS.
+\end{enumerate}
+\section{Scope and Recovery Boundary}
+The supported AWS design uses two application instances in separate Availability Zones of Sydney. Both instances share one regional DynamoDB table. Managed routing, monitoring, and orchestration components also remain dependencies of the assessment path. The demonstrated fault is loss or application-specific unavailability of one backend while these shared services remain accessible.
+
+The project does not claim recovery from a complete AWS Region outage, a regional DynamoDB outage, or every possible Availability Zone failure. Two-AZ placement provides infrastructure separation, but stopping one instance is a narrower experiment than disabling an entire zone. Local mode is narrower still: it runs separate A/B HTTP servers inside a single Go process and shares an in-memory store.
+
+Collaborative boards and WebSocket features exist in the broader application. The bounded cloud recovery deployment serves ordinary HTTP assessment and control routes; it does not expose the board WebSocket path or demonstrate board failover.
+\section{Principal Contributions}
+Continuum connects verified routing, transactional writer authority, exact receipt replay, and recoverable audit work. Health checks establish service capability; receipts and canonical records establish the submission outcome.
+
+\section{Motivating Failure Sequence}
+Near an attempt's end, the learner submits answers, the database commits, and the response is lost. The active application then fails. The learner is uncertain about both service availability and the submission, although the database already holds the result.
+
+Recovery selects a capable backend; receipt lookup resolves the particular request. This distinction prevents a transport error from being interpreted as a failed submission and motivates independent record inspection in the experiment.

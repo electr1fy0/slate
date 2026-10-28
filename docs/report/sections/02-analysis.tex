@@ -1,0 +1,70 @@
+\chapter{Background and System Analysis}
+\section{Availability and Correctness}
+Availability concerns whether a requested operation can be performed. Durability concerns whether an acknowledged result remains stored. Idempotency concerns whether repeating a logical request changes its outcome. A recovery architecture must consider all three when a client cannot distinguish a failed request from a lost response.
+
+For example, a student sends a final submission and receives a gateway error. The backend may have failed before committing, or the transaction may have succeeded before the response was dropped. Automatically generating a new submission identifier would discard the evidence connecting the retry to the original operation. Continuum retains that identifier and the submitted answer snapshot.
+
+Writer fencing solves a different ambiguity: which instance may commit after promotion? A backend can remain reachable long enough to finish an earlier request. A database condition tied to the current epoch allows the storage system to reject that stale mutation even if the backend itself has not stopped.
+\section{Relevant Cloud Mechanisms}
+Amazon DynamoDB supports all-or-nothing transactional operations with conditional checks on distinct items. These operations provide the storage primitive for applying a writer condition alongside the assessment records~\cite{aws-transactions}. Continuum's application receipt is a persistent data model; it does not depend only on the short-lived idempotency token associated with the database API.
+
+AWS Step Functions Standard workflows provide durable execution history and explicit retry and error paths~\cite{aws-workflows}. In Continuum, those capabilities organise the recovery sequence. Correctness still depends on conditional storage updates and idempotent application tasks, because the workflow deliberately includes retries.
+
+Gateway VPC endpoints allow the private router and verifier to reach S3 and DynamoDB without a NAT device~\cite{aws-endpoints}. Public endpoint verification and AWS control API calls are handled by functions outside the application VPC. This placement follows the connectivity requirements of the existing implementation.
+\section{Comparison of Recovery Approaches}
+
+\begin{table}[H]\centering\small
+\caption{Architectural approaches and their relationship to the assessment problem}\label{tab:approaches}
+\begin{tabularx}{\textwidth}{@{}L{29mm}YY@{}}\toprule
+\textbf{Approach} & \textbf{Useful capability} & \textbf{Assessment concern remaining}\\\midrule
+Single backend & Simple deployment and data path & Instance failure interrupts the application\\
+Process restart & Restores a failed process & Does not resolve a response lost after commit\\
+Health-based load balancing & Distributes or redirects traffic using health checks & Request identity and stale writes still require application controls\\
+Active--active application tier & Multiple serving instances & Concurrent mutations require a clear data consistency policy\\
+Continuum active--standby design & Conditional promotion, writer fencing, receipt replay & Shared regional services remain dependencies; capacity is bounded\\\bottomrule
+\end{tabularx}\end{table}
+
+The custom router is appropriate for studying explicit writer ownership in a small prototype. It also introduces an extra Lambda invocation, an authoritative-record read, proxy timeouts, and additional implementation responsibility. The project therefore treats it as a bounded architectural choice rather than a general substitute for managed load balancing.
+\section{Stakeholders and Functional Requirements}
+The learner needs to start an assessment, answer questions, resume an existing attempt, understand save status, and obtain a receipt. The teacher needs to author and publish assessments, assign them to classrooms, configure availability and attempt limits, and review results. The operator needs to inspect active ownership, observe health, inject controlled faults, and examine recovery events.
+
+\begin{table}[H]\centering\small
+\caption{Functional requirements and implemented mechanisms}\label{tab:requirements}
+\begin{tabularx}{\textwidth}{@{}L{13mm}L{48mm}Y@{}}\toprule
+\textbf{ID} & \textbf{Requirement} & \textbf{Mechanism}\\\midrule
+FR1 & Enforce timed student attempts & Persisted start time and server deadline validation\\
+FR2 & Resume saved answers & Attempt records, browser state, and server autosave\\
+FR3 & Confirm final submission & Durable request-bound receipt and result view\\
+FR4 & Recover active instance failure & Readiness confirmation and Step Functions promotion\\
+FR5 & Reject obsolete writers & Backend/epoch condition in write transactions\\
+FR6 & Prevent conflicting request replay & Answer payload hash and attempt-scoped receipt lookup\\
+FR7 & Complete audit work safely & Atomic outbox creation and idempotent reconciliation\\
+FR8 & Restrict operational controls & Separate administrator token and private backend ingress\\\bottomrule
+\end{tabularx}\end{table}
+
+\FloatBarrier
+
+\section{Quality Requirements}
+\subsection{Safety}
+Only a writer matching the authoritative backend and epoch may commit protected application changes. A changed answer payload must not reuse a committed request identifier. A failed public smoke test or unresolved reconciliation conflict must not be labelled a successful recovery.
+\subsection{Continuity}
+An application switch must not restart the attempt clock. Under unchanged assessment metadata, both backends calculate the same deadline from the persisted start time. A browser buffer preserves unsynchronised work but does not constitute a durable acknowledgement. The precise effect of an administrator changing duration during an attempt is discussed in Chapter~4.
+\subsection{Observability and Reproducibility}
+The operator should be able to examine the active backend, epoch, liveness, readiness, suppression reason, verification result, and reconciliation result. Local tests and deployment artifacts should reproduce the contracts without requiring a continuously running cloud stack.
+\subsection{Deployment Constraints}
+The deployment keeps all regional resources in Sydney (\texttt{ap-southeast-2}). It excludes cross-Region replicas and Lambda@Edge, and avoids NAT gateways, always-on load balancers, and purchased domains.
+
+\section{Design Decisions and Their Consequences}
+\begin{table}[H]\centering\small
+\caption{Decisions that determine the recovery contract}\label{tab:design-decisions}
+\begin{tabularx}{\textwidth}{@{}L{32mm}YY@{}}\toprule
+\textbf{Decision} & \textbf{Reason} & \textbf{Consequence}\\\midrule
+Regional shared data & Survives an application-instance replacement without copying student data & DynamoDB remains a shared dependency\\
+One authoritative writer & Makes ownership explicit during an uncertain failover & Standby capacity does not increase normal write throughput\\
+Fence inside each transaction & Closes the gap between route lookup and commit & Every protected mutation path must use the condition\\
+Persisted request receipt & Resolves commits whose responses are lost & Client identity, payload binding, and record retention are required\\
+Three readiness observations & Avoids reacting to an isolated transient error & Confirmation deliberately adds delay\\
+Public smoke after promotion & Checks the route used by the browser & A deep-health success must be complemented by submission-specific validation\\\bottomrule
+\end{tabularx}\end{table}
+
+These choices are evaluated against the assessment operation, rather than by the number of AWS services used. Managed services provide the storage and execution primitives; the application defines how their outcomes combine into an accepted submission.

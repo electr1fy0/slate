@@ -1,0 +1,7 @@
+recorded_event,seconds_from_fault_action
+Fault action starts,0
+Workflow-start event,41.93997406959534
+"B promoted, epoch 2",45.287140130996704
+Public route verified,45.46995401382446
+Audit reconciliation recorded,47.97018504142761
+Recovery observed externally,50.472

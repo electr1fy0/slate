@@ -1,0 +1,173 @@
+{
+  "provenance": {
+    "date": "2026-10-10",
+    "region": "ap-southeast-2",
+    "source_files": [
+      "docs/evidence/cloud-rehearsal.json",
+      "docs/evidence/cloud-records.json"
+    ],
+    "note": "Whitelisted measurements; no credentials or private deployment URLs."
+  },
+  "rehearsal": {
+    "initial_epoch": 1,
+    "final_epoch": 2,
+    "fault_injected_at_ms": 1791652430017,
+    "fault_to_observed_recovery_ms": 50472,
+    "committed_at": 1791652428408,
+    "request_id": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23",
+    "replayed_receipt": {
+      "status": "duplicate",
+      "request_id": "cloud-6fbb0f1bc6fd4a86bdab2e9c17f33d23",
+      "version": 1,
+      "committed_at": 1791652428408,
+      "score": 2,
+      "total": 5,
+      "attempt_number": 1
+    },
+    "changed_payload_status": 409,
+    "lost_response_status": 503,
+    "events": [
+      {
+        "at": "2026-10-10T17:14:37.987185928Z",
+        "type": "reconcile",
+        "message": "reconciliation scanned=29 processed=1 already_processed=0 conflicts=0",
+        "epoch": 2
+      },
+      {
+        "at": "2026-10-10T17:14:35.48695419Z",
+        "type": "recovered",
+        "message": "public health smoke succeeded in 23713 ms",
+        "epoch": 2
+      },
+      {
+        "at": "2026-10-10T17:14:35.304140058Z",
+        "type": "failover",
+        "message": "active route updated after conditional epoch check",
+        "epoch": 2
+      },
+      {
+        "at": "2026-10-10T17:14:31.956974285Z",
+        "type": "workflow",
+        "message": "route workflow started",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:51.671987752Z",
+        "type": "fault",
+        "message": "EC2 instance stop requested",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:46.946006056Z",
+        "type": "fault",
+        "message": "lost_response fault injected",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:42.337186901Z",
+        "type": "reset",
+        "message": "faults cleared and both backend instances are running",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:36.171825038Z",
+        "type": "suppressed",
+        "message": "both backends failed readiness; shared dependency or verifier failure suspected",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:33.395964918Z",
+        "type": "fault",
+        "message": "partial fault injected",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:31.91363034Z",
+        "type": "fault",
+        "message": "unsafe_standby fault injected",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:23.817959545Z",
+        "type": "suppressed",
+        "message": "active backend recovered before confirmation completed",
+        "epoch": 1
+      },
+      {
+        "at": "2026-10-10T17:13:13.615700907Z",
+        "type": "fault",
+        "message": "blip fault injected",
+        "epoch": 1
+      }
+    ]
+  },
+  "inspection": {
+    "executions": [
+      {
+        "name": "auto-A-e1-29860874",
+        "status": "SUCCEEDED",
+        "startDate": "2026-10-10T17:14:31.943000+00:00",
+        "stopDate": "2026-10-10T17:14:38.124000+00:00",
+        "summary": {
+          "processed": 1,
+          "conflict_count": 0,
+          "scanned": 29,
+          "already_processed": 0
+        },
+        "public_smoke": {
+          "body": {
+            "chaos": {
+              "db_stall": false,
+              "error_pct": 0,
+              "latency_ms": 0
+            },
+            "checks": {
+              "ddb": {
+                "latency_ms": 5.8,
+                "ok": true
+              },
+              "disk": {
+                "ok": true,
+                "used_pct": 16.7
+              },
+              "error_rate": {
+                "ok": true,
+                "threshold": 0.5,
+                "value": 0.1
+              },
+              "load": {
+                "loadavg": 0.02,
+                "ok": true
+              }
+            },
+            "healthy": true,
+            "region": "ap-southeast-2",
+            "role": "active"
+          },
+          "duration_ms": 23713,
+          "healthy": true,
+          "http_status": 200
+        }
+      },
+      {
+        "name": "manual-reconcile-e2-934e36653ff46f63a294cb05",
+        "status": "SUCCEEDED",
+        "startDate": "2026-10-10T17:14:44.581000+00:00",
+        "stopDate": "2026-10-10T17:14:45.037000+00:00",
+        "summary": {
+          "processed": 0,
+          "conflict_count": 0,
+          "scanned": 32,
+          "already_processed": 0
+        },
+        "public_smoke": {}
+      }
+    ],
+    "records": {
+      "canonical_submissions": 1,
+      "receipts": 1,
+      "processed_outbox_entries": 1,
+      "audit_summaries": 1
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "analytical model, not measured performance",
+  "schedule_seconds": [
+    60,
+    120,
+    300
+  ],
+  "confirmation_probes": 3,
+  "probe_spacing_seconds": 5,
+  "delay_formula": "S*(1-phase)+(p-1)*delta",
+  "activity_formula": "3600*h/S",
+  "excluded": "probe duration, schedule jitter, Lambda/workflow delay, retries, manual invocations"
+}

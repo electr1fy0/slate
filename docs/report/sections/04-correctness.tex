@@ -1,0 +1,113 @@
+\chapter{Data Design and Correctness Mechanisms}
+\section{Logical Data Model}
+Continuum uses a single DynamoDB table with partition and sort keys to represent distinct entity types. The application store manages users, classroom membership, assessment metadata, attempts, submissions, receipts, and outbox entries. Control and audit namespaces support the recovery machinery.
+
+
+\begin{table}[htbp]\centering\small
+\caption{Principal logical records in the assessment recovery path}\label{tab:records}
+\begin{tabularx}{\textwidth}{@{}L{28mm}YY@{}}\toprule
+\textbf{Record} & \textbf{Important information} & \textbf{Purpose}\\\midrule
+Active control & Backend, epoch, paused state & Authoritative route and writer identity\\
+Incident lease & Owner and explicit expiry & Serialise recovery ownership\\
+Assessment & Questions, duration, windows, policy & Define delivery and grading rules\\
+Attempt & Learner, answers, start, version, attempt number & Resume work and enforce lifecycle\\
+Submission & Immutable attempt snapshot and latest reference & Retain the accepted answer outcome\\
+Request receipt & Request ID, payload hash, scope, commit time & Resolve exact retries\\
+Outbox journal & Target submission, request ID, processed flag & Recover interrupted audit processing\\
+Audit summary & Request ID and canonical target reference & Record one validated downstream outcome\\\bottomrule
+\end{tabularx}\end{table}
+
+The current implementation supports attempt-scoped submission history and a latest-submission reference. The recorded October cloud rehearsal predates some broader product additions; its counts refer to the canonical submission and recovery records inspected for that particular request. Logical submission counts should not be confused with the number of physical records used by a newer schema.
+\section{Writer Epoch and Atomic Fencing}
+Let the authoritative control state be
+\begin{equation}
+C=(b,e,p),
+\end{equation}
+where $b$ is the active backend, $e$ is its epoch, and $p$ is the paused flag. A request carries the writer identity $W=(b_w,e_w)$. A protected mutation is permitted only if
+\begin{equation}\label{eq:fence}
+b_w=b\quad\land\quad e_w=e\quad\land\quad p=\mathrm{false}.
+\end{equation}
+The database evaluates this condition in the same \texttt{TransactWriteItems} operation as the application changes. A preliminary read alone would be insufficient, because a promotion could occur between that read and the commit.
+
+Consider a request routed to A at epoch 1. If promotion commits B at epoch 2 before the request's write transaction, condition~\eqref{eq:fence} fails for A. If A's transaction commits first, its data belongs to the preceding valid writer interval. This establishes an ordering at the storage boundary. It does not require the failed process to receive a notification or stop immediately.
+
+Failback and rollback obey the same rule. Returning to A after B does not reuse epoch 1; it advances to a newer epoch. An old request therefore cannot become valid again merely because its original backend name is active once more.
+
+\subsection{The Race Between a Submission and Promotion}
+The decisive event is the database commit order. Table~\ref{tab:race-order} considers a request already executing on A at epoch 1 while the controller attempts to promote B. A routing header identifies the proposed writer; it is not by itself proof of continuing authority.
+\begin{table}[htbp]\centering\small
+\caption{Ordering of an in-flight write and a conditional promotion}\label{tab:race-order}
+\begin{tabularx}{\textwidth}{@{}L{43mm}YY@{}}\toprule
+\textbf{Ordering} & \textbf{Storage outcome} & \textbf{Client implication}\\\midrule
+A/1 transaction commits first & A's records belong to a valid epoch-1 writer interval & A lost response can be resolved from the durable receipt\\
+B/2 promotion commits first & A/1 fails the writer condition; the protected transaction does not commit & Retry through the current route using the retained request identity\\
+Promotion response is lost & A retry is checked against the same lease and expected next epoch & Repeated control work must not advance authority twice for one operation\\
+A later becomes active again & A receives a newer epoch & An old A/1 request remains invalid\\\bottomrule
+\end{tabularx}\end{table}
+
+The guarantee concerns protected writes using the shared control condition. It does not turn every application read into a global serialisable snapshot, and it does not recover a regionally unavailable data store.
+\section{Request Identity and Payload Binding}
+Each final submission has a persistent request identifier $r$. The browser retains the identifier together with the immutable answer snapshot being submitted. The server binds that request to its assessment, learner, attempt, and payload through a deterministic hash. Conceptually,
+\begin{equation}
+K_r=(r,\text{assessment},\text{learner},\text{attempt},H(a)).
+\end{equation}
+A retry of the same logical request retrieves the original receipt. Reusing $r$ with changed answers or a mismatched scope is a conflict. This prevents a response-lost retry from silently becoming a different answer submission.
+
+The application receipt is stored durably and contains the committed timestamp, request identifier, version, score, total, and attempt number. Its lifetime and lookup semantics belong to the application data model. They are distinct from a temporary database-client request token.
+\section{Atomic Submission Transaction}
+The current store builds the final submission using one transaction containing the following writes and condition:
+\begin{enumerate}
+\item Create the immutable submission snapshot for the attempt.
+\item Update the latest-submission reference.
+\item Create the request receipt if that request has not already committed.
+\item Create the pending outbox journal entry.
+\item Mark the active attempt submitted using version and attempt-number conditions.
+\item Check the authoritative backend, epoch, and unpaused state.
+\end{enumerate}
+The attempt condition prevents an outdated version from completing a conflicting lifecycle transition. The uniqueness conditions prevent duplicate receipt and snapshot creation. Atomicity ensures that the application does not acknowledge a final submission without its corresponding receipt and recovery journal.
+
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=7mm]
+\node[box,text width=60mm] (client) {Browser preserves request ID\\and answer snapshot};
+\node[box,text width=60mm,below=of client] (api) {Authorised backend\\receives request};
+\node[box,text width=60mm,below=of api] (lookup) {Look up exact committed receipt};
+\node[box,text width=60mm,below=of lookup] (transaction) {For a new request:\\validate rules and commit\\submission, receipt, attempt, outbox\\with the writer condition};
+\node[box,text width=60mm,below=of transaction] (response) {Return committed receipt};
+\node[box,text width=32mm,right=11mm of lookup] (duplicate) {Exact match:\\return original\\receipt};
+\node[box,text width=32mm,right=11mm of response] (retry) {Response lost?\\Retry same request};
+\draw[arrow] (client)--(api);\draw[arrow] (api)--(lookup);
+\draw[arrow] (lookup)--(transaction);\draw[arrow] (transaction)--(response);
+\draw[arrow] (lookup)--(duplicate);\draw[arrow] (response)--(retry);
+\draw[arrow] (retry.south)--++(0,-.6)-|($(lookup.west)+(-.5,0)$)--(lookup.west);
+\end{tikzpicture}
+\caption[Submission and exact receipt replay contract]{Submission and receipt replay contract. An exact retry follows the lookup path; a changed payload under the original identifier is rejected.}\label{fig:receipt-flow}
+\end{figure}
+
+\FloatBarrier
+\section{Attempt Timing and Receipt Replay}
+\label{sec:timing-policy}
+The server persists the attempt start time. In the current store, the effective attempt deadline is recalculated from that start and the current assessment duration:
+\begin{equation}
+D_{\mathrm{attempt}}=t_{\mathrm{start}}+60\,000\,d_{\mathrm{current}},
+\end{equation}
+where timestamps are in milliseconds and duration $d$ is in minutes. A backend change does not recreate the attempt, so the deadline remains the same when the assessment metadata is unchanged. The fresh demonstration assessment has a 15-minute duration and one attempt.
+
+This is a narrower property than freezing assessment policy at attempt creation. Changing the duration while an attempt is running changes the calculated deadline. Availability-window checks and late-work settings are also evaluated separately. The service checks the attempt deadline before calling the store, with a default five-second grace period; the write transaction checks the attempt version and writer authority, but does not independently compare commit time with a frozen deadline. These details define the current timing semantics and motivate policy snapshots and commit-boundary tests for institutional deployment.
+
+For a new submission, the service enforces the configured rules and its bounded server-side grace policy. An exact committed receipt is looked up before rejecting the request because the exam has since closed. Retrieving proof of a previous commit does not constitute accepting new answers after the deadline. If no matching receipt exists, ordinary deadline checks still apply.
+
+The browser presents local buffering separately from confirmed storage. An answer retained on the student's device is useful for retry, but it cannot establish that the server accepted the final submission. A prolonged outage may outlast the student's remaining permitted time; the architecture does not promise recovery of every uncommitted offline answer.
+\section{Transactional Outbox and Audit Reconciliation}
+An outbox entry is created atomically with the submission. It describes pending downstream work and points to the canonical submission. The reconciler reads pending entries, checks that the target and request identity agree, and creates an answer-free audit summary while marking the journal processed.
+
+These operations are conditional and atomic. Repeated reconciliation therefore does not add another logical audit outcome for the same request. A matching pre-existing audit can repair a pending journal only after the canonical target and complete key are checked. Conflicts are reported rather than overwritten.
+
+The journal may carry answer information needed by the implementation; the resulting audit summary omits the answers. This distinction matters for access control and retention. The reconciler is not a general-purpose message broker or a proof of exactly-once processing for arbitrary external systems.
+
+\subsection{Interruption Points and Recovery}
+If execution stops before the submission transaction commits, there is no accepted final outcome from that transaction. If it stops after commit but before returning a response, the receipt is already present. If it stops before audit reconciliation, the pending journal remains discoverable. If reconciliation is retried after completion, its conditions identify the existing logical result.
+
+This design removes the unsafe gap in which a submission could commit without the journal describing its required audit work. It also prevents a secondary audit step from becoming part of the learner's synchronous request latency. The trade-off is that reconciliation must scan or otherwise locate pending work, monitor conflicts, and retain records long enough to repair interruptions.
+
+These properties depend on every protected mutation using the writer condition, exact replay retaining its payload-bound receipt, and the regional store remaining available. They establish a bounded assessment contract rather than exactly-once behaviour for arbitrary external systems.

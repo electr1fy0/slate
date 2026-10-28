@@ -1,0 +1,111 @@
+\chapter{Cloud Architecture and Recovery Design}
+\section{Architectural Overview}
+Continuum separates the student-facing request path from the recovery decision path. The request path serves the application using one authorised backend. The decision path observes both backends, confirms an incident, and changes authority through a conditional update. DynamoDB connects these paths through a shared control record and the assessment data.
+
+The static frontend is stored in a private S3 bucket and distributed through CloudFront using origin access control. The browser calls a separate HTTPS API Gateway endpoint for application data. The default API integration invokes the router Lambda; protected status and action routes invoke the control Lambda. Figure~\ref{fig:cloud} shows the logical dependencies of the supported deployment.
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=8mm and 12mm]
+\node[box] (browser) at (0,0) {Student / teacher\\browser};
+\node[box] (static) at (-4.5,-1.8) {CloudFront\\private S3 origin};
+\node[box] (api) at (0,-1.8) {API Gateway\\HTTP API};
+\node[box] (router) at (0,-3.6) {Router Lambda\\private VPC subnets};
+\node[box] (a) at (-2.7,-5.5) {EC2 backend A\\Availability Zone 1};
+\node[box] (b) at (2.7,-5.5) {EC2 backend B\\Availability Zone 2};
+\node[group,fit=(a)(b),inner sep=4pt] (tier) {};
+\node[box,text width=48mm] (ddb) at (0,-7.5) {Regional DynamoDB\\control, attempts, receipts, outbox};
+\node[box] (monitor) at (4.5,-1.8) {Scheduled monitor\\Lambda};
+\node[box] (verifier) at (4.5,-3.6) {Verifier Lambda\\private VPC subnets};
+\node[box] (workflow) at (4.5,-9.4) {Step Functions\\control + reconciler};
+\draw[arrow] (browser)--(api);
+\draw[arrow] (browser)-|(static);
+\draw[arrow] (api)--(router);
+\draw[arrow] (router)--(a);
+\draw[arrow] (router)--(b);
+\draw[arrow] (a)--(ddb);
+\draw[arrow] (b)--(ddb);
+\draw[arrow] (monitor)--(verifier);
+\draw[arrow,dashed] (verifier.south)--(verifier.south |- tier.north);
+\draw[arrow] (monitor.east)--++(.65,0)|-(workflow.east);
+\draw[arrow] (workflow)--(ddb);
+\draw[arrow,dashed] (router.west)--++(-3.2,0)|-(ddb.west);
+\end{tikzpicture}
+\caption[Logical cloud architecture and regional recovery services]{Logical cloud architecture. Regional services run in Sydney; CloudFront provides global content delivery. Dashed paths show the router's control-record read and the verifier's probes of the grouped A/B tier.}\label{fig:cloud}
+\end{figure}
+
+\FloatBarrier
+\section{Application and Routing Components}
+The two EC2 instances run the Go application with a shared regional store. They are assigned identities A and B. A strongly consistent read of the active control record provides the router with the current backend and epoch. The router supplies those values as internal request metadata when it forwards a request over the private application address.
+
+The record is stored at partition key \texttt{CONTROL\#ACTIVE} and sort key \texttt{STATE}. Its important fields are \texttt{active\_backend}, \texttt{epoch}, and \texttt{paused}. An epoch identifies a particular grant of writer authority, rather than simply identifying a machine. Returning authority to A after a recovery must therefore use a newer epoch than A held previously.
+
+There are two layers of protection. Request middleware propagates writer context into application operations, and storage transactions validate that context against the current control record. The second layer is essential: a route can change between the router's read and the backend's database write.
+\section{Network Design}
+The VPC contains application and Lambda subnets across two Availability Zones. Application instances use public subnets and automatic public IPv4 addresses for bootstrap and Systems Manager connectivity. Their application port is nevertheless private in use: inbound TCP port 8000 is allowed only from the router/verifier security group, and no inbound SSH rule is created.
+
+The router and verifier use private Lambda subnets. S3 and DynamoDB gateway endpoints are associated with the relevant route tables. No NAT gateway is provisioned. Functions that call public AWS APIs or perform the public smoke test remain outside the application VPC. Connecting a Lambda function to a public subnet would not itself provide internet access~\cite{aws-lambda-vpc}; the architecture instead assigns functions according to their actual network dependencies.
+
+
+\begin{table}[!htbp]\centering\small
+\caption{Component placement and responsibility}\label{tab:placement}
+\begin{tabularx}{\textwidth}{@{}L{33mm}L{42mm}Y@{}}\toprule
+\textbf{Component} & \textbf{Placement} & \textbf{Responsibility}\\\midrule
+Frontend & S3 and CloudFront & Static application delivery\\
+Router & Private VPC Lambda subnets & Authoritative route read and HTTP forwarding\\
+Verifier & Private VPC Lambda subnets & Probe A/B and apply protected fault controls\\
+Application A/B & Separate EC2 Availability Zones & Assessment and classroom HTTP operations\\
+Monitor & Lambda outside the VPC & Repeated incident confirmation and workflow start\\
+Control & Lambda outside the VPC & Lease, promotion, public smoke, instance controls\\
+Reconciler & Lambda outside the VPC & Bounded outbox processing\\
+Data store & Regional DynamoDB & Shared durable application and control state\\\bottomrule
+\end{tabularx}\end{table}
+
+\section{Liveness and Application Readiness}
+Liveness answers whether the process responds. Deep readiness answers whether it can currently serve the assessment path under the configured checks. The probe calls \texttt{/health/live} and \texttt{/health/deep} separately with bounded timeouts. Deep health includes database capability and configured host/application checks.
+
+The partial-failure scenario injects a database-access stall into one application. Its process remains alive, but readiness becomes false. This tests a useful distinction without claiming that the DynamoDB service itself failed. When both backends fail readiness, the monitor suppresses promotion because switching to the standby would not establish a usable target.
+
+\begin{table}[!htbp]\centering\small
+\caption{Readiness decision policy for the active and standby backends}\label{tab:health-decisions}
+\begin{tabularx}{\textwidth}{@{}L{27mm}L{28mm}Y@{}}\toprule
+\textbf{Active ready} & \textbf{Standby ready} & \textbf{Recovery decision}\\\midrule
+Yes & Yes & Keep the current writer; no failure is established\\
+Yes & No & Keep the current writer and restore standby capability\\
+No & Yes & Confirm sustained failure, acquire the lease, and recheck before promotion\\
+No & No & Suppress promotion; a usable target has not been established\\\bottomrule
+\end{tabularx}\end{table}
+
+Readiness observations are evidence for a decision, not permanent guarantees. The candidate is checked again while the incident lease is held because its condition may change after the monitor's last observation. Liveness remains useful for distinguishing a stopped HTTP server from a responding process with a failed dependency.
+\section{Confirmation Policy}
+The cloud monitor is triggered by an EventBridge scheduled rule once per minute. Within a monitor invocation, the policy requires three observations separated by five seconds. These observations must refer to the same active backend and epoch. A route change, a paused control plane, recovered active readiness, or an unhealthy standby prevents automatic promotion.
+
+Three samples contain two configured waiting intervals, giving ten seconds of deliberate spacing before probe and invocation overhead. The schedule can also introduce delay before the first sample. Consequently, the policy does not imply a ten-second fault-to-recovery guarantee.
+\section{Recovery Workflow}
+After confirmation, the Standard workflow acquires an incident lease and performs a fresh verification under that lease. The conditional promotion checks the expected backend, expected epoch, live lease ownership, and unpaused state. The target backend receives the next epoch.
+
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[node distance=3mm,box/.append style={minimum height=10mm}]
+\node[box,text width=66mm] (confirm) {Confirm sustained active failure\\and healthy standby};
+\node[box,text width=66mm,below=of confirm] (lease) {Acquire incident lease};
+\node[box,text width=66mm,below=of lease] (verify) {Recheck route, active, and target};
+\node[box,text width=66mm,below=of verify] (promote) {Conditionally promote target\\and increment writer epoch};
+\node[box,text width=66mm,below=of promote] (smoke) {Verify public deep-health route};
+\node[box,text width=66mm,below=of smoke] (reconcile) {Reconcile outbox pages\\and check conflicts};
+\node[box,text width=66mm,below=of reconcile] (done) {Record outcome and release lease};
+\node[box,text width=32mm,right=12mm of verify] (suppress) {Unsafe or changed?\\Suppress switch};
+\node[box,text width=32mm,right=12mm of smoke] (rollback) {Smoke failed?\\Recheck former\\backend before\\rollback};
+\draw[arrow] (confirm)--(lease);\draw[arrow] (lease)--(verify);
+\draw[arrow] (verify)--(promote);\draw[arrow] (promote)--(smoke);
+\draw[arrow] (smoke)--(reconcile);\draw[arrow] (reconcile)--(done);
+\draw[arrow] (verify)--(suppress);\draw[arrow] (smoke)--(rollback);
+\end{tikzpicture}
+\caption[Verified recovery sequence and safety branches]{Recovery sequence and the principal safety branches. The workflow records a successful outcome only after the required verification and reconciliation checks.}\label{fig:workflow}
+\end{figure}
+
+\FloatBarrier
+The public smoke test traverses the externally reachable API and checks deep health through the selected route. A failed smoke result cannot be converted into a successful recovery. Rollback requires fresh readiness of the former backend and advances the epoch again; the controller cannot safely restore an old authority value.
+
+Reconciliation is a separate phase. It scans pending journal work in bounded pages, verifies canonical submission records, and records completion only after the required checks succeed. Manual reconciliation also runs asynchronously through a workflow, so the public action request does not wait for the full backlog.
+
+Lease ownership uses explicit expiry timestamps in conditional operations, independent of asynchronous DynamoDB TTL cleanup. Error paths release the lease; expiry bounds ownership if execution stops.

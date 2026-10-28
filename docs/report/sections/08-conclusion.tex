@@ -1,0 +1,30 @@
+\chapter{Limitations, Future Work, and Conclusion}
+\section{Current Limitations}
+\subsection{Shared Data and Control Dependencies}
+Both application instances depend on the same regional DynamoDB service. The router, API Gateway, Lambda, and workflow services are also part of the operating boundary. A complete Region outage or shared database failure cannot be repaired simply by changing the active application instance. No cross-Region replication or recovery path is part of the supported project.
+\subsection{Timing and Capacity}
+The monitoring schedule, confirmation probes, service invocation overhead, and client polling affect recovery time. The recorded values come from a single rehearsal and do not establish a production latency distribution. The API traffic limits and small instances are suitable for the bounded demonstration, while high-concurrency assessment traffic remains unvalidated.
+
+A backend failure does not automatically extend a student's allowed time. The deadline calculation uses a persisted start time and mutable assessment duration, so administrator policy changes can affect an active attempt. Deadline validation also precedes the final storage call. A production assessment service should snapshot the effective policy and define whether acceptance is measured at request arrival, validation, or database commit. Exact receipt replay resolves an earlier commit; it does not authorise a new late answer.
+\subsection{Deployment and Feature Coverage}
+Local mode uses shared memory in one process and loses local state when the whole launcher restarts. It cannot demonstrate infrastructure isolation. Cloud mode uses separate instances and persistent regional storage, but the observed instance-stop experiment is not a complete Availability Zone outage test.
+
+The broader product includes classroom collaboration and boards. The cloud recovery stack exposes the bounded HTTP assessment path and does not demonstrate WebSocket/board failover. Screenshots can also show a different frontend revision from a recorded cloud experiment; the request and data records are the authority for the specific measured replay outcome.
+\Needspace{6\baselineskip}
+\section{Future Work}
+Useful extensions should preserve the existing submission and writer contracts:
+\begin{itemize}
+\item Measure repeated recovery trials across realistic traffic levels and report distributions with clearly defined timing boundaries.
+\item Add production observability, alerting, tracing, and a documented response process for shared-service failures.
+\item Exercise backup and restore, set explicit retention rules, and validate data handling before using real examination records.
+\item Freeze effective attempt policy and test delayed writes across the deadline boundary, including concurrent changes to duration and availability.
+\item Strengthen service-to-service transport protection and subject authentication, authorisation, and abuse controls to independent security testing.
+\item Evaluate a production routing and capacity design while retaining transaction-level writer safety and durable request identity.
+\item Define and test a separate recovery contract for collaborative boards and WebSockets if those features enter the cloud assessment scope.
+\end{itemize}
+\section{Conclusion}
+Continuum demonstrates an application-centred approach to cloud recovery for timed assessments. It connects infrastructure failover with the correctness of the operation a student needs to complete. Readiness confirmation governs when recovery is justified, an incident lease serialises the decision, a monotonically increasing epoch assigns writer authority, and a database condition applies that authority at commit time.
+
+Durable request receipts address the uncertainty created by a response lost after a successful commit. The transactional outbox permits pending audit work to complete without duplicating the logical outcome. Persisted attempt identity and start time provide continuity across backend changes under unchanged assessment metadata.
+
+The Sydney rehearsal combined an actual EC2 stop, promotion, public verification, exact receipt replay, and independent record inspection. Backend tests complement these observations. Within the stated dependency boundary, Continuum demonstrates recovery of both an accessible service and a verifiable submission outcome.

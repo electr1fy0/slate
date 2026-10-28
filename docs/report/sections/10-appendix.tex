@@ -1,0 +1,45 @@
+\chapter{Reproducibility Guide}
+\section{Local Execution}
+The local launcher starts the frontend, public router, A/B HTTP servers, and shared memory store. Separate browser sessions distinguish the teacher/operator and learner. Credentials are read privately from the ignored runtime file.
+\begin{lstlisting}
+cd web
+bun install --frozen-lockfile
+cd ..
+make demo-local
+\end{lstlisting}
+The default frontend address is \texttt{http://localhost:3000}; the cockpit is at \texttt{/ops}. Local mode labels its shared-process topology. A full launcher restart resets its in-memory data.
+\section{Backend Verification Commands}
+The six package suites in Table~\ref{tab:verification} were rerun using:
+\begin{lstlisting}
+go test -p 2 -race -timeout 5m \
+  ./internal/continuum ./internal/store \
+  ./cmd/demo-reconciler
+
+go test -p 2 -race -timeout 5m \
+  ./integration ./internal/httpapi ./internal/exams
+\end{lstlisting}
+The repository also supplies broader Go, frontend, build, Terraform, and browser checks. Their scope should be selected according to the part of the system changed.
+\section{Controlled Recovery Demonstration}
+\begin{enumerate}
+\item Verify that both backends are ready, record the active backend and epoch, and start a fresh synthetic learner attempt.
+\item Stop the active local HTTP server or, in an enabled AWS rehearsal, the active EC2 instance. Observe confirmation, promotion, and public verification.
+\item Keep assessment policy unchanged and confirm that the learner's existing attempt start time continues to govern timing. Submit within the configured rules and retain the receipt.
+\item Using a fresh suitable attempt, inject a post-commit response loss and retry the same request and answer snapshot. Compare its request ID and commit time.
+\item Repeat reconciliation and inspect the canonical submission, receipt, processed outbox, and audit result. An unchanged logical outcome is required.
+\item Restore a healthy baseline, exercise the brief-fault and unsafe-standby cases, and verify that inappropriate switches are suppressed.
+\end{enumerate}
+\section{Evidence and Operating Boundaries}
+The preserved cloud artifacts are the rehearsal JSON, independent record/workflow inspection, and stale-registration check~\cite{cloud-run,cloud-records,cloud-stale}. Their results apply to the recorded synthetic scenarios. Assessment screenshots illustrate interface states and are not substitutes for request comparisons or database inspection.
+
+Cloud execution requires a verified project plan, selected Region, current spend status, and healthy instances. Monitoring and compute should be paused after a bounded rehearsal. Resource destruction is separate from pause because it removes retained data.
+\section{Rebuilding the Report and Graphs}
+The LaTeX source package contains all included screenshots, vector diagrams, chart PDFs, whitelisted measurements, and chart-generation code. It compiles without a running application or an AWS connection:
+\begin{lstlisting}
+mkdir -p build
+tectonic --keep-logs --outdir build main.tex
+\end{lstlisting}
+The charts are already included as vector PDFs. To regenerate them, install Python's Matplotlib and NumPy packages, then run:
+\begin{lstlisting}
+python figures/build_figures.py
+\end{lstlisting}
+The script reads \path{data/cloud-measurements.json}, exports the aligned event CSV, and writes five PDF/PNG chart pairs. Recorded measurements and analytical assumptions occupy separate data files. Screenshot crops in LaTeX change framing only; they do not alter the interface state or numerical results.
